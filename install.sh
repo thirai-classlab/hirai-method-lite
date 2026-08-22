@@ -28,8 +28,8 @@ Usage: ./install.sh <target-repo-path> [--update] [--no-docs]
                既存の CLAUDE.md / docs/ / mode.yml / settings.local.json は上書きしない。
   --no-docs    docs/ を作らず、台帳を .claude/tasks/list.md に置く。
                docs/ を持たないリポジトリ向け。
-  --update     .claude/rules .claude/hooks .claude/commands .claude/scripts のみ更新する。
-               CLAUDE.md と台帳には触れない。
+  --update     .claude/rules .claude/hooks .claude/commands .claude/scripts と VERSION のみ
+               更新する。CLAUDE.md と台帳には触れない。
 EOF
 }
 
@@ -51,6 +51,11 @@ sync_dir() {   # copy a directory tree, overwriting files inside it
   mkdir -p "$to" || { fail "mkdir $to"; return 1; }
   cp -R "$from/." "$to/" || { fail "cp $from"; return 1; }
   say "synced ${to#$TARGET/}"
+}
+
+sync_version() {   # harness 所有のため常に上書きする (更新検知が版を比較できるようにする)
+  [ -f "$SRC/VERSION" ] || return 0
+  cp "$SRC/VERSION" "$TARGET/VERSION" && say "synced VERSION ($(head -1 "$SRC/VERSION"))" || fail "cp VERSION"
 }
 
 place_file() {   # copy one file only when the destination is absent
@@ -76,6 +81,7 @@ if [ "$UPDATE" -eq 1 ]; then
     sync_dir "$SRC/.claude/$d" "$TARGET/.claude/$d"
   done
   chmod +x "$TARGET"/.claude/hooks/*.sh "$TARGET"/.claude/scripts/*.sh 2>/dev/null
+  sync_version
   [ "$FAILED" -eq 0 ] && echo "done (update)" || echo "done with errors" >&2
   exit "$FAILED"
 fi
@@ -98,6 +104,7 @@ for entry in "$SRC/.claude"/*; do
 done
 
 chmod +x "$TARGET"/.claude/hooks/*.sh "$TARGET"/.claude/tests/*.sh "$TARGET"/.claude/scripts/*.sh 2>/dev/null
+sync_version
 [ -e "$TARGET/.claude/mode.yml" ] || { echo "mode: normal" > "$TARGET/.claude/mode.yml"; say "placed .claude/mode.yml"; }
 if [ -f "$SRC/.claude/templates/CLAUDE.md" ]; then
   place_file "$SRC/.claude/templates/CLAUDE.md" "$TARGET/CLAUDE.md"

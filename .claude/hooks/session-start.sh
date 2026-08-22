@@ -29,6 +29,17 @@ else
   task_line="台帳なし (/new-task が作成します)"
 fi
 
+# --- 更新検知: 取得は背景 + 24h に 1 回、表示は前回キャッシュ値 (通信を待たない) ---
+update_line=""
+if [ -f "$here/../scripts/update-check.sh" ]; then
+  # shellcheck source=../scripts/update-check.sh
+  . "$here/../scripts/update-check.sh" 2>/dev/null || true
+  if command -v harness_update_notice >/dev/null 2>&1; then
+    harness_update_fetch_async "$root" >/dev/null 2>&1 || true
+    update_line="$(harness_update_notice "$root" 2>/dev/null || true)"
+  fi
+fi
+
 # --- 直近 state ---
 state=""
 for d in "$root/.claude/state" "$root/docs/state"; do
@@ -44,5 +55,6 @@ if [ -n "$state" ]; then
 else
   echo "[harness] 直近 state: なし"
 fi
+[ -n "$update_line" ] && echo "$update_line"
 
 exit 0
