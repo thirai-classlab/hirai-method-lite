@@ -1,0 +1,31 @@
+# タスク台帳
+
+このプロジェクトのタスクの正本。運用規範は [`.claude/rules/tasks.md`](../../.claude/rules/tasks.md)。
+保留・不採用は [`parking-lot.md`](parking-lot.md)。設計 draft は [`../draft/`](../draft/README.md)。
+
+- status は **未着手 / 進行中 / 完了** の 3 種のみ
+- 完了条件は再現コマンドか観察可能な事実で書く
+- 台帳の更新はメインエージェント専任
+- タスク完了 commit にこのファイルの status 更新を同梱する
+
+| # | status | タスク | 完了条件 | 詳細 |
+|---|---|---|---|---|
+| 1 | 未着手 | (ここに 1 行 1 タスクで書く) | (再現コマンド or 観察可能な事実) | [task-1.md](task-1.md) |
+
+## 書き方
+
+| 列 | 中身 |
+|---|---|
+| **#** | 連番。振り直さない |
+| **status** | 未着手 / 進行中 / 完了 |
+| **タスク** | 何をやるかを 1 行。ゴールは task ファイル側に 1 文で書く |
+| **完了条件** | `npm test -- auth` が green / `GET /health` が 200 を返す、のように判定できる形 |
+| **詳細** | `task-<#>.md` へのリンク。step が 1 つで済むタスクは `—` で省略可 |
+
+記入例:
+
+```
+| 3 | 進行中 | ログイン失敗回数の上限を追加 | `npm test -- auth` が green | [task-3.md](task-3.md) |
+```
+
+タスクファイルは [`.claude/templates/task.md`](../../.claude/templates/task.md) を写して作る。
