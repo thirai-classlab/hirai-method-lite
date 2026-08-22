@@ -16,16 +16,17 @@ if [ -z "$mode" ] && [ -f "$root/.claude/mode.yml" ]; then
 fi
 [ -n "$mode" ] || mode="normal"
 
-# --- 未完了タスク数: list.md の table 行のうち完了 (✅ / done) でないもの ---
-list="$root/docs/tasks/list.md"
-if [ -f "$list" ]; then
-  open_tasks="$(grep -c '^|[[:space:]]*[0-9]' "$list" 2>/dev/null || echo 0)"
-  done_tasks="$(grep '^|[[:space:]]*[0-9]' "$list" 2>/dev/null | grep -c -e '✅' -e '完了' -e '[Dd]one' || true)"
-  open_tasks=$(( ${open_tasks:-0} - ${done_tasks:-0} ))
-  [ "$open_tasks" -ge 0 ] 2>/dev/null || open_tasks=0
-  task_line="未完了タスク: ${open_tasks} 件 (docs/tasks/list.md)"
+# --- 未完了タスク数: 台帳 (解決順は .claude/scripts/tasks-path.sh) の table 行から数える ---
+list=""
+if [ -f "$here/../scripts/tasks-path.sh" ]; then
+  # shellcheck source=../scripts/tasks-path.sh
+  . "$here/../scripts/tasks-path.sh" 2>/dev/null || true
+  list="$(harness_tasks_file "$root" 2>/dev/null || true)"
+fi
+if [ -n "$list" ] && [ -f "$list" ]; then
+  task_line="未完了タスク: $(harness_open_tasks "$list") 件 (${list#"$root"/})"
 else
-  task_line="未完了タスク: — (docs/tasks/list.md 未作成)"
+  task_line="台帳なし (/new-task が作成します)"
 fi
 
 # --- 直近 state ---

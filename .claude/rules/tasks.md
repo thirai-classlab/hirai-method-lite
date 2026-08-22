@@ -2,14 +2,15 @@
 paths:
   - "docs/tasks/**"
   - "docs/draft/**"
+  - ".claude/tasks/**"
 ---
 # タスク運用
 
-対象: `docs/tasks/list.md` / `docs/tasks/parking-lot.md` / `docs/draft/**` を触る作業。
+対象: 台帳 (`list.md`) / `parking-lot.md` / 設計 draft を触る作業。
 
 ## 台帳
 
-- **台帳は 1 枚**: メインエージェントは、タスクの正本を `docs/tasks/list.md` の 1 表だけに置く ／ 例: 進捗は list.md の status 列を書き換える ／ 失効: 外部トラッカー (Asana / Jira) に正本を移したとき
+- **台帳は 1 枚**: メインエージェントは、タスクの正本を台帳 1 表だけに置く。台帳のパスは `$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > `.claude/tasks/list.md` の順に解決し、`docs/` を持たないリポジトリでは `.claude/tasks/list.md` を使う ／ 例: 進捗は list.md の status 列を書き換える ／ 失効: 外部トラッカー (Asana / Jira) に正本を移したとき
 - **列は 5 つ**: メインエージェントは、list.md を `# / status / タスク / 完了条件 / 詳細` の 5 列で書く ／ 例: `| 3 | 進行中 | ログイン API | `npm test -- auth` が green | [task-3.md](task-3.md) |` ／ 失効: なし
 - **status は 3 種**: メインエージェントは、status に 未着手 / 進行中 / 完了 のいずれかを書く ／ 例: 保留したいタスクは list.md から `parking-lot.md` へ移す ／ 失効: なし
 - **1 task = ゴール 1 文 + N step**: メインエージェントは、task に「ゴール 1 文」「step の箇条書き」「完了条件」を書く ／ 例: `.claude/templates/task.md` を写して埋める ／ 失効: なし

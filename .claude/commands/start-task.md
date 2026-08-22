@@ -6,9 +6,21 @@ description: タスクに着手する。台帳から対象を読み、feature br
 
 引数が空なら `docs/tasks/list.md` の status が `未着手` の行を一覧表示し、どの id に着手するか聞き返して停止する。
 
+## 台帳の解決 (最初に 1 回)
+
+台帳パスは `$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > `.claude/tasks/list.md` の順に解決する。
+
+```bash
+LIST="$(bash -c '. .claude/scripts/tasks-path.sh; harness_tasks_file "$PWD"')"
+```
+
+空 (exit 1) なら台帳が無い。**その場で空の台帳を作ってから続行する** — `docs/` があるリポジトリは `docs/tasks/list.md`、無ければ `.claude/tasks/list.md` に置く (見出しと 6 列ヘッダは `/new-task` と同じ)。作った直後は行が 0 なので「台帳を作成した。task が無いので /new-task <id> <slug> で追加する」と報告して終了する。
+
+以降この文書の `docs/tasks/list.md` は `$LIST` に、`docs/tasks/` は `$(dirname "$LIST")` に読み替える。
+
 ## 手順
 
-1. `docs/tasks/list.md` を Read し、`<task-id>` の行を特定する。行が無ければ「id <task-id> は list.md に存在しない」と報告して終了する。
+1. `$LIST` を Read し、`<task-id>` の行を特定する。行が無ければ「id <task-id> は台帳に存在しない」と報告して終了する。
 2. 同行の詳細列にある `docs/tasks/task-<task-id>-<slug>.md` を Read する。ファイルが存在しなければ「タスクファイル不在。/new-task で作成する」と報告して終了する。
 3. タスクファイルに `依存先:` があれば、そこに並ぶ id のタスクファイルを全部 Read し、ゴールと完了条件を確認する。依存先の status が `完了` でないものが 1 件以上あれば、その id を列挙して「先に着手するか、この依存を外すか」を user に聞く。
 4. 対応する `docs/draft/<slug>.md` が存在すれば Read する。draft に `approved_at:` が空、または行自体が無い場合は「未承認 draft のため着手しない」と報告して終了する。

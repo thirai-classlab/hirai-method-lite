@@ -6,6 +6,24 @@ description: 承認済 draft から docs/tasks/task-<id>-<slug>.md を作り、d
 
 引数が 2 つ揃っていない場合は `id` と `slug` を聞き返して停止する。
 
+## 台帳の解決 (最初に 1 回)
+
+台帳パスは `$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > `.claude/tasks/list.md` の順に解決する。
+
+```bash
+LIST="$(bash -c '. .claude/scripts/tasks-path.sh; harness_tasks_file "$PWD"')"
+```
+
+空 (exit 1) なら台帳が無い。**その場で作ってから続行する** — `docs/` があるリポジトリは `docs/tasks/list.md`、無ければ `.claude/tasks/list.md` に置く。
+
+```bash
+LIST="$([ -d docs ] && echo docs/tasks/list.md || echo .claude/tasks/list.md)"
+mkdir -p "$(dirname "$LIST")"
+printf '# タスク台帳\n\nstatus は 未着手 / 進行中 / 完了 の 3 種。\n\n| # | status | タスク | 概要 | 依存先 | 詳細 |\n|---|--------|-------|------|-------|------|\n' > "$LIST"
+```
+
+以降この文書の `docs/tasks/list.md` は `$LIST` に、`docs/tasks/` は `$(dirname "$LIST")` に読み替える (タスクファイルは台帳と同じディレクトリに置く)。
+
 ## 事前チェック (どれか 1 つでも失敗したら作成しない)
 
 1. `grep '^approved_at: 20' docs/draft/<slug>.md` が exit 0。失敗 → 「draft が未承認。/new-draft <slug> で承認を得る」と報告して終了。

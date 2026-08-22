@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # hirai-method-lite installer — copy .claude/ into a target repo.
-# Usage: ./install.sh <target-repo-path> [--update]
+# Usage: ./install.sh <target-repo-path> [--update] [--no-docs]
 set -uo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET=""
 UPDATE=0
+NO_DOCS=0
 FAILED=0
 
 for arg in "$@"; do
   case "$arg" in
     --update) UPDATE=1 ;;
+    --no-docs) NO_DOCS=1 ;;
     -h|--help) TARGET="__help__" ;;
     -*) echo "unknown option: $arg" >&2; exit 2 ;;
     *) TARGET="$arg" ;;
@@ -19,12 +21,15 @@ done
 
 usage() {
   cat <<'EOF'
-Usage: ./install.sh <target-repo-path> [--update]
+Usage: ./install.sh <target-repo-path> [--update] [--no-docs]
 
   (no option)  .claude/ をコピーし、CLAUDE.md と docs/ の雛形を配置する。
+               target に docs/ が無ければ新規作成する。
                既存の CLAUDE.md / docs/ / mode.yml / settings.local.json は上書きしない。
-  --update     .claude/rules .claude/hooks .claude/commands のみ更新する。
-               CLAUDE.md と docs/ には触れない。
+  --no-docs    docs/ を作らず、台帳を .claude/tasks/list.md に置く。
+               docs/ を持たないリポジトリ向け。
+  --update     .claude/rules .claude/hooks .claude/commands .claude/scripts のみ更新する。
+               CLAUDE.md と台帳には触れない。
 EOF
 }
 
@@ -67,10 +72,10 @@ write_if_absent() {   # write a heredoc file only when the destination is absent
 # --- update mode -----------------------------------------------------------
 if [ "$UPDATE" -eq 1 ]; then
   echo "update: $TARGET"
-  for d in rules hooks commands; do
+  for d in rules hooks commands scripts; do
     sync_dir "$SRC/.claude/$d" "$TARGET/.claude/$d"
   done
-  chmod +x "$TARGET"/.claude/hooks/*.sh 2>/dev/null
+  chmod +x "$TARGET"/.claude/hooks/*.sh "$TARGET"/.claude/scripts/*.sh 2>/dev/null
   [ "$FAILED" -eq 0 ] && echo "done (update)" || echo "done with errors" >&2
   exit "$FAILED"
 fi
@@ -92,7 +97,7 @@ for entry in "$SRC/.claude"/*; do
   esac
 done
 
-chmod +x "$TARGET"/.claude/hooks/*.sh "$TARGET"/.claude/tests/*.sh 2>/dev/null
+chmod +x "$TARGET"/.claude/hooks/*.sh "$TARGET"/.claude/tests/*.sh "$TARGET"/.claude/scripts/*.sh 2>/dev/null
 [ -e "$TARGET/.claude/mode.yml" ] || { echo "mode: normal" > "$TARGET/.claude/mode.yml"; say "placed .claude/mode.yml"; }
 if [ -f "$SRC/.claude/templates/CLAUDE.md" ]; then
   place_file "$SRC/.claude/templates/CLAUDE.md" "$TARGET/CLAUDE.md"
@@ -116,7 +121,10 @@ else
 EOF
 fi
 
-write_if_absent "$TARGET/docs/tasks/list.md" <<'EOF'
+# 台帳の置き場: --no-docs なら .claude/tasks/、既定は docs/tasks/ (無ければ新規作成)。
+if [ "$NO_DOCS" -eq 1 ]; then TASKS_DIR="$TARGET/.claude/tasks"; else TASKS_DIR="$TARGET/docs/tasks"; fi
+
+write_if_absent "$TASKS_DIR/list.md" <<'EOF'
 # タスク台帳
 
 保留タスクは [parking-lot.md](parking-lot.md)。status は 未着手 / 進行中 / 完了 の 3 種。
@@ -125,7 +133,7 @@ write_if_absent "$TARGET/docs/tasks/list.md" <<'EOF'
 |---|--------|-------|------|-------|------|
 EOF
 
-write_if_absent "$TARGET/docs/tasks/parking-lot.md" <<'EOF'
+write_if_absent "$TASKS_DIR/parking-lot.md" <<'EOF'
 # Parking Lot
 
 着手しないタスクの置き場。1 件につき 起案日 / 保留理由 / 設計書 / 再検討トリガー を書く。
@@ -134,8 +142,11 @@ write_if_absent "$TARGET/docs/tasks/parking-lot.md" <<'EOF'
 |-------|-------|---------|-------|--------------|
 EOF
 
-write_if_absent "$TARGET/docs/draft/.gitkeep" </dev/null
-write_if_absent "$TARGET/docs/rules-reference/incidents.md" <<'EOF'
+if [ "$NO_DOCS" -eq 1 ]; then
+  say "skip   docs/ (--no-docs、台帳は .claude/tasks/list.md)"
+else
+  write_if_absent "$TARGET/docs/draft/.gitkeep" </dev/null
+  write_if_absent "$TARGET/docs/rules-reference/incidents.md" <<'EOF'
 # incidents
 
 事故 1 回目の記録先。2 回目が起きたら `/add-rule` でルール化する。
@@ -143,6 +154,7 @@ write_if_absent "$TARGET/docs/rules-reference/incidents.md" <<'EOF'
 | 日付 | 事象 | 対処 | 回数 |
 |-----|------|------|------|
 EOF
+fi
 
 [ "$FAILED" -eq 0 ] && echo "done (install)" || echo "done with errors" >&2
 exit "$FAILED"
