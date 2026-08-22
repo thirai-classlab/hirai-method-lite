@@ -8,8 +8,25 @@ ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$here/../.." && pwd)}"
 HOOKS="$ROOT/.claude/hooks"
 FAILED=0
 
+# T0 (常時ロード = frontmatter に paths: を持たない rule) に居てよいファイルの許可リスト。
+# 層を変える (T0 昇格 / T1 降格) ときはここを更新する。
+T0_ALLOWLIST="_meta.md core.md"
+T0_MAX=3
+
 pass() { echo "PASS  case $1: $2"; }
 fail() { echo "FAIL  case $1: $2 -- $3"; FAILED=1; }
+
+# frontmatter (先頭 --- から次の --- まで) の中に paths: キーがあれば exit 0、無ければ exit 1。
+# 「1 行目が --- か」ではなくキーの有無で判定するため、--- fence だけ残して paths: を消した
+# ケースも T0 として検出できる。
+has_paths_key() {
+  awk '
+    NR == 1 { if ($0 != "---") exit; next }
+    /^---[[:space:]]*$/ { exit }
+    /^paths:/ { found = 1; exit }
+    END { exit(found ? 0 : 1) }
+  ' "$1" 2>/dev/null
+}
 
 # ---------- case 1: session-start.sh は対象ファイル不在でも exit 0 ----------
 case_1() {
@@ -20,8 +37,12 @@ case_1() {
   local lines; lines="$(printf '%s\n' "$out" | grep -c . || true)"
   rm -rf "$tmp"
   if [ "$rc" -ne 0 ]; then fail 1 "session-start exit 0 (対象ファイル不在)" "exit=$rc"; return; fi
+  if [ "${lines:-0}" -lt 1 ]; then fail 1 "session-start は 1 行以上出力" "0 行 (無出力)"; return; fi
   if [ "${lines:-0}" -gt 5 ]; then fail 1 "session-start 出力 5 行以内" "${lines} 行"; return; fi
-  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行出力"
+  if ! printf '%s\n' "$out" | grep -q '\[harness\]'; then
+    fail 1 "session-start 出力に [harness] prefix" "prefix 不在: $out"; return
+  fi
+  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり"
 }
 
 # ---------- case 2: 閾値未満では無出力 ----------
@@ -70,21 +91,31 @@ case_4() {
   pass 4 "T0 常時ロード ${tokens} tokens <= 3,000 (${#files[@]} file / ${total} bytes)"
 }
 
-# ---------- case 5: 層違反検出 (paths: 無し rule <= 3 本) ----------
+# ---------- case 5: 層違反検出 (T0 は許可リストのファイルだけ / 本数 <= T0_MAX) ----------
 case_5() {
-  local n=0 f names=""
+  local n=0 f base names="" unexpected="" missing="" want
   if [ ! -d "$ROOT/.claude/rules" ]; then
-    fail 5 "paths: 無し rule <= 3 本" ".claude/rules/ が未作成のため測定不可"; return
+    fail 5 "T0 rule は許可リストのみ" ".claude/rules/ が未作成のため測定不可"; return
   fi
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    if ! head -20 "$f" 2>/dev/null | grep -q '^paths:'; then
-      n=$(( n + 1 )); names="$names $(basename "$f")"
-    fi
+    has_paths_key "$f" && continue
+    base="$(basename "$f")"
+    n=$(( n + 1 )); names="$names $base"
+    case " $T0_ALLOWLIST " in *" $base "*) ;; *) unexpected="$unexpected $base" ;; esac
   done < <(find "$ROOT/.claude/rules" -maxdepth 1 -name '*.md' 2>/dev/null | sort)
-  if [ "$n" -eq 0 ]; then fail 5 "paths: 無し rule <= 3 本" ".claude/rules/*.md が 0 件 (未作成)"; return; fi
-  if [ "$n" -gt 3 ]; then fail 5 "paths: 無し rule <= 3 本" "${n} 本:${names}"; return; fi
-  pass 5 "T0 層の rule は ${n} 本 <= 3 (${names# })"
+  if [ "$n" -eq 0 ]; then fail 5 "T0 rule は許可リストのみ" ".claude/rules/*.md が 0 件 (未作成)"; return; fi
+  if [ -n "$unexpected" ]; then
+    fail 5 "T0 rule は許可リスト (${T0_ALLOWLIST}) のみ" "想定外の T0 rule:${unexpected}"; return
+  fi
+  for want in $T0_ALLOWLIST; do
+    case "$names " in *" $want "*) ;; *) missing="$missing $want" ;; esac
+  done
+  if [ -n "$missing" ]; then
+    fail 5 "T0 rule は許可リスト (${T0_ALLOWLIST}) のみ" "許可リストが T0 に不在:${missing}"; return
+  fi
+  if [ "$n" -gt "$T0_MAX" ]; then fail 5 "T0 rule <= ${T0_MAX} 本" "${n} 本:${names}"; return; fi
+  pass 5 "T0 層の rule は許可リストどおり ${n} 本 <= ${T0_MAX} (${names# })"
 }
 
 # ---------- case 6: 数の予算 (hook<=5 / command<=12 / smoke case<=10) ----------
