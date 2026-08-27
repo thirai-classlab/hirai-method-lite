@@ -32,9 +32,9 @@ Claude Code で次の 2 行を順に実行します。
 
 | 選択肢 | 効く範囲 | 記録される場所 | ほかの人にも配られるか |
 |---|---|---|---|
-| **Local**（おすすめ） | いま開いているリポジトリで、自分だけ | そのフォルダの `.claude/settings.local.json` | 配られない（git に入らない） |
+| **Local**（おすすめ） | いま開いているプロジェクトで、自分だけ | そのフォルダの `.claude/settings.local.json` | 配られない（git に入らない） |
 | **User** | このパソコンで開くすべてのプロジェクト、自分だけ | ホームの `~/.claude/settings.json` | 配られない |
-| **Project** | いま開いているリポジトリを触る人全員 | そのフォルダの `.claude/settings.json` | **配られる**（このファイルを commit すると全員に効く） |
+| **Project** | いま開いているプロジェクトを触る人全員 | そのフォルダの `.claude/settings.json` | **配られる**（このファイルを commit すると全員に効く） |
 
 **Local をおすすめする理由**は 3 つです。
 
@@ -83,7 +83,7 @@ Claude Code で次の 2 行を順に実行します。
 
 許可しないとファイルが置かれません。`/init` は既存のファイルを 1 つも上書きしません。許可しなかった手順は飛ばされ、そのぶん置かれないままになります。最後に何を置いたかの報告が出るので、足りなければもう一度 `/hirai-lite:init` を実行してください。
 
-> **ここで別の確認が出ることがあります。** 開いたリポジトリ自身が直下に `.mcp.json` を持っている場合、そのサーバーについて「つないでよいか」を別途聞かれます。これはプラグインとは無関係で、そのリポジトリが持ち込む設定です。答えないままにすると `⏸ Pending approval` と表示され、**そのサーバーだけが使えません**（プラグイン側の 2 つや、決まりごと・コマンド・画面下部の表示には影響しません）。いまの状態を見るには `claude mcp list`、答え直すには `claude mcp reset-project-choices` です。
+> **ここで別の確認が出ることがあります。** 開いたプロジェクト自身が直下に `.mcp.json` を持っている場合、そのサーバーについて「つないでよいか」を別途聞かれます。これはプラグインとは無関係で、そのプロジェクトが持ち込む設定です。答えないままにすると `⏸ Pending approval` と表示され、**そのサーバーだけが使えません**（プラグイン側の 2 つや、決まりごと・コマンド・画面下部の表示には影響しません）。いまの状態を見るには `claude mcp list`、答え直すには `claude mcp reset-project-choices` です。
 
 ### 5. セッションを閉じて開き直します
 
@@ -193,11 +193,11 @@ Claude Code で次の 2 行を順に実行します。
 
    commands / hooks / agents / MCP サーバー定義はこの時点で有効になる。**rules はまだ配られていない** — プラグインには rules というコンポーネントが無いため。
 
-2. **rules を配置する** — 対象リポジトリを開いて `/hirai-lite:init` を実行する（全プロジェクト共通に入れるなら `/hirai-lite:init user`）。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ、`scripts/statusline.sh` と `scripts/tasks-path.sh` を `.claude/` へ配置し、台帳・draft dir・事故記録・`.claude/rules-archive/` を作る。既存ファイルは上書きしない。
+2. **rules を配置する** — 対象プロジェクトを開いて `/hirai-lite:init` を実行する（全プロジェクト共通に入れるなら `/hirai-lite:init user`）。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ、`scripts/statusline.sh` と `scripts/tasks-path.sh` を `.claude/` へ配置し、台帳・draft dir・事故記録・`.claude/rules-archive/` を作る。既存ファイルは上書きしない。
 
    `docs/` を持つリポジトリでは台帳 / draft / 事故記録が `docs/` 配下（`docs/tasks/list.md` `docs/draft/` `docs/rules-reference/incidents.md`）に、持たないリポジトリでは `.claude/` 配下（`.claude/tasks/list.md` `.claude/draft/` `.claude/rules-reference/incidents.md`）に作られる。`rules/core.md` と `rules/_meta.md` はこの解決順をそのまま書いているため、`docs/` 無しのリポジトリでも存在しないパスを指さない。`user` 指定時は台帳 / draft / 事故記録を作らず、`statusLine.command` だけ絶対パスへ書き換える。
 
-3. **CLAUDE.md を埋める** — このリポジトリの `CLAUDE.md` を雛形として対象リポジトリのルートに置き、`<...>` プレースホルダを実値（概要 / Tech Stack / Commands）に置換する。行動規範は書かない。それは `.claude/rules/core.md` の担当。
+3. **CLAUDE.md を埋める** — このリポジトリの `CLAUDE.md` を雛形として対象プロジェクトのルートに置き、`<...>` プレースホルダを実値（概要 / Tech Stack / Commands）に置換する。行動規範は書かない。それは `.claude/rules/core.md` の担当。
 
 4. **ロード検証** — **`/init` の次に開くセッション**で行う（rules は起動時に読まれるため、`/init` を実行したセッション内では確認できない。`/init` の終了条件にも含めていない）。新しいセッションを開き、T0 の 3 ファイルが載っていること、T1 が `paths:` 該当ファイルを開くまで載らないことを確認する。想定と違えば frontmatter を直す。
 
