@@ -37,10 +37,15 @@ branch="$(jqf '.workspace.repo.branch')"
 [ -n "$branch" ] || branch="$(git -C "$root" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 [ -n "$branch" ] || branch="-"
 
-# mode: env HC_MODE > mode.yml > normal。表示は日本語に置き換える (未知の値はそのまま出す)。
+# mode: env HC_MODE > プロジェクトの mode.yml > ホームの mode.yml (全プロジェクト共通) > normal。
+# 表示は日本語に置き換える (未知の値はそのまま出す)。
 mode="${HC_MODE:-}"
-if [ -z "$mode" ] && [ -f "$root/.claude/mode.yml" ]; then
-  mode="$(sed -n 's/^[[:space:]]*mode:[[:space:]]*\([a-z]*\).*/\1/p' "$root/.claude/mode.yml" 2>/dev/null | head -1)"
+if [ -z "$mode" ]; then
+  for mf in "$root/.claude/mode.yml" "${HOME:-}/.claude/mode.yml"; do
+    [ -f "$mf" ] || continue
+    mode="$(sed -n 's/^[[:space:]]*mode:[[:space:]]*\([a-z]*\).*/\1/p' "$mf" 2>/dev/null | head -1)"
+    [ -n "$mode" ] && break
+  done
 fi
 [ -n "$mode" ] || mode="normal"
 case "$mode" in

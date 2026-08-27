@@ -1,31 +1,42 @@
 # hirai-method-lite
 
-Claude Code 用の軽量ハーネス。**常時ロードされるコンテキストの総量に予算を置き、ルールの追加をパイプライン化する**ことだけを設計の中心に据えている。
+Claude Code に「AI が守る決まりごと（ルール）」をひとそろい配る、小さな追加パーツです。あわせて、作業の進め方の設定・やることの一覧表・取り返しのつかない操作の前の確認・画面下部の情報表示が手に入ります。
 
-前身の `hirai-method` は 1,629 file / shell 54,373 行まで肥大し、guard 36 個中 10 個が「ハーネス自身の開発を妨げるため」という理由で無効化されていた。原因は個々のルールではなく、**ルールを追加するときに置き場所・分量・表現・重複を検討する工程が無かった**ことにある。本リポジトリはその 1 点を構造で解く。
+いちばんの特徴は、**決まりごとが増えすぎないように上限を決めて管理する**こと。ルールを足すときは必ず決まった手順を通すので、AI が毎回読む文章が際限なく膨らんで肝心なことが埋もれる、という状態を防げます。
 
-## 導入 4 ステップ
+## 使いはじめる（3 ステップ）
 
-配布は **Claude Code プラグイン** 1 経路のみ。プラグイン名は `hirai-lite`。
-
-1. **マーケットプレイスを追加してインストールする**。
+1. Claude Code で次の 2 行を実行します。
 
    ```
    /plugin marketplace add thirai-classlab/hirai-method-lite
    /plugin install hirai-lite@hirai-lite
    ```
 
-   commands / hooks / agents / MCP サーバー定義はこの時点で有効になる。**rules はまだ配られていない** — プラグインには rules というコンポーネントが無いため。
+2. 使いたいプロジェクトを開いて `/hirai-lite:init` と入力します。
+   何が置かれたかが表示されます。
 
-2. **rules を配置する** — 対象リポジトリを開いて `/hirai-lite:init` を実行する。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ、`scripts/statusline.sh` と `scripts/tasks-path.sh` を `.claude/` へ配置し、台帳・draft dir・事故記録・`.claude/rules-archive/` を作る。既存ファイルは上書きしない。
+3. いったんセッションを閉じて開き直します。これで準備完了です。
 
-   `docs/` を持つリポジトリでは台帳 / draft / 事故記録が `docs/` 配下（`docs/tasks/list.md` `docs/draft/` `docs/rules-reference/incidents.md`）に、持たないリポジトリでは `.claude/` 配下（`.claude/tasks/list.md` `.claude/draft/` `.claude/rules-reference/incidents.md`）に作られる。`rules/core.md` と `rules/_meta.md` はこの解決順をそのまま書いているため、`docs/` 無しのリポジトリでも存在しないパスを指さない。
+うまくいったか確かめる: 画面下部に「mode: 確認あり」と出ていれば OK です。
 
-3. **CLAUDE.md を埋める** — このリポジトリの `CLAUDE.md` を雛形として対象リポジトリのルートに置き、`<...>` プレースホルダを実値（概要 / Tech Stack / Commands）に置換する。行動規範は書かない。それは `.claude/rules/core.md` の担当。
+## どこに入れるか（このプロジェクトだけ / 全プロジェクト）
 
-4. **ロード検証** — **`/init` の次に開くセッション**で行う（rules は起動時に読まれるため、`/init` を実行したセッション内では確認できない。`/init` の終了条件にも含めていない）。新しいセッションを開き、T0 の 3 ファイルが載っていること、T1 が `paths:` 該当ファイルを開くまで載らないことを確認する。想定と違えば frontmatter を直す。
+置き場所は 2 つあります。ふつうは上のままで大丈夫です。
 
-更新は `/update`（`/plugin update` → `/hirai-lite:init` で rules を再配置 → プラグイン所有の `.claude/statusline.sh` と `.claude/tasks-path.sh` を配布版に入れ替え）。
+| やり方 | 入力するもの | 置かれる場所 | 効く範囲 |
+|---|---|---|---|
+| このプロジェクトだけ（既定） | `/hirai-lite:init` | いま開いているフォルダの `.claude/` | このプロジェクトだけ |
+| 全プロジェクト共通 | `/hirai-lite:init user` | ホームの `~/.claude/` | このパソコンで開くすべてのプロジェクト |
+
+全プロジェクト共通に入れると、決まりごと・安全設定・進め方の設定・画面下部の表示がどこでも効きます。ただし**やることの一覧表・設計メモの置き場・困ったことの記録帳は作られません**。これらはプロジェクトごとの中身なので、共通の場所に置いても意味がないためです。
+
+⚠️ **両方には入れないでください。** 同じ決まりごとが 2 か所にあると、まったく同じ文章が 2 回読み込まれ、AI が一度に読める容量を無駄に使います（実測で約 2,900 が約 5,800 になり、このハーネスが自分に課している上限 3,000 を超えます）。`/hirai-lite:init` はもう一方の場所に同じ名前のファイルを見つけると警告を出すので、案内どおりどちらか一方を消してください。
+
+**確認できたこと / できなかったこと**（実装の根拠）:
+
+- ホームの `~/.claude/rules/` が読み込まれることは公式ドキュメントに明記があります。[memory.md](https://code.claude.com/docs/en/memory.md) の「User-level rules」: *Personal rules in `~/.claude/rules/` apply to every project on your machine.* / *User-level rules are loaded before project rules, giving project rules higher priority.*
+- 一方、**`paths:` を書いたファイルがホーム側でも「そのファイルを開いた時だけ読まれる」のかは、公式ドキュメントに明記がありません**（`paths:` の説明はプロジェクト側 `.claude/rules/` の節にあり、ホーム側の節では触れられていない）。全プロジェクト共通に入れた場合、必要なときだけ読まれるはずの 3 件が常に読まれる可能性がある点は**未確認**です。気になる場合はこのプロジェクトだけに入れる既定の使い方を選んでください。
 
 ## mode（進め方）とは
 
@@ -46,7 +57,9 @@ Claude Code 用の軽量ハーネス。**常時ロードされるコンテキス
 
 ## statusline について
 
-`/hirai-lite:init` は `scripts/statusline.sh` と `scripts/tasks-path.sh` を導入先の `.claude/` へ複製し、`templates/settings.json` の `statusLine.command`（`bash "${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh"`）から呼ぶ。表示は 1 行で `<model> | ctx <N>% ・5h <N>% ・7d <N>% | mode: <進め方> | <branch> | やること <N>`。進め方は値そのものを日本語で出す（`normal` → `確認あり` / `loop` → `自動`、未知の値はそのまま）。実例: `Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: 確認あり | feat/rate-limit | やること 4`。
+`/hirai-lite:init` は `scripts/statusline.sh` と `scripts/tasks-path.sh` を配置先の `.claude/` へ複製し、`templates/settings.json` の `statusLine.command`（`bash "${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh"`）から呼ぶ。表示は 1 行で `<model> | ctx <N>% ・5h <N>% ・7d <N>% | mode: <進め方> | <branch> | やること <N>`。進め方は値そのものを日本語で出す（`normal` → `確認あり` / `loop` → `自動`、未知の値はそのまま）。実例: `Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: 確認あり | feat/rate-limit | やること 4`。
+
+全プロジェクト共通（`/hirai-lite:init user`）に入れた場合だけは、`statusLine.command` を `$HOME` を展開した絶対パス（例: `bash "/home/you/.claude/statusline.sh"`）に書き換える。`${CLAUDE_PROJECT_DIR}` は開いているプロジェクトごとに変わるため、全プロジェクト共通の設定からは使えないため。進め方（`mode.yml`）はプロジェクト側を先に見て、無ければホーム側を見る。
 
 `.claude/statusline.sh` と `.claude/tasks-path.sh` の 2 本は**プラグイン所有**であり、`/update` で配布版に置き換わる（中身を変えていた場合は `.bak` に退避してから置き換える）。`.claude/rules/` `settings.json` `mode.yml` `CLAUDE.md` 台帳は利用者所有で、更新では触らない。
 
@@ -76,6 +89,29 @@ Claude Code 用の軽量ハーネス。**常時ロードされるコンテキス
 
 3 つとも [everything-claude-code](https://github.com/affaan-m/everything-claude-code)（MIT License, Copyright (c) 2026 Affaan Mustafa）から取り込み、出典と著作権表示を各ファイル冒頭と [`NOTICE.md`](NOTICE.md) に保持している。`rules/code.md` は例として `database-reviewer` にも触れるが、これは同梱していない（必要なら利用者が `.claude/agents/` に置く）。
 
+## 詳しい導入手順
+
+ここから下は仕組みを知りたい人向け。配布は **Claude Code プラグイン** 1 経路のみ。プラグイン名は `hirai-lite`。
+
+1. **マーケットプレイスを追加してインストールする**。
+
+   ```
+   /plugin marketplace add thirai-classlab/hirai-method-lite
+   /plugin install hirai-lite@hirai-lite
+   ```
+
+   commands / hooks / agents / MCP サーバー定義はこの時点で有効になる。**rules はまだ配られていない** — プラグインには rules というコンポーネントが無いため。
+
+2. **rules を配置する** — 対象リポジトリを開いて `/hirai-lite:init` を実行する（全プロジェクト共通に入れるなら `/hirai-lite:init user`）。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ、`scripts/statusline.sh` と `scripts/tasks-path.sh` を `.claude/` へ配置し、台帳・draft dir・事故記録・`.claude/rules-archive/` を作る。既存ファイルは上書きしない。
+
+   `docs/` を持つリポジトリでは台帳 / draft / 事故記録が `docs/` 配下（`docs/tasks/list.md` `docs/draft/` `docs/rules-reference/incidents.md`）に、持たないリポジトリでは `.claude/` 配下（`.claude/tasks/list.md` `.claude/draft/` `.claude/rules-reference/incidents.md`）に作られる。`rules/core.md` と `rules/_meta.md` はこの解決順をそのまま書いているため、`docs/` 無しのリポジトリでも存在しないパスを指さない。`user` 指定時は台帳 / draft / 事故記録を作らず、`statusLine.command` だけ絶対パスへ書き換える。
+
+3. **CLAUDE.md を埋める** — このリポジトリの `CLAUDE.md` を雛形として対象リポジトリのルートに置き、`<...>` プレースホルダを実値（概要 / Tech Stack / Commands）に置換する。行動規範は書かない。それは `.claude/rules/core.md` の担当。
+
+4. **ロード検証** — **`/init` の次に開くセッション**で行う（rules は起動時に読まれるため、`/init` を実行したセッション内では確認できない。`/init` の終了条件にも含めていない）。新しいセッションを開き、T0 の 3 ファイルが載っていること、T1 が `paths:` 該当ファイルを開くまで載らないことを確認する。想定と違えば frontmatter を直す。
+
+更新は `/update`（`/plugin update` → `/hirai-lite:init` で rules を再配置 → プラグイン所有の `.claude/statusline.sh` と `.claude/tasks-path.sh` を配布版に入れ替え）。
+
 ## このリポジトリの構成
 
 | パス | 中身 |
@@ -86,8 +122,8 @@ Claude Code 用の軽量ハーネス。**常時ロードされるコンテキス
 | `agents/` | サブエージェント 3 個（MIT、出典は `NOTICE.md`） |
 | `commands/` | スラッシュコマンド 12 個 |
 | `hooks/` | `hooks.json` + SessionStart / UserPromptSubmit の 2 本 |
-| `rules/` | **プラグインは読まない。** `/init` が導入先の `.claude/rules/` へ配る素材 |
-| `scripts/` | hook / statusline が source する共通ライブラリ |
+| `rules/` | **プラグインは読まない。** `/init` が配置先の `.claude/rules/` へ配る素材 |
+| `scripts/` | hook / statusline が source する共通ライブラリ + `/init` の二重ロード検査 |
 | `templates/` | `settings.json` / `mode.yml` / draft / task の雛形 |
 | `tests/smoke.sh` | 自己検証 10 case（予算監査を含む） |
 
@@ -106,9 +142,15 @@ Claude Code は `.claude/rules/*.md` を再帰的に発見する。`paths:` fron
 
 T2 を `.claude/rules/` の**外**に置くのは意図的。`rules/` の中に置くと `paths:` を書き忘れた瞬間に T0 へ昇格してしまう。物理配置でこの事故を防いでいる。同じ理由で T0 から T2 へのポインタは張らない（張ると T0 が背景説明で膨らむ）。ポインタは T1 から張る。
 
+同じ理由で **T0 の二重計上も禁止**する。`~/.claude/rules/` と `<project>/.claude/rules/` の両方に同じファイルがあると T0 は倍（実測 2,890 → 5,780 tokens）になり、3,000 の上限を無言で割る。`/init` は反対側の scope を毎回検査し、重なりがあれば警告を出す（`scripts/scope-check.sh`、`tests/smoke.sh` case 4 で検証）。
+
 `@import` は使わない。CLAUDE.md 展開時に常時展開されるため、context 削減効果がゼロどころか純増になる。
 
 ## 設計思想
+
+**常時ロードされるコンテキストの総量に予算を置き、ルールの追加をパイプライン化する**ことだけを設計の中心に据えている。
+
+前身の `hirai-method` は 1,629 file / shell 54,373 行まで肥大し、guard 36 個中 10 個が「ハーネス自身の開発を妨げるため」という理由で無効化されていた。原因は個々のルールではなく、**ルールを追加するときに置き場所・分量・表現・重複を検討する工程が無かった**ことにある。本リポジトリはその 1 点を構造で解く。
 
 **1. 既定は「入れない」。** T0 は 3,000 tokens の hard cap を持つ。追加は容易で削除は困難、という非対称を予算で打ち消す。上限に達した後の追加は、既存 1 件を T1/T2 へ降格するまで通らない。
 
@@ -122,7 +164,7 @@ T2 を `.claude/rules/` の**外**に置くのは意図的。`rules/` の中に�
 
 ## ルールを追加するとき
 
-`rules/_meta.md`（導入先では `.claude/rules/_meta.md`）に 8 条とパイプラインがある。要点だけ:
+`rules/_meta.md`（配置先では `.claude/rules/_meta.md`）に 8 条とパイプラインがある。要点だけ:
 
 - 追加はユーザー承認必須。削除は承認不要（削除の摩擦を追加より低くする）
 - 1 ルール 1 事象・3 行以内。書式は `- **<名前>**: <肯定形 1 行> ／ 例: <1 つ> ／ 失効: <条件>`

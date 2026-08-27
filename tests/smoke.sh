@@ -96,7 +96,37 @@ case_4() {
   if [ "$tokens" -gt 3000 ]; then
     fail 4 "T0 予算 <= 3,000 tokens" "${tokens} tokens (${total} bytes / ${#files[@]} file)"; return
   fi
-  pass 4 "T0 常時ロード ${tokens} tokens <= 3,000 (${#files[@]} file / ${total} bytes)"
+
+  # 二重ロード検出。project scope と user scope の両方に同じ rule があると T0 は倍になり、
+  # 予算 3,000 を無言で割る。/init が使う scripts/scope-check.sh がその重なりを止める。
+  local sc td out
+  sc="$ROOT/scripts/scope-check.sh"
+  if [ ! -f "$sc" ]; then fail 4 "scope-check.sh が存在する" "$sc が無い"; return; fi
+  if [ $(( tokens * 2 )) -le 3000 ]; then
+    fail 4 "二重ロードは予算超過になる (検出の前提)" "倍でも $(( tokens * 2 )) <= 3000"; return
+  fi
+  td="$(mktemp -d)"; mkdir -p "$td/proj/rules" "$td/home/rules"
+  cp "$ROOT"/rules/*.md "$td/proj/rules/" 2>/dev/null
+  # (a) 片側だけなら無警告
+  out="$(bash "$sc" "$td/proj" "$td/home" 2>&1)"
+  if [ -n "$out" ]; then rm -rf "$td"; fail 4 "片側だけなら無警告" "出力あり: $out"; return; fi
+  # (b) 両側に同名があれば警告 + 重なったファイル名 + 消し方を出す
+  cp "$ROOT"/rules/*.md "$td/home/rules/" 2>/dev/null
+  out="$(bash "$sc" "$td/proj" "$td/home" 2>&1)"
+  # (c) 同じ場所を 2 回渡した時 (ホーム直下で開いた等) は重複扱いしない
+  local same; same="$(bash "$sc" "$td/proj" "$td/proj" 2>&1)"
+  rm -rf "$td"
+  if ! printf '%s\n' "$out" | grep -q '同じルールが 2 か所にあります'; then
+    fail 4 "二重ロードを警告する" "警告が出ない: $out"; return
+  fi
+  if ! printf '%s\n' "$out" | grep -q 'core.md'; then
+    fail 4 "重なったファイル名を出す" "core.md が出ない: $out"; return
+  fi
+  if ! printf '%s\n' "$out" | grep -q '^     rm .*rules/core.md$'; then
+    fail 4 "消し方を出す" "rm の行が出ない: $out"; return
+  fi
+  if [ -n "$same" ]; then fail 4 "同一パスは重複扱いしない" "出力あり: $same"; return; fi
+  pass 4 "T0 常時ロード ${tokens} tokens <= 3,000 (${#files[@]} file / ${total} bytes) / 二重ロード ($(( tokens * 2 ))) は scope-check.sh が警告"
 }
 
 # ---------- case 5: 層違反検出 (T0 は許可リストのファイルだけ / 本数 <= T0_MAX) ----------

@@ -43,6 +43,10 @@ cp -R .claude/rules /tmp/rules.bak 2>/dev/null && echo "rules を /tmp/rules.bak
 /hirai-lite:init
 ```
 
+全プロジェクト共通 (`~/.claude/rules/`) に入れている場合は `/hirai-lite:init user` を実行する。
+どちらに入れたか分からないときは `ls ~/.claude/rules/*.md .claude/rules/*.md 2>/dev/null` で確かめる
+(両方に出たら二重ロードなので、`/init` の警告に従ってどちらか一方を消す)。
+
 `/init` は既存ファイルを 1 つも上書きしない。新しい rules を取り込むには、取り込みたいファイルを
 `.claude/rules/` から先に削除してから `/init` を実行する。手順 0 の `/tmp/rules.bak` と
 `diff -ru /tmp/rules.bak .claude/rules` で突き合わせ、自分の変更が消えていないかを確認する。
