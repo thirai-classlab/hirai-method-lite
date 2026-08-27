@@ -7,7 +7,7 @@
 #            ただし「新しい設計を足す」「決めた内容を変える」「元に戻せない操作」は
 #            自動のときでも必ず確認する。
 #
-# 切り替え : /mode normal または /mode loop (このファイルを書き換える)
+# 切り替え : /hirai-lite:config （設定の一覧から「進め方」を変えるとこのファイルが書き換わる）
 # 一時的に : 環境変数 HC_MODE=loop (このファイルより優先される)
 # 置き場所 : 導入先リポジトリの .claude/mode.yml (/init が置く)
 # 読む人   : プラグインの hooks/session-start.sh と scripts/statusline.sh

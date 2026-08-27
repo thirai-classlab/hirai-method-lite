@@ -205,7 +205,7 @@ Claude Code 2.1.247 で実際に確かめたところ、この表示が出てい
 
 ## mode（進め方）とは
 
-作業の進め方の設定で、値は 2 つだけ。`.claude/mode.yml` に入っていて `/mode normal` / `/mode loop` で切り替える。画面下部の表示にも出る。
+作業の進め方の設定で、値は 2 つだけ。`.claude/mode.yml` に入っていて `/hirai-lite:config` で切り替える（一覧の「1. 進め方」）。画面下部の表示にも出る。
 
 | 値 | 表示 | 挙動 |
 |---|---|---|
@@ -222,16 +222,29 @@ Claude Code 2.1.247 で実際に確かめたところ、この表示が出てい
 
 ## statusline について
 
-`/hirai-lite:init` は `scripts/statusline.sh` と `scripts/tasks-path.sh` を配置先の `.claude/` へ複製し、`templates/settings.json` の `statusLine.command`（`bash "${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh"`）から呼ぶ。表示は 1 行で `<model> | ctx <N>% ・5h <N>% ・7d <N>% | mode: <進め方> | <branch> | やること <N>`。進め方は値そのものを日本語で出す（`normal` → `確認あり` / `loop` → `自動`、未知の値はそのまま）。実例: `Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: 確認あり | feat/rate-limit | やること 4`。
+`/hirai-lite:init` は `scripts/statusline.sh` と `scripts/tasks-path.sh` を配置先の `.claude/` へ複製し、`templates/settings.json` の `statusLine.command`（`bash "${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh"`）から呼ぶ。表示は **2 行**で、1 行目が**いまの状態**、2 行目が**次にできる操作**（v1.5.0 から）。
 
-いちばん右は**お知らせ枠**で、下の表を上から見て**当てはまった 1 つだけ**を出す。どれにも当てはまらなければ区切りごと出さない。
+```
+Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: 確認あり | feat/rate-limit | やること 4
+設定を確認・変更 → /hirai-lite:config
+```
+
+1 行目は `<model> | ctx <N>% ・5h <N>% ・7d <N>% | mode: <進め方> | <branch> | やること <N>`。進め方は値そのものを日本語で出す（`normal` → `確認あり` / `loop` → `自動`、未知の値はそのまま）。2 行目の設定リンクは**常に出る**。
+
+**色は補助でしかない。** モデル名 / ブランチ / やること はグレー、`ctx` `5h` `7d` は緑 → 黄 → 赤（50% 以上で黄、80% 以上で赤）、`mode` の値は進め方ごとに別の色、設定リンクは控えめなシアン、お知らせは黄。**色を落としても意味は変わらない**ように、数値には `%`、進め方には「確認あり / 自動」、リンクにはコマンド名を文字として必ず出している（色覚特性や配色設定で色が伝わらない環境を想定）。環境変数 `NO_COLOR` が設定されていれば色を一切出さない。
+
+**お知らせ**は 2 行目の設定リンクの後ろに、下の表を上から見て**当てはまった 1 つだけ**を出す。どれにも当てはまらなければ設定リンクだけが残る。
 
 | 優先 | 出るとき | 表示 |
 |---|---|---|
 | 1 | 新しい版が出ている | `更新あり → /hirai-lite:update` |
 | 2 | ctx が閾値以上（既定 80%、`HC_CONTEXT_THRESHOLD` で変更） | `きりの良いところで /hirai-lite:state save` |
 
-お知らせ枠ごと止めるなら環境変数 `HC_STATUSLINE_NOTICE=off`（1 の行だけ止めるなら `HARNESS_UPDATE_CHECK=off`）。**画面下部の表示は通信しない。** 何度も描き直されるため、新しい版が出ているかどうかはセッション開始時の調べ物が置いた控えを読むだけで、`statusline.sh` からは一切通信しない（実測 38ms / 到達不能な URL を設定しても遅くならない）。控えは 24 時間に 1 回しか取り直さないので、更新の合図が出る条件は[合図が出ないとき](#合図が出ないとき)と同じ。
+```
+設定を確認・変更 → /hirai-lite:config    きりの良いところで /hirai-lite:state save
+```
+
+お知らせを止めるなら環境変数 `HC_STATUSLINE_NOTICE=off`（1 の行だけ止めるなら `HARNESS_UPDATE_CHECK=off`）。どちらの場合も設定リンクは残る。**画面下部の表示は通信しない。** 何度も描き直されるため、新しい版が出ているかどうかはセッション開始時の調べ物が置いた控えを読むだけで、`statusline.sh` からは一切通信しない（実測 38ms / 到達不能な URL を設定しても遅くならない）。控えは 24 時間に 1 回しか取り直さないので、更新の合図が出る条件は[合図が出ないとき](#合図が出ないとき)と同じ。
 
 全プロジェクト共通（`/hirai-lite:init user`）に入れた場合だけは、`statusLine.command` を `$HOME` を展開した絶対パス（例: `bash "/home/you/.claude/statusline.sh"`）に書き換える。`${CLAUDE_PROJECT_DIR}` は開いているプロジェクトごとに変わるため、全プロジェクト共通の設定からは使えないため。進め方（`mode.yml`）はプロジェクト側を先に見て、無ければホーム側を見る。
 

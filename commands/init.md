@@ -163,7 +163,7 @@ bash の出力は作業ログであって報告ではない。**最後に必ず�
    本番反映や強制 push など、取り返しのつかない操作の前に確認が入ります
 ✅ 濃いめに考える設定を有効にしました（そのぶん利用量が増えます）
 ✅ 進め方の設定を置きました → .claude/mode.yml（いまは「確認あり」）
-   後から /hirai-lite:mode loop で「いちいち確認しない」に変えられます
+   後から /hirai-lite:config で「いちいち確認しない」に変えられます
 ✅ タスク一覧表を作りました → docs/tasks/list.md
 ✅ 設計メモの置き場を作りました → docs/draft/
 ✅ 困ったことの記録帳を作りました → docs/rules-reference/incidents.md

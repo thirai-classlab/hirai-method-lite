@@ -41,6 +41,21 @@ has_paths_key() {
   ' "$1" 2>/dev/null
 }
 
+# 画面下部は 2 行構成。1 行目 = いまの状態 / 2 行目 = 次にできる操作 (設定リンクは常時表示)。
+SL_LINK='設定を確認・変更 → /hirai-lite:config'
+
+# sl_shape <画面下部の出力> -> 2 行かつ 2 行目が設定リンクで始まれば rc 0、違えば理由を stdout
+sl_shape() {
+  local out="$1" n l2
+  n="$(printf '%s\n' "$out" | grep -c . || true)"
+  if [ "${n:-0}" -ne 2 ]; then printf '2 行ではない (%s 行): %s' "$n" "$out"; return 1; fi
+  l2="$(printf '%s\n' "$out" | sed -n '2p')"
+  case "$l2" in
+    "$SL_LINK"*) return 0 ;;
+    *) printf '2 行目が設定リンクで始まっていない: %s' "$l2"; return 1 ;;
+  esac
+}
+
 # ---------- case 1: session-start.sh は対象ファイル不在でも exit 0 ----------
 case_1() {
   local tmp out rc
@@ -57,18 +72,36 @@ case_1() {
   fi
 
   # statusline.sh も同じ fail-open。空 stdin / 壊れた JSON / お知らせの控えが不在・空・壊れ、
-  # いずれでも 1 行 + exit 0 を返す (画面下部が消えたり複数行に崩れたりしない)。
-  local sl="$ROOT/scripts/statusline.sh" std sout n src
+  # いずれでも 2 行 + exit 0 を返し、2 行目の設定リンクは常時出る
+  # (画面下部が消えたり行数が崩れたり、設定の入口が見えなくなったりしない)。
+  local sl="$ROOT/scripts/statusline.sh" std sout src why
   if [ ! -f "$sl" ]; then fail 1 "statusline.sh が存在する" "$sl が無い"; return; fi
   std="$(mktemp -d)"
   for src in '' '{"model":' 'zzz' '{"model":{"display_name":"X"},"context_window":{"used_percentage":12}}'; do
     sout="$(printf '%s' "$src" | TMPDIR="$std" NO_COLOR=1 CLAUDE_PROJECT_DIR="$std" \
           HARNESS_UPDATE_CHECK=on bash "$sl" 2>&1)"; rc=$?
-    n="$(printf '%s\n' "$sout" | grep -c . || true)"
-    if [ "$rc" -ne 0 ] || [ "${n:-0}" -ne 1 ]; then
-      rm -rf "$std"; fail 1 "statusline は常に 1 行 + exit 0" "入力[${src}] exit=${rc} 行数=${n}"; return
+    why="$(sl_shape "$sout")" || true
+    if [ "$rc" -ne 0 ] || [ -n "$why" ]; then
+      rm -rf "$std"
+      fail 1 "statusline は常に 2 行 + 設定リンク常時 + exit 0" "入力[${src}] exit=${rc} ${why}"; return
     fi
   done
+  # 色を落としても意味が読み取れる (NO_COLOR 指定時に制御文字を 1 つも出さない)
+  sout="$(printf '{"model":{"display_name":"X"},"context_window":{"used_percentage":85}}' \
+        | TMPDIR="$std" NO_COLOR=1 CLAUDE_PROJECT_DIR="$std" bash "$sl" 2>&1)"
+  if printf '%s' "$sout" | grep -q $'\033'; then
+    rm -rf "$std"; fail 1 "NO_COLOR で色を出さない" "制御文字が残っている"; return
+  fi
+  # 色ありでも行数と語は変わらない (色は補助であって情報を持たない)
+  sout="$(printf '{"model":{"display_name":"X"},"context_window":{"used_percentage":85}}' \
+        | TMPDIR="$std" CLAUDE_PROJECT_DIR="$std" bash "$sl" 2>&1)"; rc=$?
+  if ! printf '%s' "$sout" | grep -q $'\033'; then
+    rm -rf "$std"; fail 1 "色ありでは色を出す" "制御文字が無い"; return
+  fi
+  why="$(sl_shape "$(printf '%s' "$sout" | sed $'s/\033\\[[0-9;]*m//g')")" || true
+  if [ "$rc" -ne 0 ] || [ -n "$why" ]; then
+    rm -rf "$std"; fail 1 "色を落としても 2 行 + 設定リンク" "exit=${rc} ${why}"; return
+  fi
   # 空の控え = 更新なし扱い (中身が消し損ねの空ファイルでも嘘の通知を出さない)
   mkdir -p "$std/claude-harness-lite" && : > "$std/claude-harness-lite/update-available"
   sout="$(printf '{"context_window":{"used_percentage":12}}' \
@@ -76,13 +109,13 @@ case_1() {
   if [ "$rc" -ne 0 ] || printf '%s' "$sout" | grep -q '更新あり'; then
     rm -rf "$std"; fail 1 "空の控えでは更新を知らせない" "exit=${rc}: $sout"; return
   fi
-  # 壊れた控え + 壊れた JSON の同時発生でも 1 行 + exit 0
+  # 壊れた控え + 壊れた JSON の同時発生でも 2 行 + exit 0
   printf '\001garbage\002' > "$std/claude-harness-lite/update-available"
   sout="$(printf 'not json' | TMPDIR="$std" NO_COLOR=1 CLAUDE_PROJECT_DIR="$std" bash "$sl" 2>&1)"; rc=$?
-  n="$(printf '%s\n' "$sout" | grep -c . || true)"
+  why="$(sl_shape "$sout")" || true
   rm -rf "$std"
-  if [ "$rc" -ne 0 ] || [ "${n:-0}" -ne 1 ]; then
-    fail 1 "壊れた控え + 壊れた JSON でも 1 行 + exit 0" "exit=${rc} 行数=${n}"; return
+  if [ "$rc" -ne 0 ] || [ -n "$why" ]; then
+    fail 1 "壊れた控え + 壊れた JSON でも 2 行 + exit 0" "exit=${rc} ${why}"; return
   fi
 
   # 進め方 (mode) の一致検査。セッション冒頭 (session-start.sh) と画面下部 (statusline.sh) が
@@ -116,16 +149,16 @@ normal loop   自動     両方あればプロジェクト側
 loop   normal 確認あり 両方あればプロジェクト側
 -      -      確認あり どちらも無し
 EOF
-  # /mode の書き込み先: ホーム側だけに在るならプロジェクト側に新設しない
+  # /config の書き込み先: ホーム側だけに在るならプロジェクト側に新設しない
   rm -f "$mw/home/.claude/mode.yml" "$mw/proj/.claude/mode.yml"
   printf 'mode: normal\n' > "$mw/home/.claude/mode.yml"
   local wf
   wf="$(HOME="$mw/home" bash -c '. "$1/scripts/tasks-path.sh"; harness_mode_write_file "$2"' _ "$mw/plug" "$mw/proj" 2>/dev/null)"
   if [ "$wf" != "$mw/home/.claude/mode.yml" ]; then
-    rm -rf "$mw"; fail 1 "/mode はすでに在る側に書く" "書き込み先=${wf:-無} (期待: ホーム側)"; return
+    rm -rf "$mw"; fail 1 "/config はすでに在る側に書く" "書き込み先=${wf:-無} (期待: ホーム側)"; return
   fi
   rm -rf "$mw"
-  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 1 行 + exit 0 / 進め方は置き場 5 通りで冒頭と画面下部が一致し /mode は在る側に書く"
+  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く"
 }
 
 # ---------- case 2: 閾値未満では無出力 ----------
@@ -312,23 +345,26 @@ run_statusline() {
 }
 
 # expect_notice <出力> <期待するお知らせ (空なら「何も出さない」)> -> 一致で rc 0、違えば理由を stdout
+# お知らせは 2 行目の設定リンクの**後ろ**に出る。該当なしでも設定リンクは必ず残る。
 expect_notice() {
-  local out="$1" want="$2" n
-  n="$(printf '%s\n' "$out" | grep -c . || true)"
-  if [ "${n:-0}" -ne 1 ]; then printf '1 行ではない (%s 行): %s' "$n" "$out"; return 1; fi
+  local out="$1" want="$2" why l2
+  why="$(sl_shape "$out")" || { printf '%s' "$why"; return 1; }
+  l2="$(printf '%s\n' "$out" | sed -n '2p')"
   if [ -n "$want" ]; then
-    case "$out" in
-      *"| $want") return 0 ;;
-      *) printf '末尾が [%s] でない: %s' "$want" "$out"; return 1 ;;
+    case "$l2" in
+      "$SL_LINK    $want") return 0 ;;
+      *) printf '2 行目が [リンク + %s] でない: %s' "$want" "$l2"; return 1 ;;
     esac
   fi
   case "$out" in
     *更新あり*|*きりの良いところで*) printf 'お知らせが出ている: %s' "$out"; return 1 ;;
   esac
-  # 該当なしのときは区切りも出さない = 行末が「やること <N>」で終わる
+  # 該当なしのときは 2 行目が設定リンクだけになる (リンクは常時表示なので消えてはいけない)
+  if [ "$l2" != "$SL_LINK" ]; then printf '2 行目が設定リンクだけではない: %s' "$l2"; return 1; fi
+  # 1 行目は従来どおり「やること <N>」で終わる
   case "$out" in
     *"やること "*) return 0 ;;
-    *) printf '末尾が やること <N> で終わっていない: %s' "$out"; return 1 ;;
+    *) printf '1 行目が やること <N> で終わっていない: %s' "$out"; return 1 ;;
   esac
 }
 
@@ -412,8 +448,8 @@ case_8() {
 0.10.0 0.9.0 no
 EOF
 
-  # 画面下部のお知らせ枠。SessionStart が置いた控えを statusline が読むだけで、通信は起きない。
-  # 上から順に 1 つだけ出す (1 更新あり > 2 context 高 > 何も出さない)。
+  # 画面下部 2 行目のお知らせ。SessionStart が置いた控えを statusline が読むだけで、通信は起きない。
+  # 上から順に 1 つだけ出し (1 更新あり > 2 context 高 > 何も出さない)、設定リンクは常時残る。
   local flag="$td/claude-harness-lite/update-available" why
   local up='更新あり → /hirai-lite:update' ctxmsg='きりの良いところで /hirai-lite:state save'
   local j_low='{"model":{"display_name":"X"},"context_window":{"used_percentage":12}}'
@@ -432,7 +468,7 @@ EOF
     fi
     # 枠ごと止める
     if ! why="$(expect_notice "$(run_statusline "$tmp" "$td" "$j_high" off)" "")"; then
-      fail 8 "HC_STATUSLINE_NOTICE=off で従来表示" "$why"; failed=1; break
+      fail 8 "HC_STATUSLINE_NOTICE=off でお知らせだけ止まり設定リンクは残る" "$why"; failed=1; break
     fi
     # 更新の知らせだけ止める (context 高は残る)
     if ! why="$(expect_notice "$(run_statusline "$tmp" "$td" "$j_high" on off)" "$ctxmsg")"; then
@@ -464,7 +500,7 @@ EOF
   fi
   rm -rf "$tmp" "$td"
   [ "$failed" -eq 0 ] || return
-  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 を数値比較 / 画面下部のお知らせ枠は 更新あり > context 高 > 無表示 の順に 1 つだけ (off で停止・閾値可変・通信なし)"
+  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 を数値比較 / 画面下部 2 行目は設定リンクを常時出しつつ お知らせは 更新あり > context 高 > 無表示 の順に 1 つだけ (off で停止・閾値可変・通信なし)"
 }
 
 # ---------- case 9: マニフェストが妥当な JSON で、版が VERSION と一致する ----------

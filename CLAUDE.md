@@ -46,4 +46,4 @@ T0 は毎セッション常時ロード（合計 6,000 tokens で警告 / 10,000
 
 ## 進め方 (Mode)
 
-`.claude/mode.yml` の `mode:` で決まる。`normal` = 確認あり / `loop` = 自動。詳細は `.claude/rules/core.md` の該当条。
+`.claude/mode.yml` の `mode:` で決まる。`normal` = 確認あり / `loop` = 自動。切替は `/hirai-lite:config`。詳細は `.claude/rules/core.md` の該当条。

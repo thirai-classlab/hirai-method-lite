@@ -69,7 +69,7 @@ harness_incidents_file() {
 }
 
 # --- 進め方 (mode) ------------------------------------------------------------
-# 読む側 (SessionStart / 画面下部) と書く側 (/mode) が別々の順で解決すると、
+# 読む側 (SessionStart / 画面下部) と書く側 (/config) が別々の順で解決すると、
 # 「セッション冒頭は確認あり・画面下部は自動」のように食い違う。3 箇所ともここを通す。
 
 # harness_mode_file [root] -> すでに在る mode.yml のパスを stdout。
@@ -86,7 +86,7 @@ harness_mode_file() {
   return 1
 }
 
-# harness_mode_write_file [root] -> /mode が書き込むべきパスを stdout (常に rc 0)。
+# harness_mode_write_file [root] -> /config が書き込むべきパスを stdout (常に rc 0)。
 # **すでに在る側に書く。** 両方に無いときだけプロジェクト側に作る。
 # (ホーム側に置いた人のプロジェクトへ mode.yml を新設すると、ホーム側を黙って覆い隠す)
 harness_mode_write_file() {
