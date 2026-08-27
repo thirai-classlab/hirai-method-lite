@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 台帳 / 設計 draft / 事故記録の パス解決を 1 箇所に集める共通ライブラリ。source して使う。
+# 台帳 / 設計 draft / 事故記録 / 進め方 / ルールの パス解決を 1 箇所に集める共通ライブラリ。source して使う。
 #
 # 共通の解決順: env 上書き > 既存パス (docs 側 → .claude 側) > docs/ の有無で決める
 #   台帳     : HARNESS_TASKS_FILE     > docs/tasks/list.md            > .claude/tasks/list.md
@@ -7,6 +7,11 @@
 #   事故記録 : HARNESS_INCIDENTS_FILE > docs/rules-reference/…        > .claude/rules-reference/…
 # 台帳が 1 つも無い場合は空文字 + exit 1 を返す (エラーにせず呼び出し側で分岐する)。
 # draft / 事故記録は未作成でも「これから作るべきパス」を返す (rc 0)。
+#
+# 進め方 / ルールは配置先が 2 通りある (プロジェクト側 = .claude/ と 全プロジェクト共通 = $HOME/.claude/)。
+# どちらに置いたかを決め打ちすると、片方に置いた利用者に対して黙って外れる。**在る側**を選ぶ。
+#   進め方   : HC_MODE (env) > <root>/.claude/mode.yml > $HOME/.claude/mode.yml > normal
+#   ルール   : HARNESS_RULES_DIR > <root>/.claude/rules > $HOME/.claude/rules > <root>/.claude/rules
 #
 # file-top に set -e / set -o pipefail を書かない。source 元の shell flags を汚染し、
 # パイプ先の早期終了で呼び出し元ごと落ちる事故を防ぐため (関数内で局所化する)。
@@ -61,6 +66,74 @@ harness_incidents_file() {
   else
     printf '%s' "$root/.claude/rules-reference/incidents.md"
   fi
+}
+
+# --- 進め方 (mode) ------------------------------------------------------------
+# 読む側 (SessionStart / 画面下部) と書く側 (/mode) が別々の順で解決すると、
+# 「セッション冒頭は確認あり・画面下部は自動」のように食い違う。3 箇所ともここを通す。
+
+# harness_mode_file [root] -> すでに在る mode.yml のパスを stdout。
+# プロジェクト側 → ホーム側の順で探し、どちらにも無ければ空 + rc 1。
+harness_mode_file() {
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" p
+  for p in "$root/.claude/mode.yml" "${HOME:+$HOME/.claude/mode.yml}"; do
+    [ -n "$p" ] || continue
+    if [ -f "$p" ]; then
+      printf '%s' "$p"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# harness_mode_write_file [root] -> /mode が書き込むべきパスを stdout (常に rc 0)。
+# **すでに在る側に書く。** 両方に無いときだけプロジェクト側に作る。
+# (ホーム側に置いた人のプロジェクトへ mode.yml を新設すると、ホーム側を黙って覆い隠す)
+harness_mode_write_file() {
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" p
+  if p="$(harness_mode_file "$root")"; then
+    printf '%s' "$p"
+    return 0
+  fi
+  printf '%s' "$root/.claude/mode.yml"
+}
+
+# harness_mode [root] -> いまの進め方 (normal / loop / 未知の値) を stdout。常に rc 0。
+# env HC_MODE > 在る側の mode.yml > normal。読めない・空・壊れている場合も normal。
+harness_mode() {
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" f m=""
+  if [ -n "${HC_MODE:-}" ]; then
+    printf '%s' "$HC_MODE"
+    return 0
+  fi
+  if f="$(harness_mode_file "$root")"; then
+    m="$(sed -n 's/^[[:space:]]*mode:[[:space:]]*\([a-z]*\).*/\1/p' "$f" 2>/dev/null | head -1)"
+  fi
+  [ -n "$m" ] || m="normal"
+  printf '%s' "$m"
+}
+
+# --- ルール (rules) -----------------------------------------------------------
+# /add-rule の予算計算と /rules-audit の棚卸しが見る置き場。プロジェクト側を決め打ちすると、
+# 全プロジェクト共通 (/init user) に置いた利用者に対して「既存ルール 0 件」と誤判定する。
+
+# harness_rules_dir [root] -> ルールの置き場を stdout (末尾スラッシュなし、常に rc 0)。
+# 両方に在る場合はプロジェクト側を返すが、それは二重ロード状態なので
+# scripts/scope-check.sh の警告に従って先に片方を消す (予算は 2 か所の合計で効いている)。
+harness_rules_dir() {
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" p
+  if [ -n "${HARNESS_RULES_DIR:-}" ]; then
+    printf '%s' "$HARNESS_RULES_DIR"
+    return 0
+  fi
+  for p in "$root/.claude/rules" "${HOME:+$HOME/.claude/rules}"; do
+    [ -n "$p" ] || continue
+    if [ -d "$p" ]; then
+      printf '%s' "$p"
+      return 0
+    fi
+  done
+  printf '%s' "$root/.claude/rules"
 }
 
 # harness_open_tasks <list.md> -> 未完了 (完了 / done / ✅ 以外) の行数を stdout

@@ -241,10 +241,12 @@ Claude Code 2.1.247 で実際に確かめたところ、この表示が出てい
 
 | 名前 | 用途 | 起動方法 | 必要なもの |
 |---|---|---|---|
-| `serena` | コードの検索とシンボル操作 | `uvx --from git+https://github.com/oraios/serena serena start-mcp-server --context ide-assistant` | [uv](https://docs.astral.sh/uv/)（`uvx`） |
-| `context7` | ライブラリ公式ドキュメントの取得 | `npx -y @upstash/context7-mcp@latest` | Node.js（`npx`） |
+| `serena` | コードの検索とシンボル操作 | `uvx --from git+https://github.com/oraios/serena@v1.7.0 serena start-mcp-server --context ide-assistant` | [uv](https://docs.astral.sh/uv/)（`uvx`） |
+| `context7` | ライブラリ公式ドキュメントの取得 | `npx -y @upstash/context7-mcp@4.0.3` | Node.js（`npx`） |
 
+- **バージョンを固定している。** 同梱の外部ツール接続は、インストールすると承認を挟まずにつながる。固定しないと、配布元の最新コミットがそのままあなたのパソコンで実行されることになるため、`serena` はタグ `v1.7.0`、`context7` は `4.0.3` に固定している。**新しい版に上げたいときは `.mcp.json` の 2 か所を書き換える**（`git+https://github.com/oraios/serena@<タグ>` と `@upstash/context7-mcp@<バージョン>`）。実在するタグ・バージョンかを [serena のタグ一覧](https://github.com/oraios/serena/tags) と `npm view @upstash/context7-mcp versions` で確かめてから書き換える（存在しない指定にすると起動しなくなる）。
 - **API キーは書かない。** `context7` は `CONTEXT7_API_KEY` 環境変数を参照するだけで、未設定でも動く（レート制限が緩くなる有料キーを持っている人だけが設定する）。
+- **すでに自分で `context7` を設定している場合、プラグイン側は登録されないことがある。** 起動コマンドが完全に一致するものは重複として 1 つにまとめられるため。動作に支障は無いが、`claude plugin details hirai-lite` の外部ツール接続の数が実際の状態と違って見えることがある。実際につながっている一覧は `claude mcp list` で確かめる。
 - **起動できなくてもセッションは壊れない。** `uvx` や `npx` が無い環境では該当サーバーが接続失敗として表示されるだけで、rules / commands / hooks / 画面下部の表示はそのまま動く。使わないなら `/plugin` の設定でそのサーバーを無効にする。
 
 ## 同梱しているエージェント
@@ -297,6 +299,7 @@ Claude Code 2.1.247 で実際に確かめたところ、この表示が出てい
 | `templates/` | `settings.json` / `mode.yml` / draft / task の雛形 |
 | `tests/smoke.sh` | 自己検証 10 case（予算監査を含む） |
 | `CHANGELOG.md` | 版ごとの変更点。v0.6.0 以前の既知の不具合もここに記録 |
+| `CONTRIBUTING.md` | 開発の進め方。**`main` は常に配布物**（タグではなく `main` の最新が利用者に届く） |
 
 自己テストは `claude --plugin-dir .` でこのリポジトリ自身をプラグインとして読ませて行う。
 

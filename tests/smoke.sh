@@ -78,7 +78,48 @@ case_1() {
   if [ "$rc" -ne 0 ] || [ "${n:-0}" -ne 1 ]; then
     fail 1 "壊れた控え + 壊れた JSON でも 1 行 + exit 0" "exit=${rc} 行数=${n}"; return
   fi
-  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 1 行 + exit 0"
+
+  # 進め方 (mode) の一致検査。セッション冒頭 (session-start.sh) と画面下部 (statusline.sh) が
+  # 別々に mode.yml を探すと、片方だけホーム側を見て「冒頭は確認あり・下部は自動」と食い違う
+  # (v1.0.0 の実害)。両者を scripts/tasks-path.sh の harness_mode 1 本に通したことを、
+  # 置き場 4 通り (ホームのみ / プロジェクトのみ / 両方 / どちらも無し) で確かめる。
+  local mw mhome mproj want got_s got_l where
+  mw="$(mktemp -d)"; mkdir -p "$mw/home/.claude" "$mw/proj/.claude" "$mw/plug"
+  cp -R "$ROOT/scripts" "$mw/plug/" 2>/dev/null
+  mkdir -p "$mw/plug/hooks" && cp "$HOOKS/session-start.sh" "$mw/plug/hooks/" 2>/dev/null
+  # <ホーム側> <プロジェクト側> <期待する進め方> ("-" は mode.yml を置かない)
+  while read -r mhome mproj want where; do
+    [ -n "$mhome" ] || continue
+    rm -f "$mw/home/.claude/mode.yml" "$mw/proj/.claude/mode.yml"
+    [ "$mhome" = "-" ] || printf 'mode: %s\n' "$mhome" > "$mw/home/.claude/mode.yml"
+    [ "$mproj" = "-" ] || printf 'mode: %s\n' "$mproj" > "$mw/proj/.claude/mode.yml"
+    got_s="$(HOME="$mw/home" CLAUDE_PLUGIN_ROOT="$mw/plug" CLAUDE_PROJECT_DIR="$mw/proj" \
+             bash "$mw/plug/hooks/session-start.sh" 2>/dev/null | sed -n '1s/.*進め方: \([^ ]*\).*/\1/p')"
+    got_l="$(printf '%s' '{"context_window":{"used_percentage":12}}' \
+             | HOME="$mw/home" NO_COLOR=1 TMPDIR="$mw/tmp" CLAUDE_PROJECT_DIR="$mw/proj" \
+               bash "$mw/plug/scripts/statusline.sh" 2>/dev/null | sed -n 's/.*mode: \([^ |]*\).*/\1/p')"
+    if [ "$got_s" != "$want" ] || [ "$got_l" != "$want" ]; then
+      rm -rf "$mw"
+      fail 1 "進め方は冒頭と画面下部で一致 (${where})" \
+        "期待=${want} 冒頭=${got_s:-無} 画面下部=${got_l:-無}"; return
+    fi
+  done <<'EOF'
+loop   -      自動     ホームのみ
+-      loop   自動     プロジェクトのみ
+normal loop   自動     両方あればプロジェクト側
+loop   normal 確認あり 両方あればプロジェクト側
+-      -      確認あり どちらも無し
+EOF
+  # /mode の書き込み先: ホーム側だけに在るならプロジェクト側に新設しない
+  rm -f "$mw/home/.claude/mode.yml" "$mw/proj/.claude/mode.yml"
+  printf 'mode: normal\n' > "$mw/home/.claude/mode.yml"
+  local wf
+  wf="$(HOME="$mw/home" bash -c '. "$1/scripts/tasks-path.sh"; harness_mode_write_file "$2"' _ "$mw/plug" "$mw/proj" 2>/dev/null)"
+  if [ "$wf" != "$mw/home/.claude/mode.yml" ]; then
+    rm -rf "$mw"; fail 1 "/mode はすでに在る側に書く" "書き込み先=${wf:-無} (期待: ホーム側)"; return
+  fi
+  rm -rf "$mw"
+  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 1 行 + exit 0 / 進め方は置き場 5 通りで冒頭と画面下部が一致し /mode は在る側に書く"
 }
 
 # ---------- case 2: 閾値未満では無出力 ----------
@@ -155,7 +196,33 @@ case_4() {
     fail 4 "消し方を出す" "rm の行が出ない: $out"; return
   fi
   if [ -n "$same" ]; then fail 4 "同一パスは重複扱いしない" "出力あり: $same"; return; fi
-  pass 4 "T0 常時ロード ${tokens} tokens <= 3,000 (${#files[@]} file / ${total} bytes) / 二重ロード ($(( tokens * 2 ))) は scope-check.sh が警告"
+
+  # /add-rule と /rules-audit が見るルールの置き場。プロジェクト側を決め打ちすると
+  # 全プロジェクト共通 (/init user) に置いた利用者に対し「既存ルール 0 件・予算 0 tokens」と
+  # 誤判定し、重複ルールを素通しさせる (v1.0.0 の実害)。在る側を返すことを 4 通りで確かめる。
+  local rw got want2 where2 h p
+  rw="$(mktemp -d)"; mkdir -p "$rw/home" "$rw/proj"
+  while read -r h p want2 where2; do
+    [ -n "$h" ] || continue
+    rm -rf "$rw/home/.claude" "$rw/proj/.claude"; mkdir -p "$rw/home/.claude" "$rw/proj/.claude"
+    [ "$h" = "-" ] || mkdir -p "$rw/home/.claude/rules"
+    [ "$p" = "-" ] || mkdir -p "$rw/proj/.claude/rules"
+    got="$(HOME="$rw/home" bash -c '. "$1/scripts/tasks-path.sh"; harness_rules_dir "$2"' _ "$ROOT" "$rw/proj")"
+    case "$want2" in
+      home) want2="$rw/home/.claude/rules" ;;
+      proj) want2="$rw/proj/.claude/rules" ;;
+    esac
+    if [ "$got" != "$want2" ]; then
+      rm -rf "$rw" "$td"; fail 4 "ルールの置き場は在る側 (${where2})" "期待=${want2} 実測=${got:-無}"; return
+    fi
+  done <<'EOF'
+yes -   home ホームのみ
+-   yes proj プロジェクトのみ
+yes yes proj 両方あればプロジェクト側
+-   -   proj どちらも無ければ新規作成先
+EOF
+  rm -rf "$rw"
+  pass 4 "T0 常時ロード ${tokens} tokens <= 3,000 (${#files[@]} file / ${total} bytes) / 二重ロード ($(( tokens * 2 ))) は scope-check.sh が警告 / ルールの置き場は 4 通りとも在る側を返す"
 }
 
 # ---------- case 5: 層違反検出 (T0 は許可リストのファイルだけ / 本数 <= T0_MAX) ----------
@@ -437,6 +504,29 @@ for name, cfg in d.items():
 print(" ".join(bad))
 ' "$ROOT/.mcp.json" 2>&1)"
   if [ -n "$bad" ]; then fail 10 "MCP の鍵は環境変数参照のみ" "$bad"; return; fi
+
+  # (a-2) 同梱 MCP は版を固定する。プラグイン同梱の MCP は承認を挟まずつながるため、
+  # @latest や ref なしの git URL のままだと配布元の任意のコミットが利用者の環境で実行される。
+  bad="$(python3 -c '
+import json, re, sys
+d = json.load(open(sys.argv[1])).get("mcpServers", {})
+bad = []
+for name, cfg in d.items():
+    for a in cfg.get("args", []):
+        if not isinstance(a, str):
+            continue
+        if a.startswith(("git+", "http://", "https://")):
+            # git+URL は @<tag/sha> が要る (URL 内の user@host は除く)
+            if not re.search(r"@[0-9A-Za-z._/-]+$", a.split("//", 1)[-1]):
+                bad.append(name + ":" + a + " に版指定なし")
+        elif a.startswith("@") or re.match(r"^[A-Za-z0-9_.-]+@", a):
+            # npm パッケージ指定 (@scope/pkg@ver または pkg@ver)
+            ver = a.rsplit("@", 1)[-1]
+            if ver in ("latest", "next", "canary", "") or not re.match(r"^[0-9]", ver):
+                bad.append(name + ":" + a + " が可変の版")
+print(" ".join(bad))
+' "$ROOT/.mcp.json" 2>&1)"
+  if [ -n "$bad" ]; then fail 10 "同梱 MCP は版を固定する" "$bad"; return; fi
 
   # (b) agents/*.md は name (= ファイル名) と description を frontmatter に持つ
   if [ ! -d "$ROOT/agents" ]; then fail 10 "agents/ が存在する" "無い"; return; fi

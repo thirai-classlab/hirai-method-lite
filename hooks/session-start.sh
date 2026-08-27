@@ -17,11 +17,19 @@ if [ -z "$root" ] || [ ! -d "$root" ]; then
   root="$PWD"
 fi
 
-# --- mode: env HC_MODE > 導入先の .claude/mode.yml > normal ---
+# --- 共通ライブラリ: 進め方 (mode) と台帳のパス解決をここに集約している ---
+if [ -f "$plugin_root/scripts/tasks-path.sh" ]; then
+  # shellcheck source=../scripts/tasks-path.sh
+  . "$plugin_root/scripts/tasks-path.sh" 2>/dev/null || true
+fi
+
+# --- mode: 解決順は harness_mode (env HC_MODE > プロジェクト > ホーム > normal) ---
+# 画面下部 (scripts/statusline.sh) と /mode も同じ関数を通す。ここで独自に解決しない。
 # 表示は日本語 (normal = 確認あり / loop = 自動)。未知の値はそのまま出す。
-mode="${HC_MODE:-}"
-if [ -z "$mode" ] && [ -f "$root/.claude/mode.yml" ]; then
-  mode="$(sed -n 's/^[[:space:]]*mode:[[:space:]]*\([a-z]*\).*/\1/p' "$root/.claude/mode.yml" 2>/dev/null | head -1)"
+if command -v harness_mode >/dev/null 2>&1; then
+  mode="$(harness_mode "$root")"
+else
+  mode="${HC_MODE:-normal}"
 fi
 [ -n "$mode" ] || mode="normal"
 case "$mode" in
@@ -32,9 +40,7 @@ esac
 
 # --- 未完了タスク数: 台帳 (解決順は scripts/tasks-path.sh) の table 行から数える ---
 list=""
-if [ -f "$plugin_root/scripts/tasks-path.sh" ]; then
-  # shellcheck source=../scripts/tasks-path.sh
-  . "$plugin_root/scripts/tasks-path.sh" 2>/dev/null || true
+if command -v harness_tasks_file >/dev/null 2>&1; then
   list="$(harness_tasks_file "$root" 2>/dev/null || true)"
 fi
 if [ -n "$list" ] && [ -f "$list" ]; then

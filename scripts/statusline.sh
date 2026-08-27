@@ -53,15 +53,17 @@ branch="$(jqf '.workspace.repo.branch')"
 [ -n "$branch" ] || branch="$(git -C "$root" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 [ -n "$branch" ] || branch="-"
 
-# mode: env HC_MODE > プロジェクトの mode.yml > ホームの mode.yml (全プロジェクト共通) > normal。
+# 共通ライブラリ (同じディレクトリ) を先に読む。進め方と台帳のパス解決はここに集約している。
+# tasks-path.sh と statusline.sh はどちらもプラグイン所有で、/init と /update が対で入れ替える。
+[ -f "$here/tasks-path.sh" ] && . "$here/tasks-path.sh" 2>/dev/null || true
+
+# mode: 解決順は harness_mode (env HC_MODE > プロジェクトの mode.yml > ホームの mode.yml > normal)。
+# SessionStart (hooks/session-start.sh) と /mode も同じ関数を通す。ここで独自に解決しない。
 # 表示は日本語に置き換える (未知の値はそのまま出す)。
-mode="${HC_MODE:-}"
-if [ -z "$mode" ]; then
-  for mf in "$root/.claude/mode.yml" "${HOME:-}/.claude/mode.yml"; do
-    [ -f "$mf" ] || continue
-    mode="$(sed -n 's/^[[:space:]]*mode:[[:space:]]*\([a-z]*\).*/\1/p' "$mf" 2>/dev/null | head -1)"
-    [ -n "$mode" ] && break
-  done
+if command -v harness_mode >/dev/null 2>&1; then
+  mode="$(harness_mode "$root")"
+else
+  mode="${HC_MODE:-normal}"
 fi
 [ -n "$mode" ] || mode="normal"
 case "$mode" in
@@ -70,10 +72,9 @@ case "$mode" in
   *)      mode_label="$mode" ;;
 esac
 
-# 未完了タスク: 台帳の解決順は scripts/tasks-path.sh (同じディレクトリ、台帳なしは "—")
+# 未完了タスク: 台帳の解決順は scripts/tasks-path.sh (冒頭で source 済み、台帳なしは "—")
 todo="—"
-if [ -f "$here/tasks-path.sh" ]; then
-  . "$here/tasks-path.sh" 2>/dev/null || true
+if command -v harness_tasks_file >/dev/null 2>&1; then
   list="$(harness_tasks_file "$root" 2>/dev/null || true)"
   if [ -n "$list" ] && [ -f "$list" ]; then todo="$(harness_open_tasks "$list")"; fi
 fi
