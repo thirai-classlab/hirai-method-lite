@@ -25,7 +25,7 @@ fi
 
 # --- mode: 解決順は harness_mode (env HC_MODE > プロジェクト > ホーム > normal) ---
 # 画面下部 (scripts/statusline.sh) と /config も同じ関数を通す。ここで独自に解決しない。
-# 表示は日本語 (normal = 確認あり / loop = 自動)。未知の値はそのまま出す。
+# 表示は「正式名（短い解説）」(normal（確認あり）/ loop（自動で進む）)。未知の値はそのまま出す。
 if command -v harness_mode >/dev/null 2>&1; then
   mode="$(harness_mode "$root")"
 else
@@ -33,8 +33,8 @@ else
 fi
 [ -n "$mode" ] || mode="normal"
 case "$mode" in
-  normal) mode_line="確認あり — 重要な分かれ道で確認します (自動で進めるなら /hirai-lite:config)" ;;
-  loop)   mode_line="自動 — 確認を求めず進みます (止めるときは「stop」)" ;;
+  normal) mode_line="normal（確認あり） — 重要な分かれ道で確認します (自動で進めるなら /hirai-lite:config)" ;;
+  loop)   mode_line="loop（自動で進む） — 確認を求めず進みます (止めるときは「stop」)" ;;
   *)      mode_line="$mode" ;;
 esac
 

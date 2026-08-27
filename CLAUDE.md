@@ -44,6 +44,6 @@ T0 は毎セッション常時ロード（合計 6,000 tokens で警告 / 10,000
 
 `.claude/rules/` の中身は プラグイン `hirai-lite` の `/init` が配置する。ルールの追加は `.claude/rules/_meta.md` のパイプライン（`/add-rule`）を通す。`@import` は使わない。
 
-## 進め方 (Mode)
+## mode（進め方）
 
-`.claude/mode.yml` の `mode:` で決まる。`normal` = 確認あり / `loop` = 自動。切替は `/hirai-lite:config`。詳細は `.claude/rules/core.md` の該当条。
+`.claude/mode.yml` の `mode:` で決まる。`normal`（確認あり）/ `loop`（自動で進む）。切替は `/hirai-lite:config`。詳細は `.claude/rules/core.md` の該当条。

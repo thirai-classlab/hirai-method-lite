@@ -4,6 +4,15 @@
 
 更新のしかたは [README の「更新する」](README.md#更新する自動では新しくなりません)。**プラグインは自動更新されない。**
 
+## v1.6.0
+
+- **ヒアリングを Claude Code 標準の選択 UI にした。** v1.5.0 までの `/hirai-lite:init` 手順 1 は、平文のメッセージで 3 問を投げて自由入力の返事を待っていた。これを **`AskUserQuestion` ツールを 1 回だけ呼び、3 問をまとめて提示する**形に変えた（`commands/init.md` 手順 1）。各問は `header` / `question` / `options`（`label` + `description`）を持ち、**既定にしたい選択肢を先頭に置いて `label` に `(推奨)` を付ける**。`description` には「選ぶと何が起きるか」を 1 行で書く。v1.4.0 で決めた**質問を省く条件はそのまま**で、省いた質問は `AskUserQuestion` に含めない。**全問が省かれるときは `AskUserQuestion` を呼ばない**（その 1 行だけ伝えて手順 2 へ進む）。ツールが使えないときの代替（平文で聞いて待つ、従来のやり方）も 1 行残している。
+- **利用者に見せる表記を「正式名 + 解説」に統一した。** v1.5.0 までは正式名が消えていた（`normal` → 「確認あり」、`ultracode` → 「濃いめに考える設定」）ため、設定ファイルの中身と表示が結び付かなかった。`<正式名>（<短い解説>）` の形に揃える: `mode（進め方）` / `normal（確認あり）` / `loop（自動で進む）` / `ultracode（深く考えて自動で手分けする。利用量が増える）` / `statusLine（画面下部の情報表示）`。**解説は残す** — 正式名だけにすると非エンジニアが読めなくなるため。適用先は `commands/init.md` `commands/config.md` `commands/update.md` `commands/state.md` `hooks/session-start.sh` `scripts/statusline.sh` `scripts/tasks-path.sh` `templates/mode.yml` `rules/core.md` `CLAUDE.md` `README.md` `docs/rules-reference/context-and-output.md`（`git grep` で全件洗った）。CHANGELOG の過去の版の記述は履歴なので変更していない。
+- **画面下部は 2 行構成と色分けを維持したまま、1 行目の `mode` だけ表記を変えた。** 実測した表示幅（全角 2 桁換算）は `mode: normal（確認あり）` で **99 桁**、`loop（自動で進む）` でも **99 桁**、未知の値（`experimental`）で 93 桁。2 行目の設定リンクは 37 桁。v1.5.0 は 89 桁（`normal`）/ 85 桁（`loop`）だったので 10〜14 桁伸びた。**解説を `確認` `自動` まで縮めても 95 桁 / 93 桁にしかならず、収まる端末の幅（80 桁には入らない／100 桁・120 桁には入る）は変わらない**ため、1 行目の他の要素を削らず、解説も縮めずそのままにした。色分け（v1.5.0）はロジックごと未変更。
+- smoke は 10 件のまま（上限）。**case 1 の進め方一致検査の期待値**を `確認あり` / `自動` から `normal（確認あり）` / `loop（自動で進む）` へ更新した（置き場 5 通りとも）。`statusline.sh` の表示を `確認あり` に戻すと `FAIL case 1 ... 期待=normal（確認あり） 冒頭=normal（確認あり） 画面下部=確認あり` になることを実測で確認している。`hooks/session-start.sh` は `進め方: <値> — <説明>` の `—` の前に半角空白を残し、smoke の切り出し（`sed -n '1s/.*進め方: \([^ ]*\).*/\1/p'`）が壊れないようにした。
+- **手順の中身は変えていない。** 何を配置するか・冪等性・`docs/` 解決順は v1.5.0 と同じ。`${TMPDIR}` の空プロジェクトで `commands/init.md` の手順 0/2〜8 を逐語実行し、v1.5.0（タグ `v1.5.0` の worktree）の結果と突き合わせた。**配置される 14 ファイルの一覧は完全一致**、内容の差分は表記を直した 4 ファイル（`mode.yml` / `rules/core.md` / `statusline.sh` / `tasks-path.sh`）のコメント・文言のみで、残る 10 ファイルは shasum まで一致した（回帰なし）。2 回目・3 回目の実行では `placed` が 0 件、14 ファイルの shasum も 1 バイト変わらない（冪等）。
+- 予算は据え置き（T0 警告 6,000 / 上限 10,000、hook 5 / command 12 / smoke case 10）。**T0 実測 3,663 → 3,668 tokens**（警告線 6,000 の下）。増分 5 tokens は `rules/core.md` の該当条を `**進め方が「自動」のとき (Loop)**` から `**`loop`（自動で進む）のとき**` に書き替えた分。`commands/init.md` は 198 → 188 行（上限 200）、`commands/config.md` は 81 → 79 行（上限 80）。hook 2 / command 12 / smoke 10 case は全 PASS / exit 0、`claude plugin validate` も PASS。
+
 ## v1.5.0
 
 - **⚠️ 破壊的変更: `/hirai-lite:mode` を廃止した。** 進め方の切替は `/hirai-lite:config` の「1. 進め方」に移した。**`/hirai-lite:mode normal` / `/hirai-lite:mode loop` は動かなくなる**（`commands/mode.md` を削除）。機能は 1 つも失っていない — 引数での直接指定（`/hirai-lite:config 進め方 自動`、`normal` / `loop` も可）・書き込み先を「すでに在る側」にする挙動・「自動」の間の振る舞いの説明・全プロジェクト共通に書いたときの 1 行追記まで、すべて `commands/config.md` が引き継いでいる。コマンド数は 12 個ちょうどのまま（上限）で、`config` の新設と `mode` の削除は同数の入れ替え。

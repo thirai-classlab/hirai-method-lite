@@ -119,9 +119,10 @@ case_1() {
   fi
 
   # 進め方 (mode) の一致検査。セッション冒頭 (session-start.sh) と画面下部 (statusline.sh) が
-  # 別々に mode.yml を探すと、片方だけホーム側を見て「冒頭は確認あり・下部は自動」と食い違う
+  # 別々に mode.yml を探すと、片方だけホーム側を見て「冒頭は normal・下部は loop」と食い違う
   # (v1.0.0 の実害)。両者を scripts/tasks-path.sh の harness_mode 1 本に通したことを、
   # 置き場 4 通り (ホームのみ / プロジェクトのみ / 両方 / どちらも無し) で確かめる。
+  # 期待値は「正式名（解説）」の表記 (v1.6.0) — 解説だけ / 正式名だけに戻すと FAIL する。
   local mw mhome mproj want got_s got_l where
   mw="$(mktemp -d)"; mkdir -p "$mw/home/.claude" "$mw/proj/.claude" "$mw/plug"
   cp -R "$ROOT/scripts" "$mw/plug/" 2>/dev/null
@@ -143,11 +144,11 @@ case_1() {
         "期待=${want} 冒頭=${got_s:-無} 画面下部=${got_l:-無}"; return
     fi
   done <<'EOF'
-loop   -      自動     ホームのみ
--      loop   自動     プロジェクトのみ
-normal loop   自動     両方あればプロジェクト側
-loop   normal 確認あり 両方あればプロジェクト側
--      -      確認あり どちらも無し
+loop   -      loop（自動で進む）   ホームのみ
+-      loop   loop（自動で進む）   プロジェクトのみ
+normal loop   loop（自動で進む）   両方あればプロジェクト側
+loop   normal normal（確認あり）   両方あればプロジェクト側
+-      -      normal（確認あり）   どちらも無し
 EOF
   # /config の書き込み先: ホーム側だけに在るならプロジェクト側に新設しない
   rm -f "$mw/home/.claude/mode.yml" "$mw/proj/.claude/mode.yml"

@@ -135,7 +135,7 @@ state の HEAD と一致しなければ、`git log --oneline <state の hash>..H
 
 ## loop 引数
 
-`/state resume loop` で呼ばれた場合、6 のサマリ出力後に進め方を「自動」へ書き換え（書き込み先は決め打ちせず `. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; harness_mode_write_file "$PWD"` が返す**すでに在る側**。`/hirai-lite:config` と同じ経路）、台帳の `進行中` → `未着手` の順に連続で着手する。着手できるのは対応 draft の `approved_at:` が埋まっているタスクのみ。空のタスクに到達したら、その id を報告して停止する。
+`/state resume loop` で呼ばれた場合、6 のサマリ出力後に mode（進め方）を `loop`（自動で進む）へ書き換え（書き込み先は決め打ちせず `. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; harness_mode_write_file "$PWD"` が返す**すでに在る側**。`/hirai-lite:config` と同じ経路）、台帳の `進行中` → `未着手` の順に連続で着手する。着手できるのは対応 draft の `approved_at:` が埋まっているタスクのみ。空のタスクに到達したら、その id を報告して停止する。
 
 loop 実行を止める条件は 3 つ。
 - user が停止を指示した。
