@@ -57,7 +57,9 @@ Claude Code で次の 2 行を順に実行します。
 | 自動処理 2 個（**Hooks**） | セッション開始時の 1 行表示と、容量が増えたときの警告 |
 | 外部ツール接続 2 個（**MCP servers**） | コードを検索する `serena` と、ライブラリの公式ドキュメントを取ってくる `context7` |
 
-あわせて、毎回のセッションで常にかかる容量の見積もりも出ます（ターミナルの `claude plugin details` では約 452 tokens と表示されました）。
+あわせて、毎回のセッションで常にかかる容量の見積もりも出ます（v1.8.0 をターミナルの `claude plugin details` で見ると `Always-on: ~520 tok` と表示されました。v1.7.0 は約 452 tokens で、増えた分は `grilling` の名前と説明が常時載るぶんです）。
+
+> **`Skills` の件数はコマンドとスキルの合計です。** v1.8.0 の `claude plugin details hirai-lite` は `Skills (13)` と出ます — コマンド 12 個 + スキル 1 個（`grilling`）で、**コマンドが 13 個に増えたわけではありません**。コマンドは `/hirai-lite:` から始まる 12 個のままです。
 
 - **自動処理（hooks）だけを対象にした承認画面は出ません。** 入れた時点で動きます。中身は `hooks/session-start.sh` と `hooks/context-budget.sh` の 2 本だけで、どちらも短いシェルスクリプトです。
 - **外部ツール接続（MCP）の 2 つも、承認なしで自動的につながります。** `claude mcp list` で確かめると `plugin:hirai-lite:serena: uvx … - ✔ Connected` のように、名前の頭に `plugin:hirai-lite:` が付いて出ます。`serena` は `uvx`（[uv](https://docs.astral.sh/uv/)）、`context7` は `npx`（Node.js）が必要です。無い場合は該当のものが「つながらない」と出るだけで、ほかの機能はそのまま動きます。
