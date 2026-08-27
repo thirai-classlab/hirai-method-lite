@@ -53,6 +53,8 @@ done
 bash .claude/statusline.sh </dev/null
 ```
 
+`.claude/statusline.sh` と `.claude/tasks-path.sh` の 2 本は**プラグイン所有**で、`/update` を実行すると配布版で置き換わる (中身を変えていた場合は `.bak` に退避される)。手を入れるなら別名でコピーして使う。
+
 `${CLAUDE_PLUGIN_ROOT}` は settings.json では展開されない (hook / MCP など プラグインコンポーネント側だけの機能) ため、statusline はスクリプトごと導入先へ複製し、手順 3 の `statusLine.command` から相対パスで呼ぶ。最後の 1 行が出力されれば配線は成立している。
 
 ## 5. 台帳・draft・事故記録を作る

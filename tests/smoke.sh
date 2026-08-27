@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ハーネス自己検証 smoke (9 case)。1 件でも FAIL なら exit 1。
+# ハーネス自己検証 smoke (10 case)。1 件でも FAIL なら exit 1。
 # 予算監査 (case 4-6) は不可逆操作ではないため hook にせず本 smoke で担保する (設計 §4.7)。
 #
 # 走らせる場所はプラグインのリポジトリ直下。
@@ -277,7 +277,55 @@ case_9() {
   pass 9 "マニフェスト 4 件が妥当な JSON / version=${pver} が VERSION と一致"
 }
 
-case_1; case_2; case_3; case_4; case_5; case_6; case_7; case_8; case_9
+# ---------- case 10: 同梱物 (MCP 定義 / agents) が壊れていない ----------
+# .mcp.json に実キーを書いてしまう事故と、frontmatter 欠けで読み込まれない agent を止める。
+case_10() {
+  local f base name desc bad=""
+  # (a) .mcp.json は妥当な JSON で、env の値が全て ${...} 参照 (実値の直書き禁止)
+  if [ ! -f "$ROOT/.mcp.json" ]; then fail 10 ".mcp.json が存在する" "無い"; return; fi
+  if ! python3 -m json.tool "$ROOT/.mcp.json" >/dev/null 2>&1; then
+    fail 10 ".mcp.json が妥当な JSON" "読めない"; return
+  fi
+  bad="$(python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1])).get("mcpServers", {})
+bad = []
+for name, cfg in d.items():
+    if not (cfg.get("command") or cfg.get("url")):
+        bad.append(name + ":起動方法なし")
+    for k, v in list(cfg.get("env", {}).items()) + list(cfg.get("headers", {}).items()):
+        if not (isinstance(v, str) and v.startswith("${")):
+            bad.append(name + "." + k + ":直書き")
+print(" ".join(bad))
+' "$ROOT/.mcp.json" 2>&1)"
+  if [ -n "$bad" ]; then fail 10 "MCP の鍵は環境変数参照のみ" "$bad"; return; fi
+
+  # (b) agents/*.md は name (= ファイル名) と description を frontmatter に持つ
+  if [ ! -d "$ROOT/agents" ]; then fail 10 "agents/ が存在する" "無い"; return; fi
+  local n=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    n=$(( n + 1 )); base="$(basename "$f" .md)"
+    name="$(awk 'NR==1&&$0!="---"{exit} NR>1&&/^---[[:space:]]*$/{exit} sub(/^name:[[:space:]]*/,""){print;exit}' "$f")"
+    desc="$(awk 'NR==1&&$0!="---"{exit} NR>1&&/^---[[:space:]]*$/{exit} /^description:[[:space:]]*./{print "ok";exit}' "$f")"
+    [ "$name" = "$base" ] || bad="$bad ${base}:name=${name:-無し}"
+    [ "$desc" = "ok" ] || bad="$bad ${base}:description無し"
+  done < <(find "$ROOT/agents" -maxdepth 1 -name '*.md' 2>/dev/null | sort)
+  if [ "$n" -eq 0 ]; then fail 10 "agents/*.md が 1 件以上" "0 件"; return; fi
+  if [ -n "$bad" ]; then fail 10 "agent の frontmatter" "不備:$bad"; return; fi
+
+  # (c) plugin.json が列挙する agent ファイルが実在する
+  bad="$(python3 -c '
+import json, os, sys
+root = sys.argv[1]
+paths = json.load(open(os.path.join(root, ".claude-plugin/plugin.json"))).get("agents", [])
+print(" ".join(p for p in paths if not os.path.isfile(os.path.join(root, p))))
+' "$ROOT" 2>&1)"
+  if [ -n "$bad" ]; then fail 10 "plugin.json の agent パスが実在" "不在:$bad"; return; fi
+  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter とパスが妥当"
+}
+
+case_1; case_2; case_3; case_4; case_5; case_6; case_7; case_8; case_9; case_10
 
 echo "---"
 if [ "$FAILED" -ne 0 ]; then echo "RESULT: FAIL"; exit 1; fi

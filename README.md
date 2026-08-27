@@ -15,7 +15,7 @@ Claude Code 用の軽量ハーネス。**常時ロードされるコンテキス
    /plugin install hirai-lite@hirai-lite
    ```
 
-   commands / hooks はこの時点で有効になる。**rules はまだ配られていない** — プラグインには rules というコンポーネントが無いため。
+   commands / hooks / agents / MCP サーバー定義はこの時点で有効になる。**rules はまだ配られていない** — プラグインには rules というコンポーネントが無いため。
 
 2. **rules を配置する** — 対象リポジトリを開いて `/hirai-lite:init` を実行する。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ、`scripts/statusline.sh` と `scripts/tasks-path.sh` を `.claude/` へ配置し、台帳・draft dir・事故記録・`.claude/rules-archive/` を作る。既存ファイルは上書きしない。
 
@@ -25,7 +25,7 @@ Claude Code 用の軽量ハーネス。**常時ロードされるコンテキス
 
 4. **ロード検証** — **`/init` の次に開くセッション**で行う（rules は起動時に読まれるため、`/init` を実行したセッション内では確認できない。`/init` の終了条件にも含めていない）。新しいセッションを開き、T0 の 3 ファイルが載っていること、T1 が `paths:` 該当ファイルを開くまで載らないことを確認する。想定と違えば frontmatter を直す。
 
-更新は `/update`（`/plugin update` → `/hirai-lite:init` で rules を再配置）。
+更新は `/update`（`/plugin update` → `/hirai-lite:init` で rules を再配置 → プラグイン所有の `.claude/statusline.sh` と `.claude/tasks-path.sh` を配布版に入れ替え）。
 
 ## mode（進め方）とは
 
@@ -48,7 +48,33 @@ Claude Code 用の軽量ハーネス。**常時ロードされるコンテキス
 
 `/hirai-lite:init` は `scripts/statusline.sh` と `scripts/tasks-path.sh` を導入先の `.claude/` へ複製し、`templates/settings.json` の `statusLine.command`（`bash "${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh"`）から呼ぶ。表示は 1 行で `<model> | ctx <N>% ・5h <N>% ・7d <N>% | mode: <進め方> | <branch> | やること <N>`。進め方は値そのものを日本語で出す（`normal` → `確認あり` / `loop` → `自動`、未知の値はそのまま）。実例: `Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: 確認あり | feat/rate-limit | やること 4`。
 
+`.claude/statusline.sh` と `.claude/tasks-path.sh` の 2 本は**プラグイン所有**であり、`/update` で配布版に置き換わる（中身を変えていた場合は `.bak` に退避してから置き換える）。`.claude/rules/` `settings.json` `mode.yml` `CLAUDE.md` 台帳は利用者所有で、更新では触らない。
+
 プラグイン側のパスを直接指さないのは、**`${CLAUDE_PLUGIN_ROOT}` が settings.json では展開されないため**（[公式仕様](https://code.claude.com/docs/en/plugins-reference.md)の「Where `${CLAUDE_PLUGIN_ROOT}` is Available」に statusLine と project settings は含まれない）。手で配線する場合は `.claude/settings.json` に上記 `statusLine` ブロックを足すか、絶対パスを書く。不要なら `statusLine` キーを消す。
+
+## 同梱している MCP サーバー（外部ツール接続）
+
+プラグインの `.mcp.json` で 2 つ配る。インストールした時点で有効になり、`/init` の配置対象ではない。
+
+| 名前 | 用途 | 起動方法 | 必要なもの |
+|---|---|---|---|
+| `serena` | コードの検索とシンボル操作 | `uvx --from git+https://github.com/oraios/serena serena start-mcp-server --context ide-assistant` | [uv](https://docs.astral.sh/uv/)（`uvx`） |
+| `context7` | ライブラリ公式ドキュメントの取得 | `npx -y @upstash/context7-mcp@latest` | Node.js（`npx`） |
+
+- **API キーは書かない。** `context7` は `CONTEXT7_API_KEY` 環境変数を参照するだけで、未設定でも動く（レート制限が緩くなる有料キーを持っている人だけが設定する）。
+- **起動できなくてもセッションは壊れない。** `uvx` や `npx` が無い環境では該当サーバーが接続失敗として表示されるだけで、rules / commands / hooks / 画面下部の表示はそのまま動く。使わないなら `/plugin` の設定でそのサーバーを無効にする。
+
+## 同梱しているエージェント
+
+`agents/` に 3 つ。`rules/code.md` のレビュー規範（「観点の異なる reviewer を 2 本以上並列起動する」）が名指しする相手を実体として配るためのもの。
+
+| 名前 | 役割 |
+|---|---|
+| `tdd-guide` | テストを先に書く進め方の案内 |
+| `code-reviewer` | コード品質・保守性のレビュー |
+| `security-reviewer` | 脆弱性・秘密情報混入のレビュー |
+
+3 つとも [everything-claude-code](https://github.com/affaan-m/everything-claude-code)（MIT License, Copyright (c) 2026 Affaan Mustafa）から取り込み、出典と著作権表示を各ファイル冒頭と [`NOTICE.md`](NOTICE.md) に保持している。`rules/code.md` は例として `database-reviewer` にも触れるが、これは同梱していない（必要なら利用者が `.claude/agents/` に置く）。
 
 ## このリポジトリの構成
 
@@ -56,12 +82,14 @@ Claude Code 用の軽量ハーネス。**常時ロードされるコンテキス
 |---|---|
 | `.claude-plugin/plugin.json` | プラグインのマニフェスト（`VERSION` と同じ版を書く） |
 | `.claude-plugin/marketplace.json` | 自分自身を 1 エントリとして指すマーケットプレイス定義 |
+| `.mcp.json` | 同梱する MCP サーバー 2 つの定義（キーは環境変数参照のみ） |
+| `agents/` | サブエージェント 3 個（MIT、出典は `NOTICE.md`） |
 | `commands/` | スラッシュコマンド 12 個 |
 | `hooks/` | `hooks.json` + SessionStart / UserPromptSubmit の 2 本 |
 | `rules/` | **プラグインは読まない。** `/init` が導入先の `.claude/rules/` へ配る素材 |
 | `scripts/` | hook / statusline が source する共通ライブラリ |
 | `templates/` | `settings.json` / `mode.yml` / draft / task の雛形 |
-| `tests/smoke.sh` | 自己検証 9 case（予算監査を含む） |
+| `tests/smoke.sh` | 自己検証 10 case（予算監査を含む） |
 
 自己テストは `claude --plugin-dir .` でこのリポジトリ自身をプラグインとして読ませて行う。
 
