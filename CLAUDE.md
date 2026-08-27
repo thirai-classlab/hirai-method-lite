@@ -42,7 +42,7 @@ T0 は毎セッション常時ロード（合計 3,000 tokens 上限）。T1 は
 | T2 | `docs/rules-reference/**` | 明示 Read のみ | 背景・事故記録・詳細手順 |
 | T3 | `.claude/rules-archive/**` | ロードしない | 失効ルールの履歴 |
 
-ルールの追加は `.claude/rules/_meta.md` のパイプラインを通す。`@import` は使わない。
+`.claude/rules/` の中身は プラグイン `hirai-lite` の `/init` が配置する。ルールの追加は `.claude/rules/_meta.md` のパイプライン（`/add-rule`）を通す。`@import` は使わない。
 
 ## Mode
 

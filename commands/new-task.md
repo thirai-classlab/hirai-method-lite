@@ -11,7 +11,7 @@ description: 承認済 draft から docs/tasks/task-<id>-<slug>.md を作り、d
 台帳パスは `$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > `.claude/tasks/list.md` の順に解決する。
 
 ```bash
-LIST="$(bash -c '. .claude/scripts/tasks-path.sh; harness_tasks_file "$PWD"')"
+LIST="$(bash -c '. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; harness_tasks_file "$PWD"')"
 ```
 
 空 (exit 1) なら台帳が無い。**その場で作ってから続行する** — `docs/` があるリポジトリは `docs/tasks/list.md`、無ければ `.claude/tasks/list.md` に置く。

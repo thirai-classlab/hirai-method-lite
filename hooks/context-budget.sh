@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# UserPromptSubmit hook: context 使用率が閾値を超えた最初の 1 回だけ /save-state を促す。
+# UserPromptSubmit hook: context 使用率が閾値を超えた最初の 1 回だけ /state save を促す。
+# 外部ファイルを source しないためパス解決は不要 (発火フラグ置き場だけが外部依存)。
 # 閾値: HC_CONTEXT_THRESHOLD (default 0.80) / 使用率直接指定: HC_CONTEXT_RATIO
 # 発火フラグはリポジトリ外 (${TMPDIR:-/tmp}) に置く。内部エラーでも常に exit 0 (fail-open)。
 set -uo pipefail
@@ -32,5 +33,5 @@ flag="$flag_dir/ctx-$(printf '%s' "$session" | tr -c 'A-Za-z0-9_.-' '_').fired"
 
 pct="$(awk -v r="$ratio" 'BEGIN {printf "%d", (r+0)*100}')"
 echo "[harness] context 使用率が ${pct}% (閾値 $(awk -v t="$THRESHOLD" 'BEGIN{printf "%d", (t+0)*100}')%) を超えました。"
-echo "[harness] このターン内で /save-state を実行し、新セッションで /resume-state するか継続するかを提案してください。"
+echo "[harness] このターン内で /state save を実行し、新セッションで /state resume するか継続するかを提案してください。"
 exit 0

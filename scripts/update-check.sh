@@ -5,7 +5,8 @@
 #   取得先   : HARNESS_UPDATE_URL (既定は公開リポジトリの VERSION)
 #   無効化   : HARNESS_UPDATE_CHECK=off で通信も表示もしない
 #   間隔     : HARNESS_UPDATE_INTERVAL 秒 (既定 86400)
-#   キャッシュ: ${TMPDIR:-/tmp}/claude-harness-lite/update-<key>/ (リポジトリ外・プロジェクト単位)
+#   キャッシュ: ${TMPDIR:-/tmp}/claude-harness-lite/update-<key>/ (リポジトリ外・インストール単位)
+#   引数の root にはプラグインのルート ($CLAUDE_PLUGIN_ROOT) を渡す。
 #   オフライン / 404 / curl 不在 / 壊れた応答は全て沈黙し rc 0 を返す。
 #
 # file-top に set -e / set -o pipefail を書かない。source 元の shell flags を汚染し、
@@ -22,7 +23,7 @@ harness_update_enabled() {
 # root ごとに key を分けるため、同じマシンの複数プロジェクトが干渉しない。
 harness_update_cache_dir() (
   set -uo pipefail
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" key
+  local root="${1:-${CLAUDE_PLUGIN_ROOT:-$PWD}}" key
   key="$(printf '%s' "$root" | cksum 2>/dev/null | awk '{print $1}')"
   [ -n "$key" ] || key="default"
   printf '%s' "${TMPDIR:-/tmp}/claude-harness-lite/update-${key}"
@@ -53,10 +54,12 @@ harness_semver_gt() (
   }'
 )
 
-# harness_local_version [root] -> リポジトリ直下 VERSION の semver、無ければ空 + rc 1
+# harness_local_version [dir] -> dir 直下 VERSION の semver、無ければ空 + rc 1
+# dir にはプラグインのルート ($CLAUDE_PLUGIN_ROOT) を渡す。VERSION はプラグイン側の資産で、
+# 導入先リポジトリには置かれない。
 harness_local_version() (
   set -uo pipefail
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" v
+  local root="${1:-${CLAUDE_PLUGIN_ROOT:-$PWD}}" v
   [ -f "$root/VERSION" ] || return 1
   v="$(harness_semver_norm "$(head -1 "$root/VERSION" 2>/dev/null)")"
   [ -n "$v" ] || return 1
@@ -80,7 +83,7 @@ harness_update_fetch_async() (
   set -uo pipefail
   harness_update_enabled || return 0
   command -v curl >/dev/null 2>&1 || return 0
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" dir url now last interval
+  local root="${1:-${CLAUDE_PLUGIN_ROOT:-$PWD}}" dir url now last interval
   interval="${HARNESS_UPDATE_INTERVAL:-86400}"
   dir="$(harness_update_cache_dir "$root")"
   mkdir -p "$dir" 2>/dev/null || return 0
@@ -108,7 +111,7 @@ harness_update_fetch_async() (
 harness_update_notice() (
   set -uo pipefail
   harness_update_enabled || return 0
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" cur new
+  local root="${1:-${CLAUDE_PLUGIN_ROOT:-$PWD}}" cur new
   cur="$(harness_local_version "$root")" || return 0
   new="$(harness_cached_version "$root")" || return 0
   harness_semver_gt "$new" "$cur" || return 0

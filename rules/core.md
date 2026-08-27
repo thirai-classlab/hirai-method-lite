@@ -7,7 +7,7 @@
 - **承認が要る操作**: メインエージェントは、main への push / PR merge / 本番 deploy / DB migration / secrets 操作の前にユーザー承認を取る ／ 例: `git push origin main` は提案して止まる（`settings.json` の `ask` でも止まる） ／ 失効: なし
 - **Loop モード**: メインエージェントは、`mode.yml` が `loop` のとき確認を求めず実装を継続する。停止は 3 つ — ユーザーの停止指示 / タスク完了 / 致命的エラー。設計の新規追加・仕様変更・不可逆操作は loop でも承認を取る ／ 例: 実装中の方式選択は自律、新しい設計 draft の起案は承認 ／ 失効: なし
 - **設計の起点**: メインエージェントは、新機能を `docs/draft/` に設計として起こし、承認後に `docs/tasks/list.md` へ登録する ／ 例: `docs/draft/rate-limit.md` を承認 → `list.md` に 1 行追加 ／ 失効: なし
-- **事実で答える**: メインエージェントとサブエージェントは、ファイル・コマンド結果・外部仕様を述べるとき根拠を併記する — ファイルは `path:line`、コマンドは実行したコマンドと exit code、外部仕様は URL。根拠を示せないときは「未検証」と明記する ／ 例: 「6 case PASS（`bash .claude/tests/smoke.sh`、exit 0）」 ／ 失効: なし
+- **事実で答える**: メインエージェントとサブエージェントは、ファイル・コマンド結果・外部仕様を述べるとき根拠を併記する — ファイルは `path:line`、コマンドは実行したコマンドと exit code、外部仕様は URL。根拠を示せないときは「未検証」と明記する ／ 例: 「9 case PASS（`bash tests/smoke.sh`、exit 0）」 ／ 失効: なし
 - **ルール追加の窓口**: メインエージェントは、新しい規範を思いついたら `_meta.md` のパイプラインを通す ／ 例: `/add-rule "完了 commit に台帳を含める"` ／ 失効: なし
 - **作業の起点は台帳**: メインエージェントは、作業前に台帳 (`$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > `.claude/tasks/list.md` の順に解決、無ければ `/new-task` が作る) を Read し、着手する task の status を 進行中 に更新する ／ 例: `/start-task 3` ／ 失効: 台帳を廃止したとき
 - **重い作業は委譲する**: メインエージェントは、複数ファイルにまたがる調査・実装・検証を subagent へ `run_in_background: true` で委譲し、待機中も別の作業を進める ／ 例: 実装を 4 分割して subagent に配る ／ 失効: なし

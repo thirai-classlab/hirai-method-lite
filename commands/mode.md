@@ -46,7 +46,7 @@ mode: loop
   - 承認済 draft の採用案から外れる仕様変更
   - 元へ戻せない操作 (`main` への push / PR merge / 本番 deploy / DB migration / secrets 操作)
 - サブエージェントを起動したら、完了通知を待つ間に別の独立タスクか台帳更新を進める。待つだけで止まらない。
-- context 使用率 80% に達したら `/save-state` を実行し、新セッションでの再開を提案する。
+- context 使用率 80% に達したら `/state save` を実行し、新セッションでの再開を提案する。
 
 ## ファイルが無い場合
 

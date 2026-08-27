@@ -14,7 +14,7 @@ description: commit 前に build / test / lint を通す。3 つ全部が exit 0
 | `Cargo.toml` がある | `cargo build` | `cargo test` | `cargo clippy -- -D warnings` |
 | `go.mod` がある | `go build ./...` | `go test ./...` | `go vet ./...` |
 | `pyproject.toml` がある | (なし) | `pytest` | `ruff check .` |
-| どれも無い | (なし) | `bash .claude/tests/smoke.sh` | (なし) |
+| どれも無い | (なし) | `bash "$CLAUDE_PLUGIN_ROOT/tests/smoke.sh"` | (なし) |
 
 `package.json` の場合は `scripts` に該当キーが存在するかを確認し、無いコマンドは飛ばして「build: script 不在のため未実行」と報告する。推測でコマンドを作らない。
 

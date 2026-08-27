@@ -43,7 +43,7 @@ if [ -z "$mode" ] && [ -f "$root/.claude/mode.yml" ]; then
 fi
 [ -n "$mode" ] || mode="normal"
 
-# 未完了タスク: 台帳の解決順は .claude/scripts/tasks-path.sh (台帳なしは "—")
+# 未完了タスク: 台帳の解決順は scripts/tasks-path.sh (同じディレクトリ、台帳なしは "—")
 todo="—"
 if [ -f "$here/tasks-path.sh" ]; then
   . "$here/tasks-path.sh" 2>/dev/null || true

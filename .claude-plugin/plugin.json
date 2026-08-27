@@ -1,0 +1,32 @@
+{
+  "name": "hirai-lite",
+  "description": "常時ロードされるコンテキストに予算を置き、ルールの追加を 6 工程パイプラインで通す rules 3 層構造の軽量ハーネス。",
+  "version": "0.1.0",
+  "author": {
+    "name": "thirai-classlab"
+  },
+  "repository": "https://github.com/thirai-classlab/hirai-method-lite",
+  "license": "MIT",
+  "keywords": [
+    "harness",
+    "rules",
+    "context-budget",
+    "task-management",
+    "workflow"
+  ],
+  "commands": [
+    "./commands/add-rule.md",
+    "./commands/commit.md",
+    "./commands/finish-task.md",
+    "./commands/init.md",
+    "./commands/mode.md",
+    "./commands/new-draft.md",
+    "./commands/new-task.md",
+    "./commands/rules-audit.md",
+    "./commands/start-task.md",
+    "./commands/state.md",
+    "./commands/update.md",
+    "./commands/verify.md"
+  ],
+  "hooks": "./hooks/hooks.json"
+}

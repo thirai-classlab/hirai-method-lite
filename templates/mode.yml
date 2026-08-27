@@ -7,6 +7,7 @@
 #            loop でも常にユーザー承認を取る。
 #
 # 一時切替: 環境変数 HC_MODE=loop (この YAML より優先)
-# 参照元  : .claude/hooks/session-start.sh
+# 配置先  : 導入先リポジトリの .claude/mode.yml (/init が配置する)
+# 参照元  : プラグインの hooks/session-start.sh と scripts/statusline.sh
 
 mode: normal

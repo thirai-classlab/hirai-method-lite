@@ -4,18 +4,41 @@ Claude Code 用の軽量ハーネス。**常時ロードされるコンテキス
 
 前身の `hirai-method` は 1,629 file / shell 54,373 行まで肥大し、guard 36 個中 10 個が「ハーネス自身の開発を妨げるため」という理由で無効化されていた。原因は個々のルールではなく、**ルールを追加するときに置き場所・分量・表現・重複を検討する工程が無かった**ことにある。本リポジトリはその 1 点を構造で解く。
 
-## 導入 3 ステップ
+## 導入 4 ステップ
 
-1. **配置** — `.claude/` と `CLAUDE.md` を対象リポジトリのルートにコピーする。
+配布は **Claude Code プラグイン** 1 経路のみ。プラグイン名は `hirai-lite`。
 
-   ```bash
-   cp -r /path/to/hirai-method-lite/.claude /path/to/your-repo/
-   cp /path/to/hirai-method-lite/CLAUDE.md /path/to/your-repo/
+1. **マーケットプレイスを追加してインストールする**。
+
+   ```
+   /plugin marketplace add thirai-classlab/hirai-method-lite
+   /plugin install hirai-lite@hirai-lite
    ```
 
-2. **CLAUDE.md を埋める** — `<...>` プレースホルダをプロジェクトの実値（概要 / Tech Stack / Commands）に置換する。行動規範は書かない。それは `.claude/rules/core.md` の担当。
+   commands / hooks はこの時点で有効になる。**rules はまだ配られていない** — プラグインには rules というコンポーネントが無いため。
 
-3. **ロード検証** — 新しいセッションを開き、T0 の 3 ファイルが載っていること、T1 が `paths:` 該当ファイルを開くまで載らないことを確認する。想定と違えば frontmatter を直す。
+2. **rules を配置する** — 対象リポジトリを開いて `/hirai-lite:init` を実行する。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ配置し、台帳と `.claude/rules-archive/` を作る。既存ファイルは上書きしない。
+
+3. **CLAUDE.md を埋める** — このリポジトリの `CLAUDE.md` を雛形として対象リポジトリのルートに置き、`<...>` プレースホルダを実値（概要 / Tech Stack / Commands）に置換する。行動規範は書かない。それは `.claude/rules/core.md` の担当。
+
+4. **ロード検証** — 新しいセッションを開き、T0 の 3 ファイルが載っていること、T1 が `paths:` 該当ファイルを開くまで載らないことを確認する。想定と違えば frontmatter を直す。
+
+更新は `/update`（`/plugin update` → `/hirai-lite:init` で rules を再配置）。
+
+## このリポジトリの構成
+
+| パス | 中身 |
+|---|---|
+| `.claude-plugin/plugin.json` | プラグインのマニフェスト（`VERSION` と同じ版を書く） |
+| `.claude-plugin/marketplace.json` | 自分自身を 1 エントリとして指すマーケットプレイス定義 |
+| `commands/` | スラッシュコマンド 12 個 |
+| `hooks/` | `hooks.json` + SessionStart / UserPromptSubmit の 2 本 |
+| `rules/` | **プラグインは読まない。** `/init` が導入先の `.claude/rules/` へ配る素材 |
+| `scripts/` | hook / statusline が source する共通ライブラリ |
+| `templates/` | `settings.json` / `mode.yml` / draft / task の雛形 |
+| `tests/smoke.sh` | 自己検証 9 case（予算監査を含む） |
+
+自己テストは `claude --plugin-dir .` でこのリポジトリ自身をプラグインとして読ませて行う。
 
 ## rules 3 層 + 退避層
 
@@ -40,15 +63,15 @@ T2 を `.claude/rules/` の**外**に置くのは意図的。`rules/` の中に�
 
 **3. 機械強制は不可逆操作のみ。** `settings.json` の `deny` / `ask` と hook で止めてよいのは「間違えたら戻せない」操作だけ。無害な操作を止める guard は速度を削り、やがて無効化されて規範と実挙動の乖離を生む。
 
-**4. メタルールが最初に適用される対象は、メタルール自身。** 「機械強制は不可逆操作のみ」に従えば、予算監査そのものを hook にはできない（予算超過は不可逆ではない）。よって予算チェックと層違反検出は `.claude/tests/smoke.sh` の case として実装し、commit 前に走らせる。結果 hook は 2 本に収まる。
+**4. メタルールが最初に適用される対象は、メタルール自身。** 「機械強制は不可逆操作のみ」に従えば、予算監査そのものを hook にはできない（予算超過は不可逆ではない）。よって予算チェックと層違反検出は `tests/smoke.sh` の case として実装し、commit 前に走らせる。結果 hook は 2 本に収まる。
 
 **5. ゼロから始めて、必要になったものだけ足す。** 前身の 1,629 file から選び出すのではない。実プロジェクトで使い、不足したものだけを `/add-rule` のパイプライン経由で戻す。何が本当に必要かは、削ってみないと分からない。
 
 ## ルールを追加するとき
 
-`.claude/rules/_meta.md` に 8 条とパイプラインがある。要点だけ:
+`rules/_meta.md`（導入先では `.claude/rules/_meta.md`）に 8 条とパイプラインがある。要点だけ:
 
 - 追加はユーザー承認必須。削除は承認不要（削除の摩擦を追加より低くする）
 - 1 ルール 1 事象・3 行以内。書式は `- **<名前>**: <肯定形 1 行> ／ 例: <1 つ> ／ 失効: <条件>`
 - 禁止語彙: `適切に` / `必要に応じて` / `可能な限り` / `十分に` / `慎重に`
-- 四半期ごとに点検し、発火 0 のルールは `.claude/rules-archive/` へ退避する
+- 四半期ごとに点検し、発火 0 のルールは `.claude/rules-archive/` へ退避する（`/rules-audit`）

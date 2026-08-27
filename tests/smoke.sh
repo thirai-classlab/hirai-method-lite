@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# ハーネス自己検証 smoke (8 case)。1 件でも FAIL なら exit 1。
+# ハーネス自己検証 smoke (9 case)。1 件でも FAIL なら exit 1。
 # 予算監査 (case 4-6) は不可逆操作ではないため hook にせず本 smoke で担保する (設計 §4.7)。
+#
+# 走らせる場所はプラグインのリポジトリ直下。
+#   ROOT = $CLAUDE_PLUGIN_ROOT > このスクリプトの 1 つ上 ($BASH_SOURCE 起点)
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$here/../.." && pwd)}"
-HOOKS="$ROOT/.claude/hooks"
+ROOT="${CLAUDE_PLUGIN_ROOT:-}"
+if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then ROOT="$(cd "$here/.." && pwd)"; fi
+HOOKS="$ROOT/hooks"
 FAILED=0
 
 # T0 (常時ロード = frontmatter に paths: を持たない rule) に居てよいファイルの許可リスト。
@@ -34,9 +38,9 @@ has_paths_key() {
 # ---------- case 1: session-start.sh は対象ファイル不在でも exit 0 ----------
 case_1() {
   local tmp out rc
-  tmp="$(mktemp -d)"; mkdir -p "$tmp/.claude/hooks"
-  cp "$HOOKS/session-start.sh" "$tmp/.claude/hooks/" 2>/dev/null
-  out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$tmp/.claude/hooks/session-start.sh" 2>&1)"; rc=$?
+  tmp="$(mktemp -d)"; mkdir -p "$tmp/hooks"
+  cp "$HOOKS/session-start.sh" "$tmp/hooks/" 2>/dev/null
+  out="$(CLAUDE_PLUGIN_ROOT="$tmp" CLAUDE_PROJECT_DIR="$tmp" bash "$tmp/hooks/session-start.sh" 2>&1)"; rc=$?
   local lines; lines="$(printf '%s\n' "$out" | grep -c . || true)"
   rm -rf "$tmp"
   if [ "$rc" -ne 0 ]; then fail 1 "session-start exit 0 (対象ファイル不在)" "exit=$rc"; return; fi
@@ -65,23 +69,24 @@ case_3() {
   first="$(TMPDIR="$td" HC_CONTEXT_RATIO=0.85 bash "$HOOKS/context-budget.sh" <<< '{"session_id":"smoke-over"}' 2>&1)"
   second="$(TMPDIR="$td" HC_CONTEXT_RATIO=0.85 bash "$HOOKS/context-budget.sh" <<< '{"session_id":"smoke-over"}' 2>&1)"
   rm -rf "$td"
-  if ! printf '%s' "$first" | grep -q 'save-state'; then fail 3 "閾値超過で 1 度だけ発火" "1 回目が無出力"; return; fi
+  if ! printf '%s' "$first" | grep -q '/state save'; then fail 3 "閾値超過で 1 度だけ発火" "1 回目が無出力"; return; fi
   if [ -n "$second" ]; then fail 3 "閾値超過で 1 度だけ発火" "2 回目も出力: $second"; return; fi
   pass 3 "context-budget.sh は 0.85 で 1 度発火し 2 度目は沈黙"
 }
 
 # ---------- case 4: T0 予算 (常時ロード合計 <= 3,000 tokens) ----------
+# 配布物としての T0 は rules/ 直下の frontmatter 無し + 導入先に置く CLAUDE.md 雛形。
 case_4() {
   local total=0 files=() f bytes tokens
   [ -f "$ROOT/CLAUDE.md" ] && files+=("$ROOT/CLAUDE.md")
-  if [ -d "$ROOT/.claude/rules" ]; then
+  if [ -d "$ROOT/rules" ]; then
     while IFS= read -r f; do
       [ -n "$f" ] || continue
-      [ "$(head -1 "$f" 2>/dev/null)" = "---" ] || files+=("$f")
-    done < <(find "$ROOT/.claude/rules" -maxdepth 1 -name '*.md' 2>/dev/null | sort)
+      has_paths_key "$f" || files+=("$f")
+    done < <(find "$ROOT/rules" -maxdepth 1 -name '*.md' 2>/dev/null | sort)
   fi
   if [ "${#files[@]}" -eq 0 ]; then
-    fail 4 "T0 予算 <= 3,000 tokens" "CLAUDE.md / .claude/rules/*.md が未作成のため測定不可"; return
+    fail 4 "T0 予算 <= 3,000 tokens" "CLAUDE.md / rules/*.md が未作成のため測定不可"; return
   fi
   for f in "${files[@]}"; do
     bytes="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
@@ -97,8 +102,8 @@ case_4() {
 # ---------- case 5: 層違反検出 (T0 は許可リストのファイルだけ / 本数 <= T0_MAX) ----------
 case_5() {
   local n=0 f base names="" unexpected="" missing="" want
-  if [ ! -d "$ROOT/.claude/rules" ]; then
-    fail 5 "T0 rule は許可リストのみ" ".claude/rules/ が未作成のため測定不可"; return
+  if [ ! -d "$ROOT/rules" ]; then
+    fail 5 "T0 rule は許可リストのみ" "rules/ が未作成のため測定不可"; return
   fi
   while IFS= read -r f; do
     [ -n "$f" ] || continue
@@ -106,8 +111,8 @@ case_5() {
     base="$(basename "$f")"
     n=$(( n + 1 )); names="$names $base"
     case " $T0_ALLOWLIST " in *" $base "*) ;; *) unexpected="$unexpected $base" ;; esac
-  done < <(find "$ROOT/.claude/rules" -maxdepth 1 -name '*.md' 2>/dev/null | sort)
-  if [ "$n" -eq 0 ]; then fail 5 "T0 rule は許可リストのみ" ".claude/rules/*.md が 0 件 (未作成)"; return; fi
+  done < <(find "$ROOT/rules" -maxdepth 1 -name '*.md' 2>/dev/null | sort)
+  if [ "$n" -eq 0 ]; then fail 5 "T0 rule は許可リストのみ" "rules/*.md が 0 件 (未作成)"; return; fi
   if [ -n "$unexpected" ]; then
     fail 5 "T0 rule は許可リスト (${T0_ALLOWLIST}) のみ" "想定外の T0 rule:${unexpected}"; return
   fi
@@ -122,10 +127,11 @@ case_5() {
 }
 
 # ---------- case 6: 数の予算 (hook<=5 / command<=12 / smoke case<=10) ----------
+# hook は hooks/*.sh だけを数える (hooks.json は宣言であって hook スクリプトではない)。
 case_6() {
   local hooks cmds cases
-  hooks="$(find "$ROOT/.claude/hooks" -maxdepth 1 -name '*.sh' 2>/dev/null | wc -l | tr -d ' ')"
-  cmds="$(find "$ROOT/.claude/commands" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
+  hooks="$(find "$ROOT/hooks" -maxdepth 1 -name '*.sh' 2>/dev/null | wc -l | tr -d ' ')"
+  cmds="$(find "$ROOT/commands" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
   cases="$(grep -c '^case_[0-9][0-9]*()' "$here/smoke.sh" 2>/dev/null | tr -d ' ')"
   local msg="hook=${hooks}/5 command=${cmds}/12 smoke case=${cases}/10"
   if [ "${hooks:-0}" -gt 5 ] || [ "${cmds:-0}" -gt 12 ] || [ "${cases:-0}" -gt 10 ]; then
@@ -134,15 +140,14 @@ case_6() {
   pass 6 "数の予算 ${msg}"
 }
 
-# 更新検知 case (7/8) 用の作業 dir を組む。
-#   $1 に root、$2 に TMPDIR を受け取り、hook / lib / VERSION / curl スタブを配置する。
-#   curl スタブは「通信が起きたら $root/curl-called が生える」ことで通信の有無を可視化する。
+# 更新検知 case (7/8) 用の作業 dir を組む。プラグインと同じ配置 (hooks/ scripts/ VERSION) にする。
+#   curl スタブは「通信が起きたら $tmp/curl-called が生える」ことで通信の有無を可視化する。
 setup_update_env() {
   local tmp="$1"
-  mkdir -p "$tmp/.claude/hooks" "$tmp/.claude/scripts" "$tmp/bin" || return 1
-  cp "$HOOKS/session-start.sh" "$tmp/.claude/hooks/" || return 1
-  cp "$ROOT/.claude/scripts/update-check.sh" "$tmp/.claude/scripts/" || return 1
-  cp "$ROOT/.claude/scripts/tasks-path.sh" "$tmp/.claude/scripts/" 2>/dev/null
+  mkdir -p "$tmp/hooks" "$tmp/scripts" "$tmp/bin" || return 1
+  cp "$HOOKS/session-start.sh" "$tmp/hooks/" || return 1
+  cp "$ROOT/scripts/update-check.sh" "$tmp/scripts/" || return 1
+  cp "$ROOT/scripts/tasks-path.sh" "$tmp/scripts/" 2>/dev/null
   cat > "$tmp/bin/curl" <<EOF
 #!/usr/bin/env bash
 : > "$tmp/curl-called"
@@ -151,12 +156,12 @@ EOF
   chmod +x "$tmp/bin/curl"
 }
 
-# run_session_start <root> <tmpdir> <HARNESS_UPDATE_CHECK 値> -> hook を実行し stdout+stderr を返す
+# run_session_start <plugin_root> <tmpdir> <HARNESS_UPDATE_CHECK 値> -> hook を実行し stdout+stderr を返す
 run_session_start() {
   local tmp="$1" td="$2" chk="$3"
-  PATH="$tmp/bin:$PATH" TMPDIR="$td" CLAUDE_PROJECT_DIR="$tmp" \
+  PATH="$tmp/bin:$PATH" TMPDIR="$td" CLAUDE_PLUGIN_ROOT="$tmp" CLAUDE_PROJECT_DIR="$tmp" \
     HARNESS_UPDATE_CHECK="$chk" HARNESS_UPDATE_URL="http://127.0.0.1:9/VERSION" \
-    bash "$tmp/.claude/hooks/session-start.sh" 2>&1
+    bash "$tmp/hooks/session-start.sh" 2>&1
 }
 
 # ---------- case 7: VERSION の形式 / キャッシュが新しい時は通信も出力もしない ----------
@@ -173,7 +178,7 @@ case_7() {
 
   tmp="$(mktemp -d)"; td="$(mktemp -d)"
   if ! setup_update_env "$tmp"; then rm -rf "$tmp" "$td"; fail 7 "更新検知の作業 dir 構築" "cp 失敗"; return; fi
-  . "$ROOT/.claude/scripts/update-check.sh" 2>/dev/null
+  . "$ROOT/scripts/update-check.sh" 2>/dev/null
   dir="$(export TMPDIR="$td"; harness_update_cache_dir "$tmp")"
   mkdir -p "$dir"
   printf '%s\n' "$ver" > "$tmp/VERSION"
@@ -207,7 +212,7 @@ case_8() {
   local tmp td dir out want failed=0 local_v cached_v expect
   tmp="$(mktemp -d)"; td="$(mktemp -d)"
   if ! setup_update_env "$tmp"; then rm -rf "$tmp" "$td"; fail 8 "更新検知の作業 dir 構築" "cp 失敗"; return; fi
-  . "$ROOT/.claude/scripts/update-check.sh" 2>/dev/null
+  . "$ROOT/scripts/update-check.sh" 2>/dev/null
   dir="$(export TMPDIR="$td"; harness_update_cache_dir "$tmp")"
   mkdir -p "$dir"
 
@@ -247,7 +252,32 @@ EOF
   pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 を数値比較"
 }
 
-case_1; case_2; case_3; case_4; case_5; case_6; case_7; case_8
+# ---------- case 9: マニフェストが妥当な JSON で、版が VERSION と一致する ----------
+# 不一致だと更新検知 (VERSION 基準) と /plugin update (plugin.json 基準) が別の版を指し、
+# 「更新あり」の通知が嘘になる。
+case_9() {
+  local f ver pver mver
+  for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json templates/settings.json; do
+    if [ ! -f "$ROOT/$f" ]; then fail 9 "マニフェストが存在する" "$f が無い"; return; fi
+    if ! python3 -m json.tool "$ROOT/$f" >/dev/null 2>&1; then
+      fail 9 "マニフェストが妥当な JSON" "$f が JSON として読めない"; return
+    fi
+  done
+  ver="$(head -1 "$ROOT/VERSION" 2>/dev/null | tr -d '\r')"
+  pver="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' \
+          "$ROOT/.claude-plugin/plugin.json" 2>/dev/null)"
+  mver="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["plugins"][0].get("version",""))' \
+          "$ROOT/.claude-plugin/marketplace.json" 2>/dev/null)"
+  if [ "$pver" != "$ver" ]; then
+    fail 9 "plugin.json の version が VERSION と一致" "VERSION=${ver} plugin.json=${pver}"; return
+  fi
+  if [ -n "$mver" ] && [ "$mver" != "$ver" ]; then
+    fail 9 "marketplace.json の version が VERSION と一致" "VERSION=${ver} marketplace.json=${mver}"; return
+  fi
+  pass 9 "マニフェスト 4 件が妥当な JSON / version=${pver} が VERSION と一致"
+}
+
+case_1; case_2; case_3; case_4; case_5; case_6; case_7; case_8; case_9
 
 echo "---"
 if [ "$FAILED" -ne 0 ]; then echo "RESULT: FAIL"; exit 1; fi

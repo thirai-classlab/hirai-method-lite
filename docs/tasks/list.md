@@ -1,6 +1,6 @@
 # タスク台帳
 
-このプロジェクトのタスクの正本。運用規範は [`.claude/rules/tasks.md`](../../.claude/rules/tasks.md)。
+このプロジェクトのタスクの正本。運用規範は [`rules/tasks.md`](../../rules/tasks.md)。
 保留・不採用は [`parking-lot.md`](parking-lot.md)。設計 draft は [`../draft/`](../draft/README.md)。
 
 - status は **未着手 / 進行中 / 完了** の 3 種のみ
@@ -28,4 +28,4 @@
 | 3 | 進行中 | ログイン失敗回数の上限を追加 | `npm test -- auth` が green | [task-3.md](task-3.md) |
 ```
 
-タスクファイルは [`.claude/templates/task.md`](../../.claude/templates/task.md) を写して作る。
+タスクファイルは [`templates/task.md`](../../templates/task.md) を写して作る。

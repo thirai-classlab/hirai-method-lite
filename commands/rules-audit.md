@@ -24,9 +24,9 @@ for f in CLAUDE.md .claude/rules/*.md; do head -5 "$f" | grep -q '^paths:' || wc
   | awk '{s+=$1} END {print "T0:", s, "bytes ≈", int(s/3), "tokens / 上限 3000"}'
 for f in .claude/rules/*.md; do head -5 "$f" | grep -q '^paths:' \
   && echo "T1 $f $(( $(wc -c < "$f") / 3 )) tokens / 上限 2000"; done
-ls .claude/rules/*.md | wc -l          # T1 は 6 本まで
-ls .claude/hooks/*.sh | wc -l          # hook は 5 本まで
-ls .claude/commands/*.md | wc -l       # command は 12 個まで
+ls .claude/rules/*.md | wc -l                        # T1 は 6 本まで (導入先の rules)
+ls "$CLAUDE_PLUGIN_ROOT"/hooks/*.sh | wc -l          # hook は 5 本まで (プラグイン側)
+ls "$CLAUDE_PLUGIN_ROOT"/commands/*.md | wc -l       # command は 12 個まで (プラグイン側)
 ```
 
 ## ③ 失効条件の点検
