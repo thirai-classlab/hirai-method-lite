@@ -344,15 +344,20 @@ print(" ".join(bad))
   if [ "$n" -eq 0 ]; then fail 10 "agents/*.md が 1 件以上" "0 件"; return; fi
   if [ -n "$bad" ]; then fail 10 "agent の frontmatter" "不備:$bad"; return; fi
 
-  # (c) plugin.json が列挙する agent ファイルが実在する
+  # (c) plugin.json が既定フォルダを再宣言していない。
+  # commands / agents は「既定を置き換える」キーであり、hooks は既定の hooks/hooks.json と
+  # 二重になると読み込み自体が失敗する。v0.6.0 はこの 3 キーを書いたため 12 command と
+  # 3 agent が登録されず、プラグインが failed to load になった。既定配置に任せるのが正。
   bad="$(python3 -c '
 import json, os, sys
 root = sys.argv[1]
-paths = json.load(open(os.path.join(root, ".claude-plugin/plugin.json"))).get("agents", [])
-print(" ".join(p for p in paths if not os.path.isfile(os.path.join(root, p))))
+m = json.load(open(os.path.join(root, ".claude-plugin/plugin.json")))
+print(" ".join(k for k in ("commands", "agents", "hooks") if k in m))
 ' "$ROOT" 2>&1)"
-  if [ -n "$bad" ]; then fail 10 "plugin.json の agent パスが実在" "不在:$bad"; return; fi
-  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter とパスが妥当"
+  if [ -n "$bad" ]; then
+    fail 10 "plugin.json は既定フォルダを再宣言しない" "既定を上書きするキー:$bad"; return
+  fi
+  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている"
 }
 
 case_1; case_2; case_3; case_4; case_5; case_6; case_7; case_8; case_9; case_10

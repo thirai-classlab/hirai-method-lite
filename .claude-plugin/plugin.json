@@ -1,7 +1,7 @@
 {
   "name": "hirai-lite",
   "description": "常時ロードされるコンテキストに予算を置き、ルールの追加を 6 工程パイプラインで通す rules 3 層構造の軽量ハーネス。",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "author": {
     "name": "thirai-classlab"
   },
@@ -14,25 +14,5 @@
     "task-management",
     "workflow"
   ],
-  "commands": [
-    "./commands/add-rule.md",
-    "./commands/commit.md",
-    "./commands/finish-task.md",
-    "./commands/init.md",
-    "./commands/mode.md",
-    "./commands/new-draft.md",
-    "./commands/new-task.md",
-    "./commands/rules-audit.md",
-    "./commands/start-task.md",
-    "./commands/state.md",
-    "./commands/update.md",
-    "./commands/verify.md"
-  ],
-  "agents": [
-    "./agents/tdd-guide.md",
-    "./agents/code-reviewer.md",
-    "./agents/security-reviewer.md"
-  ],
-  "hooks": "./hooks/hooks.json",
   "mcpServers": "./.mcp.json"
 }
