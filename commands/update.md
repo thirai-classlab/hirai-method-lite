@@ -86,7 +86,7 @@ done
 ```
 
 - `same` / `updated` が 1 件も出ない場合は、手順 2 の `/init` がまだ済んでいない。手順 2 に戻る。
-- 最後に 1 行出力されれば、入れ替え後も画面下部の表示は動いている。出力が無い / エラーになる場合は
+- 最後に 2 行出力されれば、入れ替え後も画面下部の表示は動いている。出力が無い / エラーになる場合は
   `cp <その statusline.sh>.bak <その statusline.sh>` で戻し、内容を報告する。
 - `.bak` を作ったときは手順 5 の報告に必ず 1 行入れる。作っていなければ触れない。
 - **この 2 本以外には触れない。**
@@ -155,6 +155,6 @@ cat "$CLAUDE_PLUGIN_ROOT/VERSION"                                               
 - 手順 3 で `same` / `updated` と出た `$D` (プロジェクト側 / ホーム側のうち実際に置いてある方) について、
   `cmp -s "$CLAUDE_PLUGIN_ROOT/scripts/statusline.sh" "$D/statusline.sh"` と
   `cmp -s "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh" "$D/tasks-path.sh"` が両方 exit 0。
-- `bash "$D/statusline.sh" </dev/null` が 1 行出力する。
+- `bash "$D/statusline.sh" </dev/null` が 2 行出力する (1 行目 = いまの状態 / 2 行目 = 設定リンク)。
 - `bash "$CLAUDE_PLUGIN_ROOT/tests/smoke.sh"` が exit 0。
 - `git status --short` に `CLAUDE.md` `docs/` `.claude/rules/` の変更が出ていない。
