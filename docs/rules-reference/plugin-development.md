@@ -48,20 +48,20 @@ claude --plugin-dir <dir> plugin details <name>
 
 ---
 
-## 3. `plugin-dev` の `plugin-structure` skill の記述は誤り
+## 3. path 挙動は skill の記述ではなく公式 plugins-reference を優先する
 
-**何が起きたか**: 公式 marketplace の `plugin-dev` プラグインに同梱されている `plugin-structure` skill が、次のように書いている。
+**何が起きたか**: 公式 marketplace の `plugin-dev` プラグインに同梱されている `plugin-structure` skill には、次の記述がある。
 
 > **Important**: Custom paths supplement defaults—they don't replace them. Components in both default directories and custom paths will load.
 > **Override behavior**: Custom paths in `plugin.json` supplement (not replace) default directories
 
-これは `commands` / `agents` / `workflows` / `outputStyles` については **誤り**である (項目 1 参照)。`skills` についてのみ正しい。
+一方、公式ドキュメント (plugins-reference の Path behavior rules) では `commands` / `agents` / `workflows` / `outputStyles` は既定ディレクトリを **置換** すると定義されている。実測でも `commands` キーを書いた結果、既定の `commands/` から 1 件も登録されなくなった (項目 1)。両者は記述が異なる。
 
-**なぜ起きたか**: 未確認。skill の記述が仕様変更に追随していないか、`skills` の挙動を全キーに一般化したものと推測されるが、裏付けは取っていない。
+**なぜ起きたか**: 未確認。記述時点の仕様との差か、`skills` の挙動 (こちらは追加) を他キーへ一般化したものと推測されるが、裏付けは取っていない。
 
-**どう対処するか**: プラグインの path 挙動については、**skill ではなく公式 plugins-reference (Path behavior rules) を一次情報として参照する**。この skill を信じると項目 1 の事故がそのまま再現する。
+**どう対処するか**: プラグインの path 挙動については、**公式 plugins-reference (Path behavior rules) を一次情報として優先する**。既定ディレクトリをそのまま使うなら、対応するキーを manifest に書かない (項目 1 の回避方法)。
 
-**教訓の一般形**: 補助ツールが同梱するドキュメントは一次情報ではない。挙動が疑わしいときは仕様書と実測に戻る。
+**教訓の一般形**: 記述が食い違うときは、より一次に近い仕様書と自分の実測に戻る。
 
 **出典**: 本セッション実測 (2026-08-27)。該当記述は `plugin-dev` plugin の `skills/plugin-structure/SKILL.md`。
 

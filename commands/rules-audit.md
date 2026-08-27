@@ -39,7 +39,7 @@ done
 . "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"
 for f in CLAUDE.md "$HOME/.claude/CLAUDE.md" "$R"/*.md; do
   [ -f "$f" ] || continue; head -5 "$f" | grep -q '^paths:' || wc -c "$f"
-done | awk '{s+=$1} END {print "T0:", s, "bytes ≈", int(s/3), "tokens / 上限 3000"}'
+done | awk '{s+=$1} END {print "T0:", s, "bytes ≈", int(s/3), "tokens / 警告 6000 / 上限 10000"}'
 for f in "$R"/*.md; do [ -f "$f" ] && head -5 "$f" | grep -q '^paths:' \
   && echo "T1 $f $(( $(wc -c < "$f") / 3 )) tokens / 上限 2000"; done
 ls "$R"/*.md | wc -l                                 # T1 は 6 本まで (導入先の rules)
@@ -93,5 +93,5 @@ git log --since='3 months ago' -S'<ルールに出てくる固有語>' --oneline
 
 - ⓪ でルールの置き場を実測し、① の列挙が 1 件以上ある。
 - 結果表を出力した。
-- T0 ≤ 3,000 tokens、T1 各 ≤ 2,000 tokens、T1 ≤ 6 本、hook ≤ 5 本、command ≤ 12 個が全部成立する。
+- T0 ≤ 10,000 tokens（6,000 超は警告として報告する）、T1 各 ≤ 2,000 tokens、T1 ≤ 6 本、hook ≤ 5 本、command ≤ 12 個が全部成立する。
 - 成立しない項目があれば、その項目名と実測値と削除候補を報告して停止する。

@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "hirai-method-lite 単体を配るマーケットプレイス。rules 3 層とルール追加パイプラインを備えた軽量ハーネス 1 本のみを収録する。",
-    "version": "1.2.0"
+    "version": "1.3.0"
   },
   "plugins": [
     {
       "name": "hirai-lite",
       "source": "./",
       "description": "常時ロードされるコンテキストに予算を置き、ルールの追加を 6 工程パイプラインで通す rules 3 層構造の軽量ハーネス。",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "author": {
         "name": "thirai-classlab"
       },

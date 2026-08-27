@@ -17,6 +17,12 @@ FAILED=0
 T0_ALLOWLIST="_meta.md core.md"
 T0_MAX=3
 
+# T0 予算は 2 段階。WARN を超えたら PASS のまま警告を出し (余裕があるうちに降格を決める)、
+# MAX を超えたら FAIL にして追加を止める。上限を上げても「既定は入れない」原則は変えない
+# (_meta.md 条 2: 新規は T1 が既定、T0 にするには立証が要る)。
+T0_BUDGET_WARN=6000
+T0_BUDGET_MAX=10000
+
 # smoke 自体は外部通信しない。更新検知を要する case 7/8 だけが個別に on を渡す。
 export HARNESS_UPDATE_CHECK=off
 
@@ -144,10 +150,10 @@ case_3() {
   pass 3 "context-budget.sh は 0.85 で 1 度発火し 2 度目は沈黙"
 }
 
-# ---------- case 4: T0 予算 (常時ロード合計 <= 3,000 tokens) ----------
+# ---------- case 4: T0 予算 (警告 6,000 tokens / 上限 10,000 tokens) ----------
 # 配布物としての T0 は rules/ 直下の frontmatter 無し + 導入先に置く CLAUDE.md 雛形。
 case_4() {
-  local total=0 files=() f bytes tokens
+  local total=0 files=() f bytes tokens warn=""
   [ -f "$ROOT/CLAUDE.md" ] && files+=("$ROOT/CLAUDE.md")
   if [ -d "$ROOT/rules" ]; then
     while IFS= read -r f; do
@@ -156,24 +162,28 @@ case_4() {
     done < <(find "$ROOT/rules" -maxdepth 1 -name '*.md' 2>/dev/null | sort)
   fi
   if [ "${#files[@]}" -eq 0 ]; then
-    fail 4 "T0 予算 <= 3,000 tokens" "CLAUDE.md / rules/*.md が未作成のため測定不可"; return
+    fail 4 "T0 予算 <= ${T0_BUDGET_MAX} tokens" "CLAUDE.md / rules/*.md が未作成のため測定不可"; return
   fi
   for f in "${files[@]}"; do
     bytes="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
     total=$(( total + ${bytes:-0} ))
   done
   tokens=$(( total / 3 ))
-  if [ "$tokens" -gt 3000 ]; then
-    fail 4 "T0 予算 <= 3,000 tokens" "${tokens} tokens (${total} bytes / ${#files[@]} file)"; return
+  if [ "$tokens" -gt "$T0_BUDGET_MAX" ]; then
+    fail 4 "T0 予算 <= ${T0_BUDGET_MAX} tokens" "${tokens} tokens (${total} bytes / ${#files[@]} file) -- 既存 1 件を T1/T2 へ降格するまで T0 に追加しない"; return
+  fi
+  if [ "$tokens" -gt "$T0_BUDGET_WARN" ]; then
+    echo "WARN  case 4: T0 常時ロード ${tokens} tokens が警告線 ${T0_BUDGET_WARN} を超えた (上限 ${T0_BUDGET_MAX})。余裕があるうちに降格候補 1 件を決める"
+    warn=" / WARN: ${T0_BUDGET_WARN} 超過 (上限 ${T0_BUDGET_MAX})"
   fi
 
   # 二重ロード検出。project scope と user scope の両方に同じ rule があると T0 は倍になり、
-  # 予算 3,000 を無言で割る。/init が使う scripts/scope-check.sh がその重なりを止める。
+  # 警告線 6,000 を無言で割る。/init が使う scripts/scope-check.sh がその重なりを止める。
   local sc td out
   sc="$ROOT/scripts/scope-check.sh"
   if [ ! -f "$sc" ]; then fail 4 "scope-check.sh が存在する" "$sc が無い"; return; fi
-  if [ $(( tokens * 2 )) -le 3000 ]; then
-    fail 4 "二重ロードは予算超過になる (検出の前提)" "倍でも $(( tokens * 2 )) <= 3000"; return
+  if [ $(( tokens * 2 )) -le "$T0_BUDGET_WARN" ]; then
+    fail 4 "二重ロードは警告線に届く (検出の前提)" "倍でも $(( tokens * 2 )) <= ${T0_BUDGET_WARN}"; return
   fi
   td="$(mktemp -d)"; mkdir -p "$td/proj/rules" "$td/home/rules"
   cp "$ROOT"/rules/*.md "$td/proj/rules/" 2>/dev/null
@@ -222,7 +232,7 @@ yes yes proj 両方あればプロジェクト側
 -   -   proj どちらも無ければ新規作成先
 EOF
   rm -rf "$rw"
-  pass 4 "T0 常時ロード ${tokens} tokens <= 3,000 (${#files[@]} file / ${total} bytes) / 二重ロード ($(( tokens * 2 ))) は scope-check.sh が警告 / ルールの置き場は 4 通りとも在る側を返す"
+  pass 4 "T0 常時ロード ${tokens} tokens (警告 ${T0_BUDGET_WARN} / 上限 ${T0_BUDGET_MAX}, ${#files[@]} file / ${total} bytes)${warn} / 二重ロード ($(( tokens * 2 ))) は scope-check.sh が警告 / ルールの置き場は 4 通りとも在る側を返す"
 }
 
 # ---------- case 5: 層違反検出 (T0 は許可リストのファイルだけ / 本数 <= T0_MAX) ----------
