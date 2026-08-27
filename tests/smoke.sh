@@ -49,7 +49,36 @@ case_1() {
   if ! printf '%s\n' "$out" | grep -q '\[harness\]'; then
     fail 1 "session-start 出力に [harness] prefix" "prefix 不在: $out"; return
   fi
-  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり"
+
+  # statusline.sh も同じ fail-open。空 stdin / 壊れた JSON / お知らせの控えが不在・空・壊れ、
+  # いずれでも 1 行 + exit 0 を返す (画面下部が消えたり複数行に崩れたりしない)。
+  local sl="$ROOT/scripts/statusline.sh" std sout n src
+  if [ ! -f "$sl" ]; then fail 1 "statusline.sh が存在する" "$sl が無い"; return; fi
+  std="$(mktemp -d)"
+  for src in '' '{"model":' 'zzz' '{"model":{"display_name":"X"},"context_window":{"used_percentage":12}}'; do
+    sout="$(printf '%s' "$src" | TMPDIR="$std" NO_COLOR=1 CLAUDE_PROJECT_DIR="$std" \
+          HARNESS_UPDATE_CHECK=on bash "$sl" 2>&1)"; rc=$?
+    n="$(printf '%s\n' "$sout" | grep -c . || true)"
+    if [ "$rc" -ne 0 ] || [ "${n:-0}" -ne 1 ]; then
+      rm -rf "$std"; fail 1 "statusline は常に 1 行 + exit 0" "入力[${src}] exit=${rc} 行数=${n}"; return
+    fi
+  done
+  # 空の控え = 更新なし扱い (中身が消し損ねの空ファイルでも嘘の通知を出さない)
+  mkdir -p "$std/claude-harness-lite" && : > "$std/claude-harness-lite/update-available"
+  sout="$(printf '{"context_window":{"used_percentage":12}}' \
+        | TMPDIR="$std" NO_COLOR=1 CLAUDE_PROJECT_DIR="$std" HARNESS_UPDATE_CHECK=on bash "$sl" 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ] || printf '%s' "$sout" | grep -q '更新あり'; then
+    rm -rf "$std"; fail 1 "空の控えでは更新を知らせない" "exit=${rc}: $sout"; return
+  fi
+  # 壊れた控え + 壊れた JSON の同時発生でも 1 行 + exit 0
+  printf '\001garbage\002' > "$std/claude-harness-lite/update-available"
+  sout="$(printf 'not json' | TMPDIR="$std" NO_COLOR=1 CLAUDE_PROJECT_DIR="$std" bash "$sl" 2>&1)"; rc=$?
+  n="$(printf '%s\n' "$sout" | grep -c . || true)"
+  rm -rf "$std"
+  if [ "$rc" -ne 0 ] || [ "${n:-0}" -ne 1 ]; then
+    fail 1 "壊れた控え + 壊れた JSON でも 1 行 + exit 0" "exit=${rc} 行数=${n}"; return
+  fi
+  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 1 行 + exit 0"
 }
 
 # ---------- case 2: 閾値未満では無出力 ----------
@@ -194,6 +223,38 @@ run_session_start() {
     bash "$tmp/hooks/session-start.sh" 2>&1
 }
 
+# run_statusline <plugin_root> <tmpdir> <stdin JSON> [HC_STATUSLINE_NOTICE] [HARNESS_UPDATE_CHECK]
+#   -> 画面下部の 1 行を返す。
+# HARNESS_UPDATE_CHECK は smoke 冒頭で off に export しているので、既定 on を明示的に上書きして渡す。
+# curl スタブを PATH の先頭に置いたまま呼ぶ。statusline が通信すれば $tmp/curl-called が生える。
+run_statusline() {
+  local tmp="$1" td="$2" json="$3" notice="${4:-on}" chk="${5:-on}"
+  printf '%s' "$json" | PATH="$tmp/bin:$PATH" TMPDIR="$td" NO_COLOR=1 CLAUDE_PROJECT_DIR="$tmp" \
+    HARNESS_UPDATE_URL="http://127.0.0.1:9/VERSION" HC_STATUSLINE_NOTICE="$notice" \
+    HARNESS_UPDATE_CHECK="$chk" bash "$ROOT/scripts/statusline.sh" 2>&1
+}
+
+# expect_notice <出力> <期待するお知らせ (空なら「何も出さない」)> -> 一致で rc 0、違えば理由を stdout
+expect_notice() {
+  local out="$1" want="$2" n
+  n="$(printf '%s\n' "$out" | grep -c . || true)"
+  if [ "${n:-0}" -ne 1 ]; then printf '1 行ではない (%s 行): %s' "$n" "$out"; return 1; fi
+  if [ -n "$want" ]; then
+    case "$out" in
+      *"| $want") return 0 ;;
+      *) printf '末尾が [%s] でない: %s' "$want" "$out"; return 1 ;;
+    esac
+  fi
+  case "$out" in
+    *更新あり*|*きりの良いところで*) printf 'お知らせが出ている: %s' "$out"; return 1 ;;
+  esac
+  # 該当なしのときは区切りも出さない = 行末が「やること <N>」で終わる
+  case "$out" in
+    *"やること "*) return 0 ;;
+    *) printf '末尾が やること <N> で終わっていない: %s' "$out"; return 1 ;;
+  esac
+}
+
 # ---------- case 7: VERSION の形式 / キャッシュが新しい時は通信も出力もしない ----------
 case_7() {
   local tmp td dir ver out stamp_before stamp_after
@@ -274,12 +335,59 @@ case_8() {
 0.10.0 0.9.0 no
 EOF
 
+  # 画面下部のお知らせ枠。SessionStart が置いた控えを statusline が読むだけで、通信は起きない。
+  # 上から順に 1 つだけ出す (1 更新あり > 2 context 高 > 何も出さない)。
+  local flag="$td/claude-harness-lite/update-available" why
+  local up='更新あり → /hirai-lite:update' ctxmsg='きりの良いところで /hirai-lite:state save'
+  local j_low='{"model":{"display_name":"X"},"context_window":{"used_percentage":12}}'
+  local j_high='{"model":{"display_name":"X"},"context_window":{"used_percentage":85}}'
+  while [ "$failed" -eq 0 ]; do
+    # --- 新版が届いている状態を作る ---
+    printf '%s\n' "0.1.0" > "$tmp/VERSION"; printf '%s' "0.2.0" > "$dir/latest"; date +%s > "$dir/stamp"
+    run_session_start "$tmp" "$td" "on" >/dev/null
+    if [ ! -s "$flag" ]; then fail 8 "SessionStart が更新の控えを置く" "$flag が無い"; failed=1; break; fi
+    if ! why="$(expect_notice "$(run_statusline "$tmp" "$td" "$j_low")" "$up")"; then
+      fail 8 "優先 1: 更新あり" "$why"; failed=1; break
+    fi
+    # 両方該当でも更新が勝つ
+    if ! why="$(expect_notice "$(run_statusline "$tmp" "$td" "$j_high")" "$up")"; then
+      fail 8 "優先 1 は context 高より強い" "$why"; failed=1; break
+    fi
+    # 枠ごと止める
+    if ! why="$(expect_notice "$(run_statusline "$tmp" "$td" "$j_high" off)" "")"; then
+      fail 8 "HC_STATUSLINE_NOTICE=off で従来表示" "$why"; failed=1; break
+    fi
+    # 更新の知らせだけ止める (context 高は残る)
+    if ! why="$(expect_notice "$(run_statusline "$tmp" "$td" "$j_high" on off)" "$ctxmsg")"; then
+      fail 8 "HARNESS_UPDATE_CHECK=off で更新の知らせだけ止まる" "$why"; failed=1; break
+    fi
+
+    # --- 最新版になった状態 (控えは消える) ---
+    printf '%s\n' "0.2.0" > "$tmp/VERSION"; printf '%s' "0.2.0" > "$dir/latest"; date +%s > "$dir/stamp"
+    run_session_start "$tmp" "$td" "on" >/dev/null
+    if [ -e "$flag" ]; then fail 8 "最新版なら控えを消す" "$flag が残っている"; failed=1; break; fi
+    if ! why="$(expect_notice "$(run_statusline "$tmp" "$td" "$j_high")" "$ctxmsg")"; then
+      fail 8 "優先 2: context 高" "$why"; failed=1; break
+    fi
+    if ! why="$(expect_notice "$(run_statusline "$tmp" "$td" "$j_low")" "")"; then
+      fail 8 "どちらでもなければ区切りごと出さない" "$why"; failed=1; break
+    fi
+    # 閾値は HC_CONTEXT_THRESHOLD で動く (割合でも百分率でも受ける)
+    if ! why="$(expect_notice "$(HC_CONTEXT_THRESHOLD=0.90 run_statusline "$tmp" "$td" "$j_high")" "")"; then
+      fail 8 "閾値 0.90 なら 85% では出さない" "$why"; failed=1; break
+    fi
+    if ! why="$(expect_notice "$(HC_CONTEXT_THRESHOLD=10 run_statusline "$tmp" "$td" "$j_low")" "$ctxmsg")"; then
+      fail 8 "閾値 10 (百分率) なら 12% で出す" "$why"; failed=1; break
+    fi
+    break
+  done
+
   if [ -e "$tmp/curl-called" ]; then
-    fail 8 "期限内は通信しない" "curl が呼ばれた"; failed=1
+    fail 8 "期限内は通信しない (statusline も含む)" "curl が呼ばれた"; failed=1
   fi
   rm -rf "$tmp" "$td"
   [ "$failed" -eq 0 ] || return
-  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 を数値比較"
+  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 を数値比較 / 画面下部のお知らせ枠は 更新あり > context 高 > 無表示 の順に 1 つだけ (off で停止・閾値可変・通信なし)"
 }
 
 # ---------- case 9: マニフェストが妥当な JSON で、版が VERSION と一致する ----------

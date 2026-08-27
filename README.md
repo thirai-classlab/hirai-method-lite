@@ -109,6 +109,14 @@ Claude Code で次の 2 行を順に実行します。
 - 「入れる範囲」を選ぶ画面での並び順と、はじめから選ばれている選択肢。3 つの選択肢があることと[それぞれの意味](https://code.claude.com/docs/en/discover-plugins.md#install-plugins)は公式ドキュメントに、記録される場所はターミナルから `--scope` を指定して実際に入れた結果で確かめています
 - フォルダを信頼するか尋ねる画面が出る条件。このプラグインが配る安全設定は「禁止」と「確認」だけで、公式ドキュメントによればこの 2 つは信頼の確認を待たずに効きます
 
+## `/clear` と続きの再開
+
+会話が長くなったら `/clear` と入力してリセットできます。**消えるのは会話の履歴だけ**です。`CLAUDE.md` と `.claude/rules/` に書いた決まりごとは、[新しい会話のはじめに読み込み直されます](https://code.claude.com/docs/en/memory.md)ので、消えません。ウィンドウを閉じて開き直しても結果は同じで、どちらでも構いません。
+
+ただし**会話の中だけで伝えたことは消えます**。続きをやるなら、消す前に `/hirai-lite:state save` で今の状況を保存し、リセットしたあとに `/hirai-lite:state resume` と入力してください。
+
+（`/clear` と「閉じて開き直す」が細かい点まで完全に同じかどうかは、公式ドキュメントに書かれていません。迷うときは閉じて開き直すほうが確実です。）
+
 ## 更新する（自動では新しくなりません）
 
 ⚠️ **Claude Code のプラグインは、放っておいても新しくなりません。** 入れたときの中身がそのまま残り続けます。新しい版が出たら、下の手順で自分で入れ替えてください。
@@ -211,6 +219,15 @@ Claude Code 2.1.247 で実際に確かめたところ、この表示が出てい
 ## statusline について
 
 `/hirai-lite:init` は `scripts/statusline.sh` と `scripts/tasks-path.sh` を配置先の `.claude/` へ複製し、`templates/settings.json` の `statusLine.command`（`bash "${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh"`）から呼ぶ。表示は 1 行で `<model> | ctx <N>% ・5h <N>% ・7d <N>% | mode: <進め方> | <branch> | やること <N>`。進め方は値そのものを日本語で出す（`normal` → `確認あり` / `loop` → `自動`、未知の値はそのまま）。実例: `Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: 確認あり | feat/rate-limit | やること 4`。
+
+いちばん右は**お知らせ枠**で、下の表を上から見て**当てはまった 1 つだけ**を出す。どれにも当てはまらなければ区切りごと出さない。
+
+| 優先 | 出るとき | 表示 |
+|---|---|---|
+| 1 | 新しい版が出ている | `更新あり → /hirai-lite:update` |
+| 2 | ctx が閾値以上（既定 80%、`HC_CONTEXT_THRESHOLD` で変更） | `きりの良いところで /hirai-lite:state save` |
+
+お知らせ枠ごと止めるなら環境変数 `HC_STATUSLINE_NOTICE=off`（1 の行だけ止めるなら `HARNESS_UPDATE_CHECK=off`）。**画面下部の表示は通信しない。** 何度も描き直されるため、新しい版が出ているかどうかはセッション開始時の調べ物が置いた控えを読むだけで、`statusline.sh` からは一切通信しない（実測 38ms / 到達不能な URL を設定しても遅くならない）。控えは 24 時間に 1 回しか取り直さないので、更新の合図が出る条件は[合図が出ないとき](#合図が出ないとき)と同じ。
 
 全プロジェクト共通（`/hirai-lite:init user`）に入れた場合だけは、`statusLine.command` を `$HOME` を展開した絶対パス（例: `bash "/home/you/.claude/statusline.sh"`）に書き換える。`${CLAUDE_PROJECT_DIR}` は開いているプロジェクトごとに変わるため、全プロジェクト共通の設定からは使えないため。進め方（`mode.yml`）はプロジェクト側を先に見て、無ければホーム側を見る。
 

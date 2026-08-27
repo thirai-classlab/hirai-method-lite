@@ -52,6 +52,8 @@ if [ -f "$plugin_root/scripts/update-check.sh" ]; then
   if command -v harness_update_notice >/dev/null 2>&1; then
     harness_update_fetch_async "$plugin_root" >/dev/null 2>&1 || true
     update_line="$(harness_update_notice "$plugin_root" 2>/dev/null || true)"
+    # 画面下部のお知らせ枠へ結果を渡す (statusline はプラグインのパスを知れないため)。
+    harness_update_flag_sync "$plugin_root" >/dev/null 2>&1 || true
   fi
 fi
 

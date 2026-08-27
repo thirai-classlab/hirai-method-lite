@@ -4,6 +4,14 @@
 
 更新のしかたは [README の「更新する」](README.md#更新する自動では新しくなりません)。**プラグインは自動更新されない。**
 
+## v1.0.0
+
+- **画面下部の表示にお知らせ枠を追加。** いちばん右に、上から見て当てはまった 1 つだけを出す（1: `更新あり → /hirai-lite:update` / 2: ctx が閾値以上のとき `きりの良いところで /hirai-lite:state save`）。どちらでもなければ区切りごと出さない。止めるなら `HC_STATUSLINE_NOTICE=off`。
+- **お知らせ枠は通信しない。** 画面下部は何度も描き直されるため、`scripts/statusline.sh` からは一切通信せず、SessionStart 側 (`scripts/update-check.sh` の `harness_update_flag_sync`) が置いた控え 1 ファイル (`${TMPDIR:-/tmp}/claude-harness-lite/update-available`) の有無を見るだけにした。到達不能な URL を設定しても遅くならないことを実測（38ms）。`${CLAUDE_PLUGIN_ROOT}` が settings.json で展開されず、画面下部からはプラグインの `VERSION` もキャッシュ dir も見えないため、版の比較は SessionStart 側で済ませて結果だけを渡す形にしている。
+- **`/state save` の最後に復帰手順の案内文を定義**（`commands/state.md`）。保存先 → `/clear` → `/hirai-lite:state resume` の順に、平易な日本語で出す型を追加。
+- **`/clear` の挙動を公式ドキュメントで確認し、README に「`/clear` と続きの再開」節を追加。** `/clear` は「空のコンテキストで新しい会話を始める」操作で、`CLAUDE.md` と `.claude/rules/` は「毎回の会話のはじめに読み込まれる」ため、`/clear` の後もルールは消えない。閉じて開き直すのと結果は同じ。ただし両者が細部まで同一である旨の記述は公式に無いため、その点は「確認できず」と明記した。
+- smoke は 10 件のまま。case 1 に画面下部の fail-open（空 stdin / 壊れた JSON / 控えが不在・空・壊れ）を、case 8 にお知らせ枠の優先順位・`off` での停止・閾値可変・通信しないことの検査を追加した。
+
 ## v0.9.0
 
 - **`/update` が全プロジェクト共通 (`/init user`) の導入先を更新しない不具合を修正。** 手順 3 が入れ替え先を `.claude/` に決め打ちしていたため、`/hirai-lite:init user` でホーム側 (`$HOME/.claude/`) に入れた人は、実際に使われている `~/.claude/statusline.sh` が古いまま残り、使われないコピーがプロジェクト側に新しく作られていた（実測で再現）。**プロジェクト側とホーム側の両方を見て、すでに在る側だけを入れ替える**ように変更（置いていない場所に新規作成しない）。
