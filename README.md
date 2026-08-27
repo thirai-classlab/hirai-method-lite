@@ -25,6 +25,14 @@ Claude Code 用の軽量ハーネス。**常時ロードされるコンテキス
 
 更新は `/update`（`/plugin update` → `/hirai-lite:init` で rules を再配置）。
 
+## ultracode について
+
+`/hirai-lite:init` は `templates/settings.json` を配置するため、**導入先で ultracode が既定で有効になる**（`"ultracode": true`）。ultracode は xhigh 推論と、タスクごとの自動 workflow オーケストレーションを常時 on にする設定で、**通常運用よりトークン消費が大きい**。従量課金で使う場合はコスト増を見込むこと。
+
+無効化するときは、導入先の `.claude/settings.json` から `ultracode` キーを削除するか `false` にする。プラグイン側の素材を編集する必要はない。
+
+併せて `"workflowSizeGuideline": "small"` を置き、1 workflow あたりのエージェント数を 5 未満に抑えている。根拠は実測（2026-08-21）。同時 4 subagent を起動した際、3 件が 600 秒無進捗で stall し 1 件が API 接続断となり成果物はゼロだった。同時 2 件へ落としたところ 5 件連続で成功した。並列度を上げるほど stall 率が上がるため、既定は `small` とする。
+
 ## このリポジトリの構成
 
 | パス | 中身 |

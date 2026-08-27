@@ -1,4 +1,6 @@
 {
+  "ultracode": true,
+  "workflowSizeGuideline": "small",
   "permissions": {
     "deny": [
       "Bash(rm -rf:*)",

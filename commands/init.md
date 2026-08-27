@@ -33,8 +33,8 @@ mkdir -p .claude/rules-archive && ls -d .claude/rules-archive
 cat "$CLAUDE_PLUGIN_ROOT/templates/settings.json"
 ```
 
-- `.claude/settings.json` が無い → そのままコピーする。
-- ある → **上書きしない**。既存の `permissions.deny` / `permissions.ask` と突き合わせ、素材にしかないエントリだけを一覧で提示し「この N 件を追記しますか?」と聞く。承認された分だけ既存 JSON の配列末尾に追加する。他のキー (`hooks` / `statusLine` / `env` 等) には触れない。
+- `.claude/settings.json` が無い → そのままコピーする。素材は `"ultracode": true` を含むため **xhigh 推論と自動 workflow オーケストレーションが有効になり、トークン消費が増える** (不要なら配置後にこのキーを削除するか `false` にする)。
+- ある → **上書きしない**。既存の `permissions.deny` / `permissions.ask` と突き合わせ、素材にしかないエントリだけを一覧で提示し「この N 件を追記しますか?」と聞く。承認された分だけ既存 JSON の配列末尾に追加する。素材にしかない top-level キー (`ultracode` / `workflowSizeGuideline`) も同じく差分として提示し、承認された分だけ追加する。他のキー (`hooks` / `statusLine` / `env` 等) には触れない。
 
 ```bash
 python3 -m json.tool .claude/settings.json >/dev/null && echo "settings.json は妥当な JSON"
