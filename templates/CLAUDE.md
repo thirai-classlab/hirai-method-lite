@@ -44,6 +44,19 @@ T0 は毎セッション常時ロード（合計 6,000 tokens で警告 / 10,000
 
 `.claude/rules/` の中身は プラグイン `hirai-lite` の `/init` が配置する。ルールの追加は `.claude/rules/_meta.md` のパイプライン（`/add-rule`）を通す。`@import` は使わない。
 
+## Documents index
+
+| ファイル | 内容 |
+|---|---|
+| `docs/overview.md` | ゴール / 背景 / スコープ / 体制と関係者 / ドメイン用語 / 関連リポジトリ |
+| `docs/requirements.md` | 要件（機能・非機能） |
+| `docs/architecture.md` | 構成 / データの持ち方 / 技術判断とその理由 |
+| `docs/tasks/list.md` | やること一覧。**いまどこまで進んでいるかもここで分かる**（進捗表は別に作らない） |
+| `docs/draft/` | 設計メモ（承認後に task 化） |
+| `docs/rules-reference/` | 背景・事故記録（必要なとき読む） |
+
+`.claude/rules/` のルールは、この表に書かなくても自動で読み込まれる（frontmatter 無し = 常時 / `paths:` 付き = 該当ファイルを触った時）。この表は所在を把握するためのもの。**実在しない行は消す**（`/hirai-lite:init` の 2 回目が実際に作った分だけ残す）。
+
 ## mode（進め方）
 
 `.claude/mode.yml` の `mode:` で決まる。`normal`（確認あり）/ `loop`（自動で進む）。切替は `/hirai-lite:config`。詳細は `.claude/rules/core.md` の該当条。

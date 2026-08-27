@@ -299,15 +299,19 @@ case_5() {
   pass 5 "T0 層の rule は許可リストどおり ${n} 本 <= ${T0_MAX} (${names# })"
 }
 
-# ---------- case 6: 数の予算 (hook<=5 / command<=12 / smoke case<=10) ----------
+# ---------- case 6: 数の予算 (hook<=5 / command<=12 / skill<=3 / smoke case<=10) ----------
 # hook は hooks/*.sh だけを数える (hooks.json は宣言であって hook スクリプトではない)。
+# skill は skills/<名前>/SKILL.md を数える。本体は呼ばれた時だけ読まれるが name と
+# description は常に載るため、数を予算で抑える (rules/_meta.md 「数の予算」)。
 case_6() {
-  local hooks cmds cases
+  local hooks cmds skills cases
   hooks="$(find "$ROOT/hooks" -maxdepth 1 -name '*.sh' 2>/dev/null | wc -l | tr -d ' ')"
   cmds="$(find "$ROOT/commands" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
+  skills="$(find "$ROOT/skills" -maxdepth 2 -name 'SKILL.md' 2>/dev/null | wc -l | tr -d ' ')"
   cases="$(grep -c '^case_[0-9][0-9]*()' "$here/smoke.sh" 2>/dev/null | tr -d ' ')"
-  local msg="hook=${hooks}/5 command=${cmds}/12 smoke case=${cases}/10"
-  if [ "${hooks:-0}" -gt 5 ] || [ "${cmds:-0}" -gt 12 ] || [ "${cases:-0}" -gt 10 ]; then
+  local msg="hook=${hooks}/5 command=${cmds}/12 skill=${skills}/3 smoke case=${cases}/10"
+  if [ "${hooks:-0}" -gt 5 ] || [ "${cmds:-0}" -gt 12 ] || [ "${skills:-0}" -gt 3 ] \
+     || [ "${cases:-0}" -gt 10 ]; then
     fail 6 "数の予算" "$msg"; return
   fi
   pass 6 "数の予算 ${msg}"

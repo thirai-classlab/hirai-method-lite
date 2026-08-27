@@ -19,6 +19,19 @@
 | T2 | `docs/rules-reference/**`（無ければ `.claude/rules-reference/**`） | AI が明示 Read した時のみ |
 | T3 | `.claude/rules-archive/**` | ロードしない（失効ルールの履歴保持） |
 
+## 数の予算
+
+条 3 が「読む量」なら、こちらは**部品の数**。`tests/smoke.sh` case 6 が数え、超えたら FAIL する。
+
+| 部品 | 上限 | 数え方 |
+|---|---|---|
+| hook | 5 | `hooks/*.sh` |
+| command | 12 | `commands/*.md` |
+| skill | 3 | `skills/*/SKILL.md` |
+| smoke case | 10 | `tests/smoke.sh` の `case_N()` |
+
+skill は本体こそ呼ばれた時だけ読まれるが、**`name` と `description` は常に載る**（1 件 50 tokens 前後）。上限に達したら 1 件外すまで足さない。
+
 T2 は `.claude/rules/` の外に置く。`rules/` 配下は再帰的に発見されるため、`paths:` を書き忘れた瞬間に T0 へ昇格する事故を物理配置で防ぐ。T0 から T2 へのポインタは張らない（ポインタは T1 から張る）。
 
 ## 記述テンプレート

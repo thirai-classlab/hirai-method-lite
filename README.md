@@ -52,7 +52,7 @@ Claude Code で次の 2 行を順に実行します。
 
 | 表示 | 中身 |
 |---|---|
-| コマンド 12 個（画面では **Skills**） | `/hirai-lite:init` `/hirai-lite:commit` など、こちらから呼び出して使う操作 |
+| コマンド 12 個 + スキル 1 個（画面では合わせて **Skills**） | `/hirai-lite:init` `/hirai-lite:commit` など、こちらから呼び出して使う操作 12 個と、AI が必要なときに自分で読む手引き `grilling` 1 個 |
 | エージェント 3 個（**Agents**） | テストの進め方・コード品質・脆弱性をそれぞれ見る担当（`tdd-guide` / `code-reviewer` / `security-reviewer`） |
 | 自動処理 2 個（**Hooks**） | セッション開始時の 1 行表示と、容量が増えたときの警告 |
 | 外部ツール接続 2 個（**MCP servers**） | コードを検索する `serena` と、ライブラリの公式ドキュメントを取ってくる `context7` |
@@ -68,15 +68,15 @@ Claude Code で次の 2 行を順に実行します。
 
 ここで初めて、決まりごと（ルール）と設定がそのプロジェクトに置かれます。
 
-**置く前に 4 つだけ質問されます**（v1.4.0 から。v1.6.0 から Claude Code 標準の選択 UI で出ます。v1.7.0 で mode を追加）。どこに入れるか / ファイルの置き場所 / [`ultracode`（深く考えて自動で手分けする。利用量が増える）](#ultracode-について)を有効にするか / [mode（進め方）](#mode進め方とは)を `normal`（確認あり）と `loop`（自動で進む）のどちらにするか の 4 つで、それぞれ既定の選択肢に `(推奨)` が付いているので、そのまま選べば進みます。すでに入っている設定は上書きしないので、該当する質問は省かれます（`mode.yml` がすでにあれば mode は聞かれません）。すでに一式が入っているプロジェクトで実行したときは質問されず、「すべてそのまま」と報告されます。
+**置く前に 3 つだけ質問されます**（v1.4.0 から。v1.6.0 から Claude Code 標準の選択 UI で出ます。v1.8.0 で「ファイルの置き場所」を聞くのをやめて 3 つになりました）。どこに入れるか / [`ultracode`（深く考えて自動で手分けする。利用量が増える）](#ultracode-について)を有効にするか / [mode（進め方）](#mode進め方とは)を `normal`（確認あり）と `loop`（自動で進む）のどちらにするか の 3 つで、それぞれ既定の選択肢に `(推奨)` が付いているので、そのまま選べば進みます。すでに入っている設定は上書きしないので、該当する質問は省かれます（`mode.yml` がすでにあれば mode は聞かれません）。すでに一式が入っているプロジェクトで実行したときは質問されず、「すべてそのまま」と報告されます。
 
 置かれるのは次のものです。
 
 - `.claude/rules/` — 決まりごと本体
 - `.claude/settings.json` — 安全設定と画面下部の表示
-- `.claude/mode.yml` — mode（進め方）（→ [mode（進め方）とは](#mode進め方とは)）
-- `CLAUDE.md` — このプロジェクトの説明（概要 / 使っている技術 / よく使うコマンド）の下書き。**`<...>` の部分はあとで埋めてください**。すでにある場合は触りません
-- やることの一覧表 / 設計メモの置き場 / 困ったことの記録帳
+- `.claude/mode.yml` — mode（進め方）（→ [mode（進め方）とは](#mode進め方とは)）。**すでにホーム側（`~/.claude/mode.yml`）に持っている人には、プロジェクト側に新しく作りません**（そちらを黙って覆い隠さないため）
+- `CLAUDE.md` — このプロジェクトの説明（概要 / 使っている技術 / よく使うコマンド）の下書き。中身は**次の `/hirai-lite:init` で伺って埋めます**。すでにある場合は触りません
+- `docs/` — 書類の置き場。**無ければ作ります**（`docs/tasks/` やることの一覧表 / `docs/draft/` 設計メモ / `docs/rules-reference/` 困ったことの記録帳）。すでに `.claude/tasks/` を使っている場合はそちらを続けます
 
 **このとき、ファイルを作るためのシェルコマンド（`cp` `mkdir` `python3` など）を実行してよいか、そのつど聞かれます。**
 
@@ -90,9 +90,13 @@ Claude Code で次の 2 行を順に実行します。
 
 > **ここで別の確認が出ることがあります。** 開いたプロジェクト自身が直下に `.mcp.json` を持っている場合、そのサーバーについて「つないでよいか」を別途聞かれます。これはプラグインとは無関係で、そのプロジェクトが持ち込む設定です。答えないままにすると `⏸ Pending approval` と表示され、**そのサーバーだけが使えません**（プラグイン側の 2 つや、決まりごと・コマンド・画面下部の表示には影響しません）。いまの状態を見るには `claude mcp list`、答え直すには `claude mcp reset-project-choices` です。
 
-### 5. セッションを閉じて開き直します
+### 5. セッションを閉じて開き直し、もう一度 `/hirai-lite:init` と入力します
 
-決まりごとはセッションを始めるときに読み込まれるため、`/hirai-lite:init` を実行したセッションにはまだ反映されていません。閉じて開き直すと有効になります。これで準備完了です。
+決まりごとはセッションを始めるときに読み込まれるため、`/hirai-lite:init` を実行したセッションにはまだ反映されていません。閉じて開き直すと有効になります。
+
+**開き直したら、もう一度 `/hirai-lite:init` と入力してください。今度は案件のことを伺います。** 同梱の `grilling`（[同梱している skill](#同梱している-skillスキル)）が、ゴール → 背景 → スコープ → 体制 → 技術構成 → やること の順に、**前提が決まった質問だけをまとめて出し、それぞれに推奨回答を添えて**聞いてきます。ファイルの中身や依存関係のような「調べれば分かること」は聞かれません（AI が自分で読みます）。伺った内容は `CLAUDE.md` と `docs/`（`overview.md` / `requirements.md` / `architecture.md` / `tasks/list.md`）に書き込まれます。**伺えなかった章のファイルは作られません**（見出しだけの空ファイルを置かないため）。
+
+これで準備完了です。2 回目の `/init` を済ませたあとは、`/init` は「すべてそのまま」と報告するだけになります。
 
 ### うまくいったか確かめる
 
@@ -206,7 +210,7 @@ Claude Code 2.1.247 で実際に確かめたところ、この表示が出てい
 
 ## mode（進め方）とは
 
-作業の進め方の設定で、値は 2 つだけ。`.claude/mode.yml` に入っていて、**`/hirai-lite:init` の 4 問目で選ぶ**（v1.7.0 から。すでに `mode.yml` がある場合は聞かれず、いまの設定がそのまま残る）。後から `/hirai-lite:config` で切り替えられる（一覧の「1. mode（進め方）」）。画面下部の表示にも出る。
+作業の進め方の設定で、値は 2 つだけ。`.claude/mode.yml` に入っていて、**`/hirai-lite:init` の 3 問目で選ぶ**（v1.7.0 から。すでに `mode.yml` がある場合は聞かれず、いまの設定がそのまま残る）。後から `/hirai-lite:config` で切り替えられる（一覧の「1. mode（進め方）」）。画面下部の表示にも出る。
 
 利用者に見せる表記は **`<正式名>（<短い解説>）`** に統一している（v1.6.0 から）。正式名だけでは設定を触ったことのない人に伝わらず、解説だけでは `mode.yml` や `settings.json` の中身と結び付かないため、両方を出す。同じ規則を `ultracode（深く考えて自動で手分けする。利用量が増える）` と `statusLine（画面下部の情報表示）` にも適用している。
 
@@ -269,6 +273,26 @@ Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: normal（確認あり） | f
 - **すでに自分で `context7` を設定している場合、プラグイン側は登録されないことがある。** 起動コマンドが完全に一致するものは重複として 1 つにまとめられるため。動作に支障は無いが、`claude plugin details hirai-lite` の外部ツール接続の数が実際の状態と違って見えることがある。実際につながっている一覧は `claude mcp list` で確かめる。
 - **起動できなくてもセッションは壊れない。** `uvx` や `npx` が無い環境では該当サーバーが接続失敗として表示されるだけで、rules / commands / hooks / 画面下部の表示はそのまま動く。使わないなら `/plugin` の設定でそのサーバーを無効にする。
 
+## 同梱している skill（スキル）
+
+`skills/` に 1 つ。コマンドと違って**こちらから呼び出さなくてよい** — 必要な場面を AI が判断して自分で読む手引き。
+
+| 名前 | 役割 |
+|---|---|
+| `grilling` | 決めごとを掘り下げて聞く進め方。決定事項を design tree に置き、**前提が確定した質問だけをまとめて 1 ラウンドで出し、各問に推奨回答を添える**。事実（ファイルの中身・依存・既存コマンド）は AI が自分で調べ、**決定だけを利用者に聞く** |
+
+`/hirai-lite:init` の 2 回目（案件ヒアリング）がこれを呼ぶ。単体でも「この案を詰めたい」「grill me」のように頼めば起動する。
+
+[mattpocock/skills](https://github.com/mattpocock/skills)（MIT License, Copyright (c) 2026 Matt Pocock）の `skills/productivity/grilling/SKILL.md` を **1 バイトも変えずに**取り込み、出典・commit・sha256 を [`NOTICE.md`](NOTICE.md) に保持している。
+
+**上流にはこれを含む 25 個のスキルがある。** 全部欲しいときは、このプラグインとは別に入れる:
+
+```
+claude plugins install mattpocock-skills
+```
+
+（このハーネスが `grilling` だけを同梱しているのは、`rules/_meta.md` の「数の予算」で skill を 3 個までに抑えているため。25 個を抱えると `name` と `description` が常時ロードされて予算を食う。）
+
 ## 同梱しているエージェント
 
 `agents/` に 3 つ。`rules/code.md` のレビュー規範（「観点の異なる reviewer を 2 本以上並列起動する」）が名指しする相手を実体として配るためのもの。
@@ -294,11 +318,11 @@ Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: normal（確認あり） | f
 
    commands / hooks / agents / MCP サーバー定義はこの時点で有効になる。**rules はまだ配られていない** — プラグインには rules というコンポーネントが無いため。
 
-2. **rules を配置する** — 対象プロジェクトを開いて `/hirai-lite:init` を実行する（全プロジェクト共通に入れるなら `/hirai-lite:init user`）。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ（`mode:` の値は手順 1 の質問 4 の答え）、`templates/CLAUDE.md` をリポジトリ直下の `CLAUDE.md` へ（`user` 指定なら `~/.claude/CLAUDE.md`）、`scripts/statusline.sh` と `scripts/tasks-path.sh` を `.claude/` へ配置し、台帳・draft dir・事故記録・`.claude/rules-archive/` を作る。既存ファイルは上書きしない。
+2. **rules を配置する** — 対象プロジェクトを開いて `/hirai-lite:init` を実行する（全プロジェクト共通に入れるなら `/hirai-lite:init user`）。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ（`mode:` の値は手順 1 の質問 3 の答え。ホーム側にすでにあればそちらを使い、プロジェクト側に新設しない）、`templates/CLAUDE.md` をリポジトリ直下の `CLAUDE.md` へ（`user` 指定なら `~/.claude/CLAUDE.md`）、`scripts/statusline.sh` と `scripts/tasks-path.sh` を `.claude/` へ配置し、台帳・draft dir・事故記録・`.claude/rules-archive/` を作る。既存ファイルは上書きしない。
 
-   `docs/` を持つリポジトリでは台帳 / draft / 事故記録が `docs/` 配下（`docs/tasks/list.md` `docs/draft/` `docs/rules-reference/incidents.md`）に、持たないリポジトリでは `.claude/` 配下（`.claude/tasks/list.md` `.claude/draft/` `.claude/rules-reference/incidents.md`）に作られる。`rules/core.md` と `rules/_meta.md` はこの解決順をそのまま書いているため、`docs/` 無しのリポジトリでも存在しないパスを指さない。`user` 指定時は台帳 / draft / 事故記録を作らず、`statusLine.command` だけ絶対パスへ書き換える。
+   台帳 / draft / 事故記録は **`docs/` 配下に作る（`docs/` が無ければ作る）**。例外は `.claude/tasks/` がすでにある既存環境で、そのときは `.claude/` 配下（`.claude/tasks/list.md` `.claude/draft/` `.claude/rules-reference/incidents.md`）を続けて使う（`docs/` 側に作るとパス解決が `docs/` を先に見るため既存の台帳が隠れる）。`rules/core.md` と `rules/_meta.md` はこの解決順をそのまま書いているため、`docs/` 無しのリポジトリでも存在しないパスを指さない。`user` 指定時は台帳 / draft / 事故記録を作らず、`statusLine.command` だけ絶対パスへ書き換える。
 
-3. **CLAUDE.md を埋める** — 雛形（`templates/CLAUDE.md`）は手順 2 の `/init` が置く（無いときだけ置き、あれば触らない）。`<...>` プレースホルダを実値（概要 / Tech Stack / Commands）に置換する。行動規範は書かない。それは `.claude/rules/core.md` の担当。**`CLAUDE.md` は T0（常時ロード）の 1 本**で、`tests/smoke.sh` case 4 の予算計算にも `templates/CLAUDE.md` として含まれている。雛形をプラグイン直下でなく `templates/` に置いているのは、`claude plugin validate --strict` が「プラグインルートの `CLAUDE.md` は project context として読まれない」と警告するため（v1.7.0 で移動）。
+3. **CLAUDE.md を埋める（`/init` の 2 回目）** — 雛形（`templates/CLAUDE.md`）は手順 2 の `/init` が置く（無いときだけ置き、あれば触らない）。**次のセッションで `/hirai-lite:init` をもう一度実行すると、`grilling` skill でヒアリングを行い、`<...>` プレースホルダを実値（概要 / Tech Stack / Commands）に置換し、`docs/` に得られた分だけ書類を作る。** 第 2 段階に入る条件は「配置先に `rules` / `settings.json` / `mode.yml` / `statusline.sh` の 4 つが揃っている」かつ「対応する `CLAUDE.md` に `<...>` が 1 行以上残っている」の 2 つ（埋め終われば入らない）。行動規範は書かない。それは `.claude/rules/core.md` の担当。**`CLAUDE.md` は T0（常時ロード）の 1 本**で、`tests/smoke.sh` case 4 の予算計算にも `templates/CLAUDE.md` として含まれている。雛形をプラグイン直下でなく `templates/` に置いているのは、`claude plugin validate --strict` が「プラグインルートの `CLAUDE.md` は project context として読まれない」と警告するため（v1.7.0 で移動）。
 
 4. **ロード検証** — **`/init` の次に開くセッション**で行う（rules は起動時に読まれるため、`/init` を実行したセッション内では確認できない。`/init` の終了条件にも含めていない）。新しいセッションを開き、T0 の 3 ファイルが載っていること、T1 が `paths:` 該当ファイルを開くまで載らないことを確認する。想定と違えば frontmatter を直す。
 
@@ -313,11 +337,12 @@ Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: normal（確認あり） | f
 | `.mcp.json` | 同梱する MCP サーバー 2 つの定義（キーは環境変数参照のみ） |
 | `agents/` | サブエージェント 3 個（MIT、出典は `NOTICE.md`） |
 | `commands/` | スラッシュコマンド 12 個 |
+| `skills/` | スキル 1 個（`grilling`。MIT、出典は `NOTICE.md`）。`plugin.json` に `skills` キーは書かない（既定で読まれる） |
 | `hooks/` | `hooks.json` + SessionStart / UserPromptSubmit の 2 本 |
 | `rules/` | **プラグインは読まない。** `/init` が配置先の `.claude/rules/` へ配る素材 |
 | `scripts/` | hook / statusline が source する共通ライブラリ + `/init` の二重ロード検査 |
 | `templates/` | `settings.json` / `mode.yml` / `CLAUDE.md` / draft / task の雛形（`CLAUDE.md` は `/init` が導入先へ置く。プラグイン直下に置くと `validate --strict` が警告するため `templates/` に置いている） |
-| `tests/smoke.sh` | 自己検証 10 case（予算監査を含む） |
+| `tests/smoke.sh` | 自己検証 10 case（予算監査を含む。hook 5 / command 12 / skill 3 / case 10 の数の予算も case 6 が見る） |
 | `CHANGELOG.md` | 版ごとの変更点。v0.6.0 以前の既知の不具合もここに記録 |
 | `CONTRIBUTING.md` | 開発の進め方。**`main` は常に配布物**（タグではなく `main` の最新が利用者に届く） |
 
