@@ -1,7 +1,7 @@
 {
   "name": "hirai-lite",
   "description": "常時ロードされるコンテキストに予算を置き、ルールの追加を 6 工程パイプラインで通す rules 3 層構造の軽量ハーネス。",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": {
     "name": "thirai-classlab"
   },
