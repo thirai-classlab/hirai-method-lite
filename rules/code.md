@@ -37,4 +37,4 @@ paths:
 - **commit 前に build・test・lint を通す**: 実装者は、3 つが green であることを確認してから commit する ／ 例: `npm run build && npm test && npm run lint` ／ 失効: CI が push 前に必ず落とす構成にしたとき
 
 ---
-背景・過去の経緯・事故記録: [`docs/rules-reference/README.md`](../../docs/rules-reference/README.md)
+背景・過去の経緯・事故記録: `docs/rules-reference/`（`docs/` が無いリポジトリでは `.claude/rules-reference/`）

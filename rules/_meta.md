@@ -1,6 +1,6 @@
 # ルール追加のルール
 
-1. **二度目で書く**: 事故 2 回目で初めてルール化する。1 回目は `docs/rules-reference/incidents.md` に 1 行記録して終える
+1. **二度目で書く**: 事故 2 回目で初めてルール化する。1 回目は事故記録 (`docs/` があれば `docs/rules-reference/incidents.md`、無ければ `.claude/rules-reference/incidents.md`) に 1 行記録して終える
 2. **既定は T1**: 新規ルールは `paths:` 付きで置く。T0 にするには「全作業に例外なく効く」ことの立証が要る
 3. **予算制**: T0 合計 3,000 tokens。超過時は既存 1 件を T1/T2 へ降格するまで追加しない
 4. **1 ルール 1 事象・3 行以内**: 3 行で書けないものはルールでなく設計課題として扱う
@@ -15,7 +15,7 @@
 |---|---|---|
 | T0 | `CLAUDE.md` / `.claude/rules/_meta.md` / `.claude/rules/core.md` | 毎セッション常時（合計 3,000 tokens） |
 | T1 | `.claude/rules/<domain>.md`（`paths:` あり） | 該当ファイルを触った時（1 file 2,000 tokens） |
-| T2 | `docs/rules-reference/**` | AI が明示 Read した時のみ |
+| T2 | `docs/rules-reference/**`（無ければ `.claude/rules-reference/**`） | AI が明示 Read した時のみ |
 | T3 | `.claude/rules-archive/**` | ロードしない（失効ルールの履歴保持） |
 
 T2 は `.claude/rules/` の外に置く。`rules/` 配下は再帰的に発見されるため、`paths:` を書き忘れた瞬間に T0 へ昇格する事故を物理配置で防ぐ。T0 から T2 へのポインタは張らない（ポインタは T1 から張る）。

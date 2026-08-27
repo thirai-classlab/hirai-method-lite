@@ -1,15 +1,27 @@
 ---
-description: docs/draft/<slug>.md に設計 draft を起こす。承認を得るまでタスク化しない、設計→承認→タスク化フローの起点。
+description: draft dir (docs/draft/ または .claude/draft/) に設計 draft を起こす。承認を得るまでタスク化しない、設計→承認→タスク化フローの起点。
 ---
 
 # /new-draft <slug>
 
 `<slug>` は lowercase の英数字とハイフンのみ、3〜49 文字。引数が空、または書式に一致しない場合は正しい slug を聞き返して停止する。
 
+## draft dir の解決 (最初に 1 回)
+
+draft dir は `$HARNESS_DRAFT_DIR` > 既存の `docs/draft/` > 既存の `.claude/draft/` > (どちらも無ければ) `docs/` があるリポジトリは `docs/draft/`、無ければ `.claude/draft/` の順に解決する。台帳と同じ解決順。
+
+```bash
+DRAFT="$(bash -c '. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; harness_draft_dir "$PWD"')"
+mkdir -p "$DRAFT"
+echo "$DRAFT"
+```
+
+以降この文書の `docs/draft/` は `$DRAFT/` に読み替える。
+
 ## 手順
 
-1. `ls docs/draft/<slug>.md` が exit 0 を返したら「既に存在する」と報告し、上書きせずに終了する。
-2. `docs/draft/<slug>.md` を以下の骨格で新規作成する。
+1. `ls "$DRAFT/<slug>.md"` が exit 0 を返したら「既に存在する」と報告し、上書きせずに終了する。
+2. `$DRAFT/<slug>.md` を以下の骨格で新規作成する。
 
 ```markdown
 ---
@@ -47,15 +59,15 @@ approved_at:
 ```
 
 3. §1〜§6 を埋める。§5 は `npm test` の exit 0 のような判定できる形にする。埋められない項目は `未定:` を付けて残し、user に質問する。
-4. 禁止語彙を検査する。`grep -nE '適切に|必要に応じて|可能な限り|十分に|慎重に' docs/draft/<slug>.md` が 1 件でもヒットしたら、その行を判定できる条件へ書き換えて再検査する。
+4. 禁止語彙を検査する。`grep -nE '適切に|必要に応じて|可能な限り|十分に|慎重に' "$DRAFT/<slug>.md"` が 1 件でもヒットしたら、その行を判定できる条件へ書き換えて再検査する。
 5. draft の §3 採用案と §5 完了条件を要約してチャットに提示し、`承認しますか? [y/N]` と聞く。
 6. user が承認したら frontmatter の `approved_at:` に当日の日付を入れ、§7 に `- YYYY-MM-DD 承認` を追記する。承認が無い間 `approved_at:` は空のままにする。
 
 ## 判定できる終了条件
 
-- `docs/draft/<slug>.md` が存在する。
+- `$DRAFT/<slug>.md` が存在する (`docs/` があれば `docs/draft/`、無ければ `.claude/draft/` の下)。
 - 禁止語彙 grep が 0 件。
-- 承認済なら `grep '^approved_at: 20' docs/draft/<slug>.md` が exit 0。
+- 承認済なら `grep '^approved_at: 20' "$DRAFT/<slug>.md"` が exit 0。
 
 ## この後
 

@@ -17,11 +17,13 @@ Claude Code 用の軽量ハーネス。**常時ロードされるコンテキス
 
    commands / hooks はこの時点で有効になる。**rules はまだ配られていない** — プラグインには rules というコンポーネントが無いため。
 
-2. **rules を配置する** — 対象リポジトリを開いて `/hirai-lite:init` を実行する。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ配置し、台帳と `.claude/rules-archive/` を作る。既存ファイルは上書きしない。
+2. **rules を配置する** — 対象リポジトリを開いて `/hirai-lite:init` を実行する。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ、`scripts/statusline.sh` と `scripts/tasks-path.sh` を `.claude/` へ配置し、台帳・draft dir・事故記録・`.claude/rules-archive/` を作る。既存ファイルは上書きしない。
+
+   `docs/` を持つリポジトリでは台帳 / draft / 事故記録が `docs/` 配下（`docs/tasks/list.md` `docs/draft/` `docs/rules-reference/incidents.md`）に、持たないリポジトリでは `.claude/` 配下（`.claude/tasks/list.md` `.claude/draft/` `.claude/rules-reference/incidents.md`）に作られる。`rules/core.md` と `rules/_meta.md` はこの解決順をそのまま書いているため、`docs/` 無しのリポジトリでも存在しないパスを指さない。
 
 3. **CLAUDE.md を埋める** — このリポジトリの `CLAUDE.md` を雛形として対象リポジトリのルートに置き、`<...>` プレースホルダを実値（概要 / Tech Stack / Commands）に置換する。行動規範は書かない。それは `.claude/rules/core.md` の担当。
 
-4. **ロード検証** — 新しいセッションを開き、T0 の 3 ファイルが載っていること、T1 が `paths:` 該当ファイルを開くまで載らないことを確認する。想定と違えば frontmatter を直す。
+4. **ロード検証** — **`/init` の次に開くセッション**で行う（rules は起動時に読まれるため、`/init` を実行したセッション内では確認できない。`/init` の終了条件にも含めていない）。新しいセッションを開き、T0 の 3 ファイルが載っていること、T1 が `paths:` 該当ファイルを開くまで載らないことを確認する。想定と違えば frontmatter を直す。
 
 更新は `/update`（`/plugin update` → `/hirai-lite:init` で rules を再配置）。
 
@@ -32,6 +34,12 @@ Claude Code 用の軽量ハーネス。**常時ロードされるコンテキス
 無効化するときは、導入先の `.claude/settings.json` から `ultracode` キーを削除するか `false` にする。プラグイン側の素材を編集する必要はない。
 
 併せて `"workflowSizeGuideline": "small"` を置き、1 workflow あたりのエージェント数を 5 未満に抑えている。根拠は実測（2026-08-21）。同時 4 subagent を起動した際、3 件が 600 秒無進捗で stall し 1 件が API 接続断となり成果物はゼロだった。同時 2 件へ落としたところ 5 件連続で成功した。並列度を上げるほど stall 率が上がるため、既定は `small` とする。
+
+## statusline について
+
+`/hirai-lite:init` は `scripts/statusline.sh` と `scripts/tasks-path.sh` を導入先の `.claude/` へ複製し、`templates/settings.json` の `statusLine.command`（`bash "${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh"`）から呼ぶ。表示は 1 行で `<model> | ctx <N>% ・5h <N>% ・7d <N>% | mode: <mode> | <branch> | todo <N>`。
+
+プラグイン側のパスを直接指さないのは、**`${CLAUDE_PLUGIN_ROOT}` が settings.json では展開されないため**（[公式仕様](https://code.claude.com/docs/en/plugins-reference.md)の「Where `${CLAUDE_PLUGIN_ROOT}` is Available」に statusLine と project settings は含まれない）。手で配線する場合は `.claude/settings.json` に上記 `statusLine` ブロックを足すか、絶対パスを書く。不要なら `statusLine` キーを消す。
 
 ## このリポジトリの構成
 
@@ -56,7 +64,7 @@ Claude Code は `.claude/rules/*.md` を再帰的に発見する。`paths:` fron
 |---|---|---|---|---|
 | **T0 常時** | `CLAUDE.md` / `.claude/rules/*.md`（frontmatter 無し） | 毎セッション | **合計 3,000 tokens** | 全作業に例外なく効く規範のみ。既定では入れない |
 | **T1 条件** | `.claude/rules/*.md`（`paths:` あり） | 該当ファイルを触った時 | 1 file 2,000 tokens | ドメイン規範（タスク運用 / コード / インフラ） |
-| **T2 参照** | `docs/rules-reference/**` | AI が明示 Read した時のみ | 無制限 | 背景・事故記録・詳細手順・過去の経緯 |
+| **T2 参照** | `docs/rules-reference/**`（`docs/` が無ければ `.claude/rules-reference/**`） | AI が明示 Read した時のみ | 無制限 | 背景・事故記録・詳細手順・過去の経緯 |
 | **T3 退避** | `.claude/rules-archive/**` | ロードしない | — | 失効したルール（履歴として保持） |
 
 T2 を `.claude/rules/` の**外**に置くのは意図的。`rules/` の中に置くと `paths:` を書き忘れた瞬間に T0 へ昇格してしまう。物理配置でこの事故を防いでいる。同じ理由で T0 から T2 へのポインタは張らない（張ると T0 が背景説明で膨らむ）。ポインタは T1 から張る。
@@ -67,7 +75,7 @@ T2 を `.claude/rules/` の**外**に置くのは意図的。`rules/` の中に�
 
 **1. 既定は「入れない」。** T0 は 3,000 tokens の hard cap を持つ。追加は容易で削除は困難、という非対称を予算で打ち消す。上限に達した後の追加は、既存 1 件を T1/T2 へ降格するまで通らない。
 
-**2. 事故 2 回目で初めてルール化する。** 1 回目は `docs/rules-reference/incidents.md` に 1 行記録するだけ。推測による予防ルールを禁じる。前身のハーネスでは、規範の多くが発火実績ゼロの先回りだった。
+**2. 事故 2 回目で初めてルール化する。** 1 回目は事故記録（`docs/rules-reference/incidents.md`、`docs/` が無ければ `.claude/rules-reference/incidents.md`）に 1 行記録するだけ。推測による予防ルールを禁じる。前身のハーネスでは、規範の多くが発火実績ゼロの先回りだった。
 
 **3. 機械強制は不可逆操作のみ。** `settings.json` の `deny` / `ask` と hook で止めてよいのは「間違えたら戻せない」操作だけ。無害な操作を止める guard は速度を削り、やがて無効化されて規範と実挙動の乖離を生む。
 

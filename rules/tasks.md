@@ -3,6 +3,7 @@ paths:
   - "docs/tasks/**"
   - "docs/draft/**"
   - ".claude/tasks/**"
+  - ".claude/draft/**"
 ---
 # タスク運用
 
@@ -24,9 +25,9 @@ paths:
 
 ## 設計 draft
 
-- **設計の起点は draft**: 新機能・仕様変更は `docs/draft/<slug>.md` に設計を起こす ／ 例: `docs/draft/login-rate-limit.md` ／ 失効: なし
+- **設計の起点は draft**: 新機能・仕様変更は draft dir (`docs/` があれば `docs/draft/`、無ければ `.claude/draft/`) の `<slug>.md` に設計を起こす ／ 例: `draft/login-rate-limit.md` ／ 失効: なし
 - **承認してから台帳に載せる**: メインエージェントは、user 承認を得た draft だけを list.md の行にする ／ 例: draft 末尾に `approved: 2026-08-22` を書いてから `/new-task` 相当の追記をする ／ 失効: なし
-- **未承認は draft に留める**: 承認前の設計は `docs/draft/` に置いたままにし、list.md からリンクしない ／ 例: 検討中の案は draft のまま user レビューに出す ／ 失効: なし
+- **未承認は draft に留める**: 承認前の設計は draft dir に置いたままにし、list.md からリンクしない ／ 例: 検討中の案は draft のまま user レビューに出す ／ 失効: なし
 - **task から draft へリンクする**: メインエージェントは、task の詳細欄に元 draft への相対リンクを書く ／ 例: `詳細: [draft/login-rate-limit.md](../draft/login-rate-limit.md)` ／ 失効: draft を廃止したとき
 
 ## 保留
@@ -35,4 +36,4 @@ paths:
 - **不採用も残す**: 不採用にしたタスクは parking-lot.md から消さず、判断日と理由を残す ／ 例: 「不採用 2026-08-22: 利用者ゼロのため」 ／ 失効: なし
 
 ---
-背景・過去の経緯・事故記録: [`docs/rules-reference/README.md`](../../docs/rules-reference/README.md)
+背景・過去の経緯・事故記録: `docs/rules-reference/`（`docs/` が無いリポジトリでは `.claude/rules-reference/`）

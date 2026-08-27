@@ -1,6 +1,10 @@
 {
   "ultracode": true,
   "workflowSizeGuideline": "small",
+  "statusLine": {
+    "type": "command",
+    "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh\""
+  },
   "permissions": {
     "deny": [
       "Bash(rm -rf:*)",

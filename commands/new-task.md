@@ -22,7 +22,7 @@ mkdir -p "$(dirname "$LIST")"
 printf '# タスク台帳\n\nstatus は 未着手 / 進行中 / 完了 の 3 種。\n\n| # | status | タスク | 概要 | 依存先 | 詳細 |\n|---|--------|-------|------|-------|------|\n' > "$LIST"
 ```
 
-以降この文書の `docs/tasks/list.md` は `$LIST` に、`docs/tasks/` は `$(dirname "$LIST")` に読み替える (タスクファイルは台帳と同じディレクトリに置く)。
+以降この文書の `docs/tasks/list.md` は `$LIST` に、`docs/tasks/` は `$(dirname "$LIST")` に読み替える (タスクファイルは台帳と同じディレクトリに置く)。`docs/draft/` は `harness_draft_dir "$PWD"` が返す draft dir (`docs/` が無ければ `.claude/draft/`) に読み替える。
 
 ## 事前チェック (どれか 1 つでも失敗したら作成しない)
 
