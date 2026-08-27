@@ -44,6 +44,6 @@ T0 は毎セッション常時ロード（合計 3,000 tokens 上限）。T1 は
 
 `.claude/rules/` の中身は プラグイン `hirai-lite` の `/init` が配置する。ルールの追加は `.claude/rules/_meta.md` のパイプライン（`/add-rule`）を通す。`@import` は使わない。
 
-## Mode
+## 進め方 (Mode)
 
-`.claude/mode.yml` の `mode:` が `normal` か `loop` を決める。挙動は `.claude/rules/core.md` の Loop モード条を参照。
+`.claude/mode.yml` の `mode:` で決まる。`normal` = 確認あり / `loop` = 自動。詳細は `.claude/rules/core.md` の該当条。

@@ -27,6 +27,15 @@ Claude Code 用の軽量ハーネス。**常時ロードされるコンテキス
 
 更新は `/update`（`/plugin update` → `/hirai-lite:init` で rules を再配置）。
 
+## mode（進め方）とは
+
+作業の進め方の設定で、値は 2 つだけ。`.claude/mode.yml` に入っていて `/mode normal` / `/mode loop` で切り替える。画面下部の表示にも出る。
+
+| 値 | 表示 | 挙動 |
+|---|---|---|
+| `normal`（既定） | 確認あり | 重要な分かれ道で確認しながら進む |
+| `loop` | 自動 | 確認を求めず最後まで自動で進む（止めたいときは「stop」と伝える） |
+
 ## ultracode について
 
 `/hirai-lite:init` は `templates/settings.json` を配置するため、**導入先で ultracode が既定で有効になる**（`"ultracode": true`）。ultracode は xhigh 推論と、タスクごとの自動 workflow オーケストレーションを常時 on にする設定で、**通常運用よりトークン消費が大きい**。従量課金で使う場合はコスト増を見込むこと。
@@ -37,7 +46,7 @@ Claude Code 用の軽量ハーネス。**常時ロードされるコンテキス
 
 ## statusline について
 
-`/hirai-lite:init` は `scripts/statusline.sh` と `scripts/tasks-path.sh` を導入先の `.claude/` へ複製し、`templates/settings.json` の `statusLine.command`（`bash "${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh"`）から呼ぶ。表示は 1 行で `<model> | ctx <N>% ・5h <N>% ・7d <N>% | mode: <mode> | <branch> | todo <N>`。
+`/hirai-lite:init` は `scripts/statusline.sh` と `scripts/tasks-path.sh` を導入先の `.claude/` へ複製し、`templates/settings.json` の `statusLine.command`（`bash "${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh"`）から呼ぶ。表示は 1 行で `<model> | ctx <N>% ・5h <N>% ・7d <N>% | mode: <進め方> | <branch> | やること <N>`。進め方は値そのものを日本語で出す（`normal` → `確認あり` / `loop` → `自動`、未知の値はそのまま）。実例: `Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: 確認あり | feat/rate-limit | やること 4`。
 
 プラグイン側のパスを直接指さないのは、**`${CLAUDE_PLUGIN_ROOT}` が settings.json では展開されないため**（[公式仕様](https://code.claude.com/docs/en/plugins-reference.md)の「Where `${CLAUDE_PLUGIN_ROOT}` is Available」に statusLine と project settings は含まれない）。手で配線する場合は `.claude/settings.json` に上記 `statusLine` ブロックを足すか、絶対パスを書く。不要なら `statusLine` キーを消す。
 

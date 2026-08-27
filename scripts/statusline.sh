@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# statusLine (1 行): <model> | ctx <N>% ・5h <N>% ・7d <N>% | mode: <mode> | <branch> | todo <N>
+# statusLine (1 行): <model> | ctx <N>% ・5h <N>% ・7d <N>% | mode: <進め方> | <branch> | やること <N>
+# 進め方は normal を「確認あり」、loop を「自動」と日本語で出す (値そのものを平易にする)。
 # stdin は Claude Code の session JSON。jq 不在 / JSON 破損 / 台帳不在 / git 外でも
 # 必ず 1 行返して exit 0 (fail-open)。NO_COLOR が非空なら色を落とす。
 set -uo pipefail
@@ -36,12 +37,17 @@ branch="$(jqf '.workspace.repo.branch')"
 [ -n "$branch" ] || branch="$(git -C "$root" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 [ -n "$branch" ] || branch="-"
 
-# mode: env HC_MODE > mode.yml > normal
+# mode: env HC_MODE > mode.yml > normal。表示は日本語に置き換える (未知の値はそのまま出す)。
 mode="${HC_MODE:-}"
 if [ -z "$mode" ] && [ -f "$root/.claude/mode.yml" ]; then
   mode="$(sed -n 's/^[[:space:]]*mode:[[:space:]]*\([a-z]*\).*/\1/p' "$root/.claude/mode.yml" 2>/dev/null | head -1)"
 fi
 [ -n "$mode" ] || mode="normal"
+case "$mode" in
+  normal) mode_label="確認あり" ;;
+  loop)   mode_label="自動" ;;
+  *)      mode_label="$mode" ;;
+esac
 
 # 未完了タスク: 台帳の解決順は scripts/tasks-path.sh (同じディレクトリ、台帳なしは "—")
 todo="—"
@@ -54,7 +60,7 @@ fi
 printf '%s%s%s%s%s %s %s・%s %s %s・%s %s%s%s %s%s%s%s%s %s\n' \
   "$CYA" "$model" "$R" "$SEP" \
   "$(lbl ctx)" "$ctx" "$DIM" "$(lbl 5h)" "$h5" "$DIM" "$(lbl 7d)" "$d7" \
-  "$SEP" "$(lbl 'mode:')" "$mode" \
+  "$SEP" "$(lbl 'mode:')" "$mode_label" \
   "$SEP" "$branch" \
-  "$SEP" "$(lbl todo)" "$todo"
+  "$SEP" "$(lbl やること)" "$todo"
 exit 0

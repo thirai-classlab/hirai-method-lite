@@ -18,11 +18,17 @@ if [ -z "$root" ] || [ ! -d "$root" ]; then
 fi
 
 # --- mode: env HC_MODE > 導入先の .claude/mode.yml > normal ---
+# 表示は日本語 (normal = 確認あり / loop = 自動)。未知の値はそのまま出す。
 mode="${HC_MODE:-}"
 if [ -z "$mode" ] && [ -f "$root/.claude/mode.yml" ]; then
   mode="$(sed -n 's/^[[:space:]]*mode:[[:space:]]*\([a-z]*\).*/\1/p' "$root/.claude/mode.yml" 2>/dev/null | head -1)"
 fi
 [ -n "$mode" ] || mode="normal"
+case "$mode" in
+  normal) mode_line="確認あり — 重要な分かれ道で確認します (自動で進めるなら /mode loop)" ;;
+  loop)   mode_line="自動 — 確認を求めず進みます (止めるときは「stop」)" ;;
+  *)      mode_line="$mode" ;;
+esac
 
 # --- 未完了タスク数: 台帳 (解決順は scripts/tasks-path.sh) の table 行から数える ---
 list=""
@@ -32,9 +38,9 @@ if [ -f "$plugin_root/scripts/tasks-path.sh" ]; then
   list="$(harness_tasks_file "$root" 2>/dev/null || true)"
 fi
 if [ -n "$list" ] && [ -f "$list" ]; then
-  task_line="未完了タスク: $(harness_open_tasks "$list") 件 (${list#"$root"/})"
+  task_line="やること: $(harness_open_tasks "$list") 件 (${list#"$root"/})"
 else
-  task_line="台帳なし (/new-task が作成します)"
+  task_line="やること一覧はまだありません (/new-task で作れます)"
 fi
 
 # --- 更新検知: 取得は背景 + 24h に 1 回、表示は前回キャッシュ値 (通信を待たない) ---
@@ -57,12 +63,12 @@ for d in "$root/.claude/state" "$root/docs/state"; do
   [ -n "$f" ] && state="${d#"$root"/}/$f" && break
 done
 
-echo "[harness] mode: ${mode}"
+echo "[harness] 進め方: ${mode_line}"
 echo "[harness] ${task_line}"
 if [ -n "$state" ]; then
-  echo "[harness] 直近 state: ${state} (/state resume で復元)"
+  echo "[harness] 前回の続き: ${state} (/state resume で読み込めます)"
 else
-  echo "[harness] 直近 state: なし"
+  echo "[harness] 前回の続き: なし"
 fi
 [ -n "$update_line" ] && echo "$update_line"
 
