@@ -68,13 +68,14 @@ Claude Code で次の 2 行を順に実行します。
 
 ここで初めて、決まりごと（ルール）と設定がそのプロジェクトに置かれます。
 
-**置く前に 3 つだけ質問されます**（v1.4.0 から。v1.6.0 から Claude Code 標準の選択 UI で出ます）。どこに入れるか / ファイルの置き場所 / [`ultracode`（深く考えて自動で手分けする。利用量が増える）](#ultracode-について)を有効にするか の 3 つで、それぞれ既定の選択肢に `(推奨)` が付いているので、そのまま選べば進みます。すでに一式が入っているプロジェクトで実行したときは質問されず、「すべてそのまま」と報告されます。
+**置く前に 4 つだけ質問されます**（v1.4.0 から。v1.6.0 から Claude Code 標準の選択 UI で出ます。v1.7.0 で mode を追加）。どこに入れるか / ファイルの置き場所 / [`ultracode`（深く考えて自動で手分けする。利用量が増える）](#ultracode-について)を有効にするか / [mode（進め方）](#mode進め方とは)を `normal`（確認あり）と `loop`（自動で進む）のどちらにするか の 4 つで、それぞれ既定の選択肢に `(推奨)` が付いているので、そのまま選べば進みます。すでに入っている設定は上書きしないので、該当する質問は省かれます（`mode.yml` がすでにあれば mode は聞かれません）。すでに一式が入っているプロジェクトで実行したときは質問されず、「すべてそのまま」と報告されます。
 
 置かれるのは次のものです。
 
 - `.claude/rules/` — 決まりごと本体
 - `.claude/settings.json` — 安全設定と画面下部の表示
 - `.claude/mode.yml` — mode（進め方）（→ [mode（進め方）とは](#mode進め方とは)）
+- `CLAUDE.md` — このプロジェクトの説明（概要 / 使っている技術 / よく使うコマンド）の下書き。**`<...>` の部分はあとで埋めてください**。すでにある場合は触りません
 - やることの一覧表 / 設計メモの置き場 / 困ったことの記録帳
 
 **このとき、ファイルを作るためのシェルコマンド（`cp` `mkdir` `python3` など）を実行してよいか、そのつど聞かれます。**
@@ -95,7 +96,7 @@ Claude Code で次の 2 行を順に実行します。
 
 ### うまくいったか確かめる
 
-画面下部に「mode: normal（確認あり）」と出ていれば OK です。
+画面下部に「mode: normal（確認あり）」（`loop` を選んだ場合は「mode: loop（自動で進む）」）と出ていれば OK です。
 
 ### 後から変えたいとき
 
@@ -194,7 +195,7 @@ Claude Code 2.1.247 で実際に確かめたところ、この表示が出てい
 | このプロジェクトだけ（既定） | `/hirai-lite:init` | いま開いているフォルダの `.claude/` | このプロジェクトだけ |
 | 全プロジェクト共通 | `/hirai-lite:init user` | ホームの `~/.claude/` | このパソコンで開くすべてのプロジェクト |
 
-全プロジェクト共通に入れると、決まりごと・安全設定・mode（進め方）の設定・statusLine（画面下部の情報表示）がどこでも効きます。ただし**やることの一覧表・設計メモの置き場・困ったことの記録帳は作られません**。これらはプロジェクトごとの中身なので、共通の場所に置いても意味がないためです。
+全プロジェクト共通に入れると、決まりごと・安全設定・mode（進め方）の設定・statusLine（画面下部の情報表示）がどこでも効きます。プロジェクトの説明の下書き（`CLAUDE.md`）も `~/.claude/CLAUDE.md` に置かれます（`.claude/` の中ではなく、この位置が Claude Code の読む場所です）。ただし**やることの一覧表・設計メモの置き場・困ったことの記録帳は作られません**。これらはプロジェクトごとの中身なので、共通の場所に置いても意味がないためです。
 
 ⚠️ **両方には入れないでください。** 同じ決まりごとが 2 か所にあると、まったく同じ文章が 2 回読み込まれ、AI が一度に読める容量を無駄に使います（実測で約 3,600 が約 7,300 になり、このハーネスが自分に課している警告線 6,000 を超えます）。`/hirai-lite:init` はもう一方の場所に同じ名前のファイルを見つけると警告を出すので、案内どおりどちらか一方を消してください。
 
@@ -205,7 +206,7 @@ Claude Code 2.1.247 で実際に確かめたところ、この表示が出てい
 
 ## mode（進め方）とは
 
-作業の進め方の設定で、値は 2 つだけ。`.claude/mode.yml` に入っていて `/hirai-lite:config` で切り替える（一覧の「1. mode（進め方）」）。画面下部の表示にも出る。
+作業の進め方の設定で、値は 2 つだけ。`.claude/mode.yml` に入っていて、**`/hirai-lite:init` の 4 問目で選ぶ**（v1.7.0 から。すでに `mode.yml` がある場合は聞かれず、いまの設定がそのまま残る）。後から `/hirai-lite:config` で切り替えられる（一覧の「1. mode（進め方）」）。画面下部の表示にも出る。
 
 利用者に見せる表記は **`<正式名>（<短い解説>）`** に統一している（v1.6.0 から）。正式名だけでは設定を触ったことのない人に伝わらず、解説だけでは `mode.yml` や `settings.json` の中身と結び付かないため、両方を出す。同じ規則を `ultracode（深く考えて自動で手分けする。利用量が増える）` と `statusLine（画面下部の情報表示）` にも適用している。
 
@@ -293,11 +294,11 @@ Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: normal（確認あり） | f
 
    commands / hooks / agents / MCP サーバー定義はこの時点で有効になる。**rules はまだ配られていない** — プラグインには rules というコンポーネントが無いため。
 
-2. **rules を配置する** — 対象プロジェクトを開いて `/hirai-lite:init` を実行する（全プロジェクト共通に入れるなら `/hirai-lite:init user`）。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ、`scripts/statusline.sh` と `scripts/tasks-path.sh` を `.claude/` へ配置し、台帳・draft dir・事故記録・`.claude/rules-archive/` を作る。既存ファイルは上書きしない。
+2. **rules を配置する** — 対象プロジェクトを開いて `/hirai-lite:init` を実行する（全プロジェクト共通に入れるなら `/hirai-lite:init user`）。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ（`mode:` の値は手順 1 の質問 4 の答え）、`templates/CLAUDE.md` をリポジトリ直下の `CLAUDE.md` へ（`user` 指定なら `~/.claude/CLAUDE.md`）、`scripts/statusline.sh` と `scripts/tasks-path.sh` を `.claude/` へ配置し、台帳・draft dir・事故記録・`.claude/rules-archive/` を作る。既存ファイルは上書きしない。
 
    `docs/` を持つリポジトリでは台帳 / draft / 事故記録が `docs/` 配下（`docs/tasks/list.md` `docs/draft/` `docs/rules-reference/incidents.md`）に、持たないリポジトリでは `.claude/` 配下（`.claude/tasks/list.md` `.claude/draft/` `.claude/rules-reference/incidents.md`）に作られる。`rules/core.md` と `rules/_meta.md` はこの解決順をそのまま書いているため、`docs/` 無しのリポジトリでも存在しないパスを指さない。`user` 指定時は台帳 / draft / 事故記録を作らず、`statusLine.command` だけ絶対パスへ書き換える。
 
-3. **CLAUDE.md を埋める** — このリポジトリの `CLAUDE.md` を雛形として対象プロジェクトのルートに置き、`<...>` プレースホルダを実値（概要 / Tech Stack / Commands）に置換する。行動規範は書かない。それは `.claude/rules/core.md` の担当。
+3. **CLAUDE.md を埋める** — 雛形（`templates/CLAUDE.md`）は手順 2 の `/init` が置く（無いときだけ置き、あれば触らない）。`<...>` プレースホルダを実値（概要 / Tech Stack / Commands）に置換する。行動規範は書かない。それは `.claude/rules/core.md` の担当。**`CLAUDE.md` は T0（常時ロード）の 1 本**で、`tests/smoke.sh` case 4 の予算計算にも `templates/CLAUDE.md` として含まれている。雛形をプラグイン直下でなく `templates/` に置いているのは、`claude plugin validate --strict` が「プラグインルートの `CLAUDE.md` は project context として読まれない」と警告するため（v1.7.0 で移動）。
 
 4. **ロード検証** — **`/init` の次に開くセッション**で行う（rules は起動時に読まれるため、`/init` を実行したセッション内では確認できない。`/init` の終了条件にも含めていない）。新しいセッションを開き、T0 の 3 ファイルが載っていること、T1 が `paths:` 該当ファイルを開くまで載らないことを確認する。想定と違えば frontmatter を直す。
 
@@ -315,7 +316,7 @@ Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: normal（確認あり） | f
 | `hooks/` | `hooks.json` + SessionStart / UserPromptSubmit の 2 本 |
 | `rules/` | **プラグインは読まない。** `/init` が配置先の `.claude/rules/` へ配る素材 |
 | `scripts/` | hook / statusline が source する共通ライブラリ + `/init` の二重ロード検査 |
-| `templates/` | `settings.json` / `mode.yml` / draft / task の雛形 |
+| `templates/` | `settings.json` / `mode.yml` / `CLAUDE.md` / draft / task の雛形（`CLAUDE.md` は `/init` が導入先へ置く。プラグイン直下に置くと `validate --strict` が警告するため `templates/` に置いている） |
 | `tests/smoke.sh` | 自己検証 10 case（予算監査を含む） |
 | `CHANGELOG.md` | 版ごとの変更点。v0.6.0 以前の既知の不具合もここに記録 |
 | `CONTRIBUTING.md` | 開発の進め方。**`main` は常に配布物**（タグではなく `main` の最新が利用者に届く） |

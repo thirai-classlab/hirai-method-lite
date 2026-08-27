@@ -186,9 +186,12 @@ case_3() {
 
 # ---------- case 4: T0 予算 (警告 6,000 tokens / 上限 10,000 tokens) ----------
 # 配布物としての T0 は rules/ 直下の frontmatter 無し + 導入先に置く CLAUDE.md 雛形。
+# 雛形は v1.7.0 で templates/CLAUDE.md へ移した (プラグイン直下に置くと plugin validate が
+# 「root の CLAUDE.md は project context として読まれない」と警告するため)。/init が配る対象で
+# あることは変わらないので、T0 の計測対象からは外さない。
 case_4() {
   local total=0 files=() f bytes tokens warn=""
-  [ -f "$ROOT/CLAUDE.md" ] && files+=("$ROOT/CLAUDE.md")
+  [ -f "$ROOT/templates/CLAUDE.md" ] && files+=("$ROOT/templates/CLAUDE.md")
   if [ -d "$ROOT/rules" ]; then
     while IFS= read -r f; do
       [ -n "$f" ] || continue
@@ -196,7 +199,7 @@ case_4() {
     done < <(find "$ROOT/rules" -maxdepth 1 -name '*.md' 2>/dev/null | sort)
   fi
   if [ "${#files[@]}" -eq 0 ]; then
-    fail 4 "T0 予算 <= ${T0_BUDGET_MAX} tokens" "CLAUDE.md / rules/*.md が未作成のため測定不可"; return
+    fail 4 "T0 予算 <= ${T0_BUDGET_MAX} tokens" "templates/CLAUDE.md / rules/*.md が未作成のため測定不可"; return
   fi
   for f in "${files[@]}"; do
     bytes="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
