@@ -66,7 +66,11 @@ Claude Code で次の 2 行を順に実行します。
 
 ### 4. 使いたいプロジェクトで `/hirai-lite:init` と入力します
 
-ここで初めて、決まりごと（ルール）と設定がそのプロジェクトに置かれます。置かれるのは次のものです。
+ここで初めて、決まりごと（ルール）と設定がそのプロジェクトに置かれます。
+
+**置く前に 3 つだけ質問されます**（v1.4.0 から）。どこに入れるか / ファイルの置き場所 / [濃いめに考える設定（ultracode）](#ultracode-について)を有効にするか の 3 つで、既定のままでよければ「はい」と答えれば進みます。すでに一式が入っているプロジェクトで実行したときは質問されず、「すべてそのまま」と報告されます。
+
+置かれるのは次のものです。
 
 - `.claude/rules/` — 決まりごと本体
 - `.claude/settings.json` — 安全設定と画面下部の表示
@@ -210,9 +214,9 @@ Claude Code 2.1.247 で実際に確かめたところ、この表示が出てい
 
 ## ultracode について
 
-`/hirai-lite:init` は `templates/settings.json` を配置するため、**導入先で ultracode が既定で有効になる**（`"ultracode": true`）。ultracode は xhigh 推論と、タスクごとの自動 workflow オーケストレーションを常時 on にする設定で、**通常運用よりトークン消費が大きい**。従量課金で使う場合はコスト増を見込むこと。
+`templates/settings.json` は `"ultracode": true` を含む。ultracode は xhigh 推論と、タスクごとの自動 workflow オーケストレーションを常時 on にする設定で、**通常運用よりトークン消費が大きい**。従量課金で使う場合はコスト増を見込むこと。
 
-無効化するときは、導入先の `.claude/settings.json` から `ultracode` キーを削除するか `false` にする。プラグイン側の素材を編集する必要はない。
+**v1.4.0 から、`/hirai-lite:init` は配置する前にこれを有効にしてよいか尋ねる**（既定は「有効にする」）。「有効にしない」と答えると、`ultracode` と `workflowSizeGuideline` の 2 キーを外した settings.json を配置する（安全設定 `permissions` と画面下部の表示 `statusLine` は残る）。あとから変えるときは、導入先の `.claude/settings.json` の `ultracode` キーを削除するか `false` にする。プラグイン側の素材を編集する必要はない。
 
 併せて `"workflowSizeGuideline": "small"` を置き、1 workflow あたりのエージェント数を 5 未満に抑えている。根拠は実測（2026-08-21）。同時 4 subagent を起動した際、3 件が 600 秒無進捗で stall し 1 件が API 接続断となり成果物はゼロだった。同時 2 件へ落としたところ 5 件連続で成功した。並列度を上げるほど stall 率が上がるため、既定は `small` とする。
 
