@@ -14,7 +14,7 @@ argument-hint: "[user]"
 ```bash
 P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
 ls -d "$P/rules" "$P/templates/settings.json" >/dev/null && echo "素材 $P (版 $(cat "$P/VERSION" 2>/dev/null))"
-[ -d .claude/tasks ] && echo "台帳の置き場 .claude (既存)" || echo "台帳の置き場 docs (無ければ作る)"
+{ [ -d .claude/tasks ] || [ -d .claude/draft ] || [ -d .claude/rules-reference ]; } && echo "旧レイアウトあり (.claude/ の書類を /hirai-lite:update で docs/ へ移す)"; echo "台帳の置き場 docs (無ければ作る)"
 for d in .claude "$HOME/.claude"; do for t in rules settings.json mode.yml statusline.sh; do [ -e "$d/$t" ] && echo "既存 $d/$t"; done; done; for c in CLAUDE.md "$HOME/.claude/CLAUDE.md"; do [ -e "$c" ] && echo "既存 $c"; done; echo "(出ていないものは未配置)"
 # 第 2 段階に進むか: 4 点セットが揃った配置先があり、対応する CLAUDE.md にプレースホルダ <...> が残っている
 SD=; for d in .claude "$HOME/.claude"; do n=0; for t in rules settings.json mode.yml statusline.sh; do [ -e "$d/$t" ] && n=$((n+1)); done; [ "$n" -eq 4 ] && SD="$d"; done
@@ -34,7 +34,7 @@ if [ -n "$CM" ] && [ -f "$CM" ] && [ "$(grep -c '<[^<>]*>' "$CM")" -gt 0 ]; then
 | 2 | `ultracode` | `ultracode`（深く考えて自動で手分けする。利用量が増える）を有効にしますか | `有効にする (推奨)` — 回答が丁寧になりますが、そのぶん利用量（費用）が増えます ／ `有効にしない` — 利用量は増えません。あとから `/hirai-lite:config` で有効にできます |
 | 3 | `mode` | `mode`（進め方）をどちらにしますか | `normal（確認あり）(推奨)` — 重要な分かれ道で確認してから進みます。はじめて使うときはこちら ／ `loop（自動で進む）` — 確認を求めず最後まで進みます。止めたいときは「stop」と伝えます |
 
-**書類の置き場所は聞かない。** このプロジェクトに入れるときは `docs/` を無ければ作って使う (手順 7)。すでに `.claude/tasks/` を使っている既存環境だけはそちらを続ける。 **`AskUserQuestion` が使えないとき** (ツール不在・呼び出しに失敗した等) は、同じ 3 問を平文 1 通で送って返事を待つ (v1.5.0 までのやり方。既定を明記し「はい」の一言で 3 つとも既定で進める)。
+**書類の置き場所は聞かない。** このプロジェクトに入れるときは**常に `docs/`** を使う (無ければ作る、手順 7)。 **`AskUserQuestion` が使えないとき** (ツール不在・呼び出しに失敗した等) は、同じ 3 問を平文 1 通で送って返事を待つ (v1.5.0 までのやり方。既定を明記し「はい」の一言で 3 つとも既定で進める)。
 
 **聞く数を減らす条件。** 当てはまる質問は `AskUserQuestion` に**含めず**、代わりにその 1 行を本文で伝える (質問が 1 つも残らなければ、**`AskUserQuestion` を呼ばずに**その 1 行だけ伝えて手順 2 へ進む)。
 
@@ -124,11 +124,11 @@ bash "$D/statusline.sh" </dev/null
 
 ## 7. 台帳・draft・事故記録を作る（このプロジェクトに入れるときだけ）
 
-台帳 / 設計メモ / 事故記録は**プロジェクトごとの中身**なので、`user` 指定時は作らない。**`docs/` は無ければ作る** — 書類の置き場は `docs/` に寄せるのが既定で、`docs/tasks/` `docs/draft/` `docs/rules-reference/` の 3 つを用意する。**例外は `.claude/tasks/` がすでにあるとき**だけで、そのときは `.claude/` 配下を続けて使う (v1.7.0 までに `docs/` 無しで導入した環境。ここで `docs/` 側に作ると、パス解決が `docs/` を先に見るため既存の台帳が黙って隠れる)。
+台帳 / 設計メモ / 事故記録は**プロジェクトごとの中身**なので、`user` 指定時は作らない。**置き場は常に `docs/`** で、無ければ作る (`docs/tasks/` `docs/draft/` `docs/rules-reference/` の 3 つ)。ただし**旧レイアウト (`.claude/tasks/` などが残っている環境) では、ここでは何も作らず `/hirai-lite:update` の移行手順 (手順 2) に回す** — `docs/` 側に新しい台帳を作ると、パス解決が `docs/` を先に見るため既存の台帳が黙って隠れる (中身は残るが誰も読まなくなる)。
 
 ```bash
-SCOPE=; if [ "$SCOPE" = user ]; then echo "skip 台帳 / 設計メモ / 記録帳 (全プロジェクト共通には作らない)"; else
-if [ -d .claude/tasks ]; then BASE=.claude; else BASE=docs; fi; mkdir -p "$BASE/tasks" "$BASE/draft" "$BASE/rules-reference"; : > "$BASE/draft/.gitkeep"
+SCOPE=; if [ "$SCOPE" = user ]; then echo "skip 台帳 / 設計メモ / 記録帳 (全プロジェクト共通には作らない)"; elif ls -d .claude/tasks .claude/draft .claude/rules-reference 2>/dev/null | grep -q .; then echo "skip 旧レイアウト — .claude/ の書類を /hirai-lite:update で docs/ へ移してから作る"
+else BASE=docs; mkdir -p "$BASE/tasks" "$BASE/draft" "$BASE/rules-reference"; : > "$BASE/draft/.gitkeep"
 [ -e "$BASE/tasks/list.md" ] || printf '# タスク台帳\n\nstatus は 未着手 / 進行中 / 完了 の 3 種。\n\n| # | status | タスク | 概要 | 依存先 | 詳細 |\n|---|--------|-------|------|-------|------|\n' > "$BASE/tasks/list.md"
 [ -e "$BASE/tasks/parking-lot.md" ] || printf '# 保留タスク\n\n| # | 状態 | タスク | 保留理由 | 再開条件 | 元の設計 |\n|---|------|-------|---------|---------|---------|\n' > "$BASE/tasks/parking-lot.md"
 [ -e "$BASE/rules-reference/incidents.md" ] || printf '# 事故記録\n\n1 回目はここに 1 行。2 回目で /add-rule に回す。\n\n| 日付 | 事象 | 影響 | 直し方 | 再発回数 |\n|-----|------|------|-------|--------|\n' > "$BASE/rules-reference/incidents.md"
@@ -136,7 +136,7 @@ ls "$BASE/tasks/list.md" "$BASE/tasks/parking-lot.md" "$BASE/rules-reference/inc
 fi
 ```
 
-`$BASE` が `docs` になったことと、`docs/` が新しくできたかどうかを手元に控える (手順 9 の報告で 1 行使う)。
+`docs/` が新しくできたかどうかを手元に控える (手順 9 の報告で 1 行使う)。`skip 旧レイアウト` と出たときは、手順 9 の報告で書類の行を出さず、代わりに `/hirai-lite:update` を案内する 1 行を書く。
 
 ## 8. 二重ロードを調べる
 
@@ -180,7 +180,7 @@ docs/ の書類を埋めます。**
 
 - 質問 2 で「有効にしない」を選ばれたら、3 行目を `✅ ultracode（深く考えて自動で手分けする設定）は入れていません（利用量は増えません）` に差し替える。
 - 質問 3 で `loop（自動で進む）` を選ばれたら、mode の 2 行を `✅ mode（進め方）の設定を置きました → <実際の書き込み先>（いまは loop（自動で進む））` ＋ `後から /hirai-lite:config で normal（確認あり）に戻せます。止めたいときは「stop」と伝えてください` に差し替える。**どちらを選んでも「後から /hirai-lite:config で変えられます」の 1 行は必ず残す。** パスは手順 6 の `$MF` の実測値を書く（ホーム側だった場合は `~/.claude/mode.yml` と出る）。
-- `docs/` を新しく作ったときは、台帳の行の前に 1 行足す: `✅ 書類の置き場を作りました → docs/`。`.claude/` 側を続けて使ったときはパスを `.claude/…` に差し替える。
+- `docs/` を新しく作ったときは、台帳の行の前に 1 行足す: `✅ 書類の置き場を作りました → docs/`。手順 7 が `skip 旧レイアウト` だったときは台帳まわりの 3 行を出さず、代わりに 1 行書く: `やることの一覧表などは .claude/ の下にあります。/hirai-lite:update を実行すると docs/ へ移します（中身はそのまま移動します）。`
 - `CLAUDE.md` がすでにあった場合は、その 2 行を出さず「そのままにしたもの」に数える (中身は 1 バイトも触っていない)。手順 1 で「すでに一式が入っています」と伝えた再実行のときは、1 行目を `すでに入っている一式を確認しました。変更はありません。` にし、`✅` 行を出さずに「そのままにしたもの」の件数と一覧だけを書く。
 - `user` 指定時は 1 行目を `すべてのプロジェクトで使えるようにしました。` にし、パスを `~/.claude/…` に差し替え、**タスク一覧表 / 設計メモの置き場 / 困ったことの記録帳の 3 行を省く**。代わりに 1 行足す: `やることの一覧表と設計メモは、プロジェクトごとの中身なので作っていません（各プロジェクトで /hirai-lite:init を実行すると作られます）。`
 - 手順 8 の警告が出ていたら、報告の末尾にその全文をそのまま貼る。中身が違うファイルがあれば末尾に 1 行足し、指示を待ってから書き換える。例: `.claude/settings.json はすでにあり、中身が違います。足したい安全設定が 4 件あります。入れてよいですか?`
@@ -244,7 +244,7 @@ docs/ の書類を埋めます。**
 
 - `ls "$D"/rules/*.md` が 5 件返し、手順 3 の層判定が T0 2 本 / T1 3 本になる。
 - `python3 -m json.tool "$D/settings.json"` が exit 0。質問 2 で「有効にしない」を選ばれた場合は加えて `grep -c 'ultracode\|workflowSizeGuideline' "$D/settings.json"` が 0。
-- `ls "$D/rules-archive/.gitkeep" "$D/statusline.sh"` が exit 0。進め方は `ls "$MF"` が exit 0 で `grep -c '^mode: \(normal\|loop\)$' "$MF"` が 1 (質問 3 で選ばれた値、既存を残したときはその値のまま)。**`$MF` がホーム側だったときは `.claude/mode.yml` が作られていないこと** (`ls .claude/mode.yml` が exit 1)。CLAUDE.md も置き場に在る (`ls CLAUDE.md`、`user` 指定なら `ls "$HOME/.claude/CLAUDE.md"`)。このプロジェクトに入れたときは加えて `ls -d docs` (または既存の `.claude`) と手順 7 の最終行 (台帳 / parking-lot / incidents / draft dir の 4 パス) も exit 0。
+- `ls "$D/rules-archive/.gitkeep" "$D/statusline.sh"` が exit 0。進め方は `ls "$MF"` が exit 0 で `grep -c '^mode: \(normal\|loop\)$' "$MF"` が 1 (質問 3 で選ばれた値、既存を残したときはその値のまま)。**`$MF` がホーム側だったときは `.claude/mode.yml` が作られていないこと** (`ls .claude/mode.yml` が exit 1)。CLAUDE.md も置き場に在る (`ls CLAUDE.md`、`user` 指定なら `ls "$HOME/.claude/CLAUDE.md"`)。このプロジェクトに入れたときは加えて `ls -d docs` と手順 7 の最終行 (台帳 / parking-lot / incidents / draft dir の 4 パス) も exit 0 (手順 7 が `skip 旧レイアウト` だった場合を除く)。
 - 手順 8 を実行済み。警告が出た場合は報告に転記済み。
 
 ### 第 2 段階（手順 10）

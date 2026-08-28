@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # 台帳 / 設計 draft / 事故記録 / 進め方 / ルールの パス解決を 1 箇所に集める共通ライブラリ。source して使う。
 #
+# **プロジェクトの書類は常に docs/ に置く** (v1.9.0)。.claude/ 側を見続けるのは、v1.7.0 までに
+# 導入した環境が /hirai-lite:update で docs/ へ移行するまでの間、および移行しない選択をした環境で
+# 台帳を見失わないため。解決順そのものは v1.8.0 から 1 バイトも変えていない。
+#
 # 共通の解決順: env 上書き > 既存パス (docs 側 → .claude 側) > docs/ の有無で決める
 #   台帳     : HARNESS_TASKS_FILE     > docs/tasks/list.md            > .claude/tasks/list.md
 #   draft    : HARNESS_DRAFT_DIR      > docs/draft/                   > .claude/draft/

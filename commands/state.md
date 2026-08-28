@@ -22,7 +22,7 @@ git log --oneline -5
 git status --porcelain
 ```
 
-2. 台帳 (`$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > `.claude/tasks/list.md`) を Read し、status が `進行中` の行と `未着手` の行を取り出す。
+2. 台帳 (`$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > 旧レイアウトの `.claude/tasks/list.md`) を Read し、status が `進行中` の行と `未着手` の行を取り出す。
 3. `.claude/state/latest.md` を以下の書式で**上書き**保存する。ディレクトリが無ければ `mkdir -p .claude/state` で作る。
 
 ```markdown

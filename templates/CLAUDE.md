@@ -39,7 +39,7 @@ T0 は毎セッション常時ロード（合計 6,000 tokens で警告 / 10,000
 | T1 | `.claude/rules/tasks.md` | `docs/{tasks,draft}/**` + `.claude/{tasks,draft}/**` | タスク台帳と draft 承認の運用 |
 | T1 | `.claude/rules/code.md` | `src/**`, `tests/**` | 実装とレビューの運用 |
 | T1 | `.claude/rules/ops.md` | `.github/**`, `infra/**`, `*.tf` | CI / インフラの運用 |
-| T2 | `docs/rules-reference/**`（無ければ `.claude/rules-reference/**`） | 明示 Read のみ | 背景・事故記録・詳細手順 |
+| T2 | `docs/rules-reference/**` | 明示 Read のみ | 背景・事故記録・詳細手順 |
 | T3 | `.claude/rules-archive/**` | ロードしない | 失効ルールの履歴 |
 
 `.claude/rules/` の中身は プラグイン `hirai-lite` の `/init` が配置する。ルールの追加は `.claude/rules/_meta.md` のパイプライン（`/add-rule`）を通す。`@import` は使わない。

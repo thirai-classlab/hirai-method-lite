@@ -17,7 +17,7 @@ bash "$CLAUDE_PLUGIN_ROOT/scripts/scope-check.sh" .claude "$HOME/.claude"
 
 ## ① 分類
 1. 「この事象は何回目ですか?」と聞く。
-2. 「1 回目」→ 事故記録 (`bash -c '. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; harness_incidents_file "$PWD"'` が返すパス。`docs/` が無ければ `.claude/rules-reference/incidents.md`) に `- YYYY-MM-DD <事象 1 行> / 対処: <1 行>` を追記して**終了**。ルール化しない。
+2. 「1 回目」→ 事故記録 (`bash -c '. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; harness_incidents_file "$PWD"'` が返すパス。通常は `docs/rules-reference/incidents.md`) に `- YYYY-MM-DD <事象 1 行> / 対処: <1 行>` を追記して**終了**。ルール化しない。
 3. 「2 回目以降」→ 「不可逆操作 (実行後に元へ戻せない操作) ですか?」と聞く。
 4. Yes → `.claude/settings.json` の `permissions.deny` (常に禁止) か `permissions.ask` (承認すれば実行可) に 1 行追加する案を作り工程 ⑤ へ飛ぶ。
 5. No → 工程 ② へ。

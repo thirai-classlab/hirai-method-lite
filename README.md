@@ -78,7 +78,7 @@ Claude Code で次の 2 行を順に実行します。
 - `.claude/settings.json` — 安全設定と画面下部の表示
 - `.claude/mode.yml` — mode（進め方）（→ [mode（進め方）とは](#mode進め方とは)）。**すでにホーム側（`~/.claude/mode.yml`）に持っている人には、プロジェクト側に新しく作りません**（そちらを黙って覆い隠さないため）
 - `CLAUDE.md` — このプロジェクトの説明（概要 / 使っている技術 / よく使うコマンド）の下書き。中身は**次の `/hirai-lite:init` で伺って埋めます**。すでにある場合は触りません
-- `docs/` — 書類の置き場。**無ければ作ります**（`docs/tasks/` やることの一覧表 / `docs/draft/` 設計メモ / `docs/rules-reference/` 困ったことの記録帳）。すでに `.claude/tasks/` を使っている場合はそちらを続けます
+- `docs/` — 書類の置き場。**無ければ作ります**（`docs/tasks/` やることの一覧表 / `docs/draft/` 設計メモ / `docs/rules-reference/` 困ったことの記録帳）。**プロジェクトの書類は常にここです。** 旧版（v1.8.0 以前）で `.claude/tasks/` などに作った環境は、`/hirai-lite:update` が `docs/` へ移します（中身はそのまま移動します）
 
 **このとき、ファイルを作るためのシェルコマンド（`cp` `mkdir` `python3` など）を実行してよいか、そのつど聞かれます。**
 
@@ -149,7 +149,7 @@ Claude Code で次の 2 行を順に実行します。
 | 1 | `/plugin marketplace update hirai-lite` | 配布元の一覧を取り直します。**ここを飛ばすと 2 が「すでに最新です」と答えてしまいます** |
 | 2 | `/plugin update hirai-lite@hirai-lite` | 本体を新しい版に入れ替えます |
 | 3 | Claude Code を閉じて開き直す | ここで入れ替えが実際に効きます |
-| 4 | `/hirai-lite:update` | プロジェクト側にコピーされているスクリプトを最新にします |
+| 4 | `/hirai-lite:update` | プロジェクト側にコピーされているスクリプトを最新にし、旧版で `.claude/` に作った書類を `docs/` へ移します |
 
 **4 を飛ばすと、画面下部の表示が古いままになります。** ステップ 1〜3 で新しくなるのはコマンド・自動処理・エージェント・外部ツール接続だけで、`/hirai-lite:init` のときにプロジェクトへ**コピーされた**ファイル（画面下部の表示スクリプトなど）は、その場に残った古いコピーのままだからです。
 
@@ -322,13 +322,13 @@ claude plugins install mattpocock-skills
 
 2. **rules を配置する** — 対象プロジェクトを開いて `/hirai-lite:init` を実行する（全プロジェクト共通に入れるなら `/hirai-lite:init user`）。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ（`mode:` の値は手順 1 の質問 3 の答え。ホーム側にすでにあればそちらを使い、プロジェクト側に新設しない）、`templates/CLAUDE.md` をリポジトリ直下の `CLAUDE.md` へ（`user` 指定なら `~/.claude/CLAUDE.md`）、`scripts/statusline.sh` と `scripts/tasks-path.sh` を `.claude/` へ配置し、台帳・draft dir・事故記録・`.claude/rules-archive/` を作る。既存ファイルは上書きしない。
 
-   台帳 / draft / 事故記録は **`docs/` 配下に作る（`docs/` が無ければ作る）**。例外は `.claude/tasks/` がすでにある既存環境で、そのときは `.claude/` 配下（`.claude/tasks/list.md` `.claude/draft/` `.claude/rules-reference/incidents.md`）を続けて使う（`docs/` 側に作るとパス解決が `docs/` を先に見るため既存の台帳が隠れる）。`rules/core.md` と `rules/_meta.md` はこの解決順をそのまま書いているため、`docs/` 無しのリポジトリでも存在しないパスを指さない。`user` 指定時は台帳 / draft / 事故記録を作らず、`statusLine.command` だけ絶対パスへ書き換える。
+   台帳 / draft / 事故記録は **常に `docs/` 配下に作る（`docs/` が無ければ作る）**。旧レイアウト（`.claude/tasks/` `.claude/draft/` `.claude/rules-reference/` が残っている環境）のときは**ここでは何も作らず `/hirai-lite:update` の手順 2 に回す** — `docs/` 側に作るとパス解決が `docs/` を先に見るため既存の台帳が黙って隠れるので、先に `mv` で移してから 1 通りに揃える。`scripts/tasks-path.sh` の解決順（`$HARNESS_TASKS_FILE` → `docs/…` → `.claude/…`）は移行前・未移行の環境で台帳を見失わないために残してある。`user` 指定時は台帳 / draft / 事故記録を作らず、`statusLine.command` だけ絶対パスへ書き換える。
 
 3. **CLAUDE.md を埋める（`/init` の 2 回目）** — 雛形（`templates/CLAUDE.md`）は手順 2 の `/init` が置く（無いときだけ置き、あれば触らない）。**次のセッションで `/hirai-lite:init` をもう一度実行すると、`grilling` skill でヒアリングを行い、`<...>` プレースホルダを実値（概要 / Tech Stack / Commands）に置換し、`docs/` に得られた分だけ書類を作る。** 第 2 段階に入る条件は「配置先に `rules` / `settings.json` / `mode.yml` / `statusline.sh` の 4 つが揃っている」かつ「対応する `CLAUDE.md` に `<...>` が 1 行以上残っている」の 2 つ（埋め終われば入らない）。行動規範は書かない。それは `.claude/rules/core.md` の担当。**`CLAUDE.md` は T0（常時ロード）の 1 本**で、`tests/smoke.sh` case 4 の予算計算にも `templates/CLAUDE.md` として含まれている。雛形をプラグイン直下でなく `templates/` に置いているのは、`claude plugin validate --strict` が「プラグインルートの `CLAUDE.md` は project context として読まれない」と警告するため（v1.7.0 で移動）。
 
 4. **ロード検証** — **`/init` の次に開くセッション**で行う（rules は起動時に読まれるため、`/init` を実行したセッション内では確認できない。`/init` の終了条件にも含めていない）。新しいセッションを開き、T0 の 3 ファイルが載っていること、T1 が `paths:` 該当ファイルを開くまで載らないことを確認する。想定と違えば frontmatter を直す。
 
-5. **更新する** — プラグインは自動更新されない。`/plugin marketplace update hirai-lite` → `/plugin update hirai-lite@hirai-lite` → 再起動 → `/hirai-lite:update`（rules を再配置 → プラグイン所有の `statusline.sh` と `tasks-path.sh` を、配置先 (`.claude/` または `$HOME/.claude/`) のうち**実際に在る側だけ**配布版に入れ替え）。利用者向けの手順は[更新する](#更新する自動では新しくなりません)。
+5. **更新する** — プラグインは自動更新されない。`/plugin marketplace update hirai-lite` → `/plugin update hirai-lite@hirai-lite` → 再起動 → `/hirai-lite:update`（旧レイアウトの書類を `docs/` へ `mv` で移す → rules を再配置 → プラグイン所有の `statusline.sh` と `tasks-path.sh` を、配置先 (`.claude/` または `$HOME/.claude/`) のうち**実際に在る側だけ**配布版に入れ替え）。利用者向けの手順は[更新する](#更新する自動では新しくなりません)。
 
 ## このリポジトリの構成
 
@@ -358,7 +358,7 @@ Claude Code は `.claude/rules/*.md` を再帰的に発見する。`paths:` fron
 |---|---|---|---|---|
 | **T0 常時** | `CLAUDE.md` / `.claude/rules/*.md`（frontmatter 無し） | 毎セッション | **警告 6,000 / 上限 10,000 tokens** | 全作業に例外なく効く規範のみ。既定では入れない |
 | **T1 条件** | `.claude/rules/*.md`（`paths:` あり） | 該当ファイルを触った時 | 1 file 2,000 tokens | ドメイン規範（タスク運用 / コード / インフラ） |
-| **T2 参照** | `docs/rules-reference/**`（`docs/` が無ければ `.claude/rules-reference/**`） | AI が明示 Read した時のみ | 無制限 | 背景・事故記録・詳細手順・過去の経緯 |
+| **T2 参照** | `docs/rules-reference/**` | AI が明示 Read した時のみ | 無制限 | 背景・事故記録・詳細手順・過去の経緯 |
 | **T3 退避** | `.claude/rules-archive/**` | ロードしない | — | 失効したルール（履歴として保持） |
 
 T2 を `.claude/rules/` の**外**に置くのは意図的。`rules/` の中に置くと `paths:` を書き忘れた瞬間に T0 へ昇格してしまう。物理配置でこの事故を防いでいる。同じ理由で T0 から T2 へのポインタは張らない（張ると T0 が背景説明で膨らむ）。ポインタは T1 から張る。
@@ -375,7 +375,7 @@ T2 を `.claude/rules/` の**外**に置くのは意図的。`rules/` の中に�
 
 **1. 既定は「入れない」。** T0 は 2 段階の予算を持つ。6,000 tokens で `tests/smoke.sh` case 4 が警告を出し（PASS のまま。余裕があるうちに降格候補を決める）、10,000 tokens が hard cap で FAIL する。追加は容易で削除は困難、という非対称を予算で打ち消す。上限に達した後の追加は、既存 1 件を T1/T2 へ降格するまで通らない。**上限は「入れてよい量」ではない** — 新規ルールの既定はあくまで T1 で、T0 に置くには「全作業に例外なく効く」ことの立証が要る（`_meta.md` 条 2）。
 
-**2. 事故 2 回目で初めてルール化する。** 1 回目は事故記録（`docs/rules-reference/incidents.md`、`docs/` が無ければ `.claude/rules-reference/incidents.md`）に 1 行記録するだけ。推測による予防ルールを禁じる。前身のハーネスでは、規範の多くが発火実績ゼロの先回りだった。
+**2. 事故 2 回目で初めてルール化する。** 1 回目は事故記録（`docs/rules-reference/incidents.md`）に 1 行記録するだけ。推測による予防ルールを禁じる。前身のハーネスでは、規範の多くが発火実績ゼロの先回りだった。
 
 **3. 機械強制は不可逆操作のみ。** `settings.json` の `deny` / `ask` と hook で止めてよいのは「間違えたら戻せない」操作だけ。無害な操作を止める guard は速度を削り、やがて無効化されて規範と実挙動の乖離を生む。
 

@@ -159,7 +159,62 @@ EOF
     rm -rf "$mw"; fail 1 "/config はすでに在る側に書く" "書き込み先=${wf:-無} (期待: ホーム側)"; return
   fi
   rm -rf "$mw"
-  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く"
+
+  # 書類の置き場は常に docs/。v1.7.0 までに導入した環境は .claude/ の下にあるので
+  # /update の手順 2 が docs/ へ移す。その手順書 (commands/update.md の 2-2) の bash を
+  # **逐語に取り出して**実行し、(a) 移した中身が 1 バイトも変わらない (b) 移動先に同名が在れば
+  # 上書きせず両方残す (c) 空になった置き場だけ消える (d) 移行後にセッション冒頭と画面下部が
+  # 移した先 (docs/) の台帳を読む、を確かめる。手順書そのものを走らせるので、
+  # 文書と実挙動が離れた時点でここが落ちる。
+  local mg blk out2 rc2 bad2="" f2
+  blk="$(awk '/^### 2-2\./ {f=1} f && /^```bash$/ {c=1; next} c && /^```$/ {exit} c' "$ROOT/commands/update.md")"
+  if ! printf '%s' "$blk" | grep -q '^mvdir .claude/tasks'; then
+    fail 1 "/update 手順 2-2 の移行手順を取り出せる" "commands/update.md から取り出せない"; return
+  fi
+  mg="$(mktemp -d)"
+  mkdir -p "$mg/proj/.claude/tasks" "$mg/proj/.claude/draft" "$mg/proj/.claude/rules-reference" \
+           "$mg/proj/docs/draft" "$mg/home/.claude"
+  printf '# タスク台帳\n\n| # | status | タスク |\n|---|---|---|\n| 1 | 進行中 | ログイン API |\n| 2 | 完了 | 初期設定 |\n' \
+    > "$mg/proj/.claude/tasks/list.md"
+  printf '# 保留タスク\n\n| 1 | 保留 | 後回しの件 |\n' > "$mg/proj/.claude/tasks/parking-lot.md"
+  printf '# task-1 ログイン API\n\nゴール: ログインできる\n' > "$mg/proj/.claude/tasks/task-1-login.md"
+  printf '# 設計メモ\n\napproved_at: 2026-08-28\n' > "$mg/proj/.claude/draft/foo.md"
+  : > "$mg/proj/.claude/draft/.gitkeep"
+  printf '# 事故記録\n\n- 2026-08-28 台帳を消した / 対処: git restore\n' > "$mg/proj/.claude/rules-reference/incidents.md"
+  printf 'docs 側に先からあった中身\n' > "$mg/proj/docs/draft/foo.md"   # わざと同名衝突を作る
+  cp -R "$mg/proj/.claude" "$mg/orig"
+  out2="$(cd "$mg/proj" && HOME="$mg/home" CLAUDE_PLUGIN_ROOT="$ROOT" bash -c "$blk" 2>&1)"; rc2=$?
+  [ "$rc2" -eq 0 ] || bad2="exit=$rc2"
+  for f2 in tasks/list.md tasks/parking-lot.md tasks/task-1-login.md rules-reference/incidents.md; do
+    cmp -s "$mg/orig/$f2" "$mg/proj/docs/$f2" || bad2="$bad2 ${f2}:移っていない/中身が変わった"
+  done
+  cmp -s "$mg/orig/draft/foo.md" "$mg/proj/.claude/draft/foo.md" || bad2="$bad2 draft/foo.md:元が消えた"
+  grep -q 'docs 側に先からあった中身' "$mg/proj/docs/draft/foo.md" 2>/dev/null \
+    || bad2="$bad2 docs/draft/foo.md:上書きされた"
+  printf '%s' "$out2" | grep -q '移さなかった' || bad2="$bad2 出力に 移さなかった が無い"
+  [ -d "$mg/proj/.claude/tasks" ] && bad2="$bad2 .claude/tasks:空なのに残った"
+  [ -d "$mg/proj/.claude/rules-reference" ] && bad2="$bad2 .claude/rules-reference:空なのに残った"
+  [ -d "$mg/proj/.claude/draft" ] || bad2="$bad2 .claude/draft:中身が残っているのに消えた"
+  if [ -n "$bad2" ]; then rm -rf "$mg"; fail 1 "/update の移行は中身を保ち上書きしない" "$bad2"; return; fi
+  # 2 回目は移す対象が無いので何も動かさない (冪等)
+  out2="$(cd "$mg/proj" && HOME="$mg/home" CLAUDE_PLUGIN_ROOT="$ROOT" bash -c "$blk" 2>&1)"
+  if ! printf '%s' "$out2" | grep -q '移した:'; then rm -rf "$mg"; fail 1 "移行は 2 回目も走る" "$out2"; return; fi
+  local ss2 sl3
+  ss2="$(HOME="$mg/home" CLAUDE_PLUGIN_ROOT="$ROOT" CLAUDE_PROJECT_DIR="$mg/proj" \
+         bash "$HOOKS/session-start.sh" 2>/dev/null)"
+  sl3="$(printf '%s' '{"context_window":{"used_percentage":12}}' \
+         | HOME="$mg/home" NO_COLOR=1 TMPDIR="$mg/tmp" CLAUDE_PROJECT_DIR="$mg/proj" \
+           bash "$ROOT/scripts/statusline.sh" 2>/dev/null | sed -n '1p')"
+  rm -rf "$mg"
+  if ! printf '%s' "$ss2" | grep -qF 'やること: 1 件 (docs/tasks/list.md)'; then
+    fail 1 "移行後はセッション冒頭が docs/ の台帳を読む" "${ss2}"; return
+  fi
+  case "$sl3" in
+    *"やること 1"*) ;;
+    *) fail 1 "移行後は画面下部が docs/ の台帳を読む" "$sl3"; return ;;
+  esac
+
+  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く / /update 手順 2-2 の移行は中身を保ち同名は上書きせず両方残し、移行後は冒頭と画面下部が docs/ の台帳を読む"
 }
 
 # ---------- case 2: 閾値未満では無出力 ----------
@@ -244,6 +299,20 @@ case_4() {
   fi
   if [ -n "$same" ]; then fail 4 "同一パスは重複扱いしない" "出力あり: $same"; return; fi
 
+  # (d) 台帳の二重存在。移行 (/update 手順 2) で 1 件だけ同名衝突が残ると、docs/ 側だけが
+  # 読まれて .claude/ 側は誰にも見られないまま更新され続ける。取りこぼしをここで止める。
+  local dl q1 q2
+  dl="$(mktemp -d)"; mkdir -p "$dl/docs/tasks" "$dl/.claude/tasks" "$dl/home"
+  : > "$dl/docs/tasks/list.md"
+  q1="$(bash "$sc" "$dl/.claude" "$dl/home" "$dl" 2>&1)"
+  : > "$dl/.claude/tasks/list.md"
+  q2="$(bash "$sc" "$dl/.claude" "$dl/home" "$dl" 2>&1)"
+  rm -rf "$dl"
+  if [ -n "$q1" ]; then fail 4 "台帳が 1 か所なら無警告" "出力あり: $q1"; return; fi
+  if ! printf '%s\n' "$q2" | grep -q 'タスク一覧表が 2 か所にあります'; then
+    fail 4 "台帳の二重存在を警告する" "警告が出ない: $q2"; return
+  fi
+
   # /add-rule と /rules-audit が見るルールの置き場。プロジェクト側を決め打ちすると
   # 全プロジェクト共通 (/init user) に置いた利用者に対し「既存ルール 0 件・予算 0 tokens」と
   # 誤判定し、重複ルールを素通しさせる (v1.0.0 の実害)。在る側を返すことを 4 通りで確かめる。
@@ -269,7 +338,7 @@ yes yes proj 両方あればプロジェクト側
 -   -   proj どちらも無ければ新規作成先
 EOF
   rm -rf "$rw"
-  pass 4 "T0 常時ロード ${tokens} tokens (警告 ${T0_BUDGET_WARN} / 上限 ${T0_BUDGET_MAX}, ${#files[@]} file / ${total} bytes)${warn} / 二重ロード ($(( tokens * 2 ))) は scope-check.sh が警告 / ルールの置き場は 4 通りとも在る側を返す"
+  pass 4 "T0 常時ロード ${tokens} tokens (警告 ${T0_BUDGET_WARN} / 上限 ${T0_BUDGET_MAX}, ${#files[@]} file / ${total} bytes)${warn} / 二重ロード ($(( tokens * 2 ))) は scope-check.sh が警告 / 台帳が docs と .claude の 2 か所に在れば警告 / ルールの置き場は 4 通りとも在る側を返す"
 }
 
 # ---------- case 5: 層違反検出 (T0 は許可リストのファイルだけ / 本数 <= T0_MAX) ----------

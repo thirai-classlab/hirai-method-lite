@@ -8,13 +8,13 @@ description: タスクを完了させる。完了条件のコマンドを実行�
 
 ## 台帳の解決 (最初に 1 回)
 
-台帳パスは `$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > `.claude/tasks/list.md` の順に解決する。
+台帳パスは `$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > (旧レイアウト) `.claude/tasks/list.md` の順に解決する。**新しく作るときは常に `docs/tasks/list.md`**。
 
 ```bash
 LIST="$(bash -c '. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; harness_tasks_file "$PWD"')"
 ```
 
-空 (exit 1) なら台帳が無い。**その場で空の台帳を作ってから続行する** — `docs/` があるリポジトリは `docs/tasks/list.md`、無ければ `.claude/tasks/list.md` に置く (見出しと 6 列ヘッダは `/new-task` と同じ)。作った直後は対象行が無いので、検証だけ実施して「台帳を作成した。task-<id> の行が無いので status 更新は行わない」と報告する。
+空 (exit 1) なら台帳が無い。**その場で空の台帳を `docs/tasks/list.md` に作ってから続行する** (見出しと 6 列ヘッダは `/new-task` と同じ)。作った直後は対象行が無いので、検証だけ実施して「台帳を作成した。task-<id> の行が無いので status 更新は行わない」と報告する。
 
 以降この文書の `docs/tasks/list.md` は `$LIST` に、`docs/tasks/` は `$(dirname "$LIST")` に読み替える (`git add` も同じパスに読み替える)。
 

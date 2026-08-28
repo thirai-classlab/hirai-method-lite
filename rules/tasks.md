@@ -11,7 +11,7 @@ paths:
 
 ## 台帳
 
-- **台帳は 1 枚**: メインエージェントは、タスクの正本を台帳 1 表だけに置く。台帳のパスは `$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > `.claude/tasks/list.md` の順に解決し、`docs/` を持たないリポジトリでは `.claude/tasks/list.md` を使う ／ 例: 進捗は list.md の status 列を書き換える ／ 失効: 外部トラッカー (Asana / Jira) に正本を移したとき
+- **台帳は 1 枚**: メインエージェントは、タスクの正本を台帳 1 表だけに置く。台帳は常に `docs/tasks/list.md` (`$HARNESS_TASKS_FILE` があればそれが優先。旧レイアウトの `.claude/tasks/list.md` は `/hirai-lite:update` が `docs/` へ移す) ／ 例: 進捗は list.md の status 列を書き換える ／ 失効: 外部トラッカー (Asana / Jira) に正本を移したとき
 - **列は 5 つ**: メインエージェントは、list.md を `# / status / タスク / 完了条件 / 詳細` の 5 列で書く ／ 例: `| 3 | 進行中 | ログイン API | `npm test -- auth` が green | [task-3.md](task-3.md) |` ／ 失効: なし
 - **status は 3 種**: メインエージェントは、status に 未着手 / 進行中 / 完了 のいずれかを書く ／ 例: 保留したいタスクは list.md から `parking-lot.md` へ移す ／ 失効: なし
 - **1 task = ゴール 1 文 + N step**: メインエージェントは、task に「ゴール 1 文」「step の箇条書き」「完了条件」を書く ／ 例: `$CLAUDE_PLUGIN_ROOT/templates/task.md` を写して埋める ／ 失効: なし
@@ -25,7 +25,7 @@ paths:
 
 ## 設計 draft
 
-- **設計の起点は draft**: 新機能・仕様変更は draft dir (`docs/` があれば `docs/draft/`、無ければ `.claude/draft/`) の `<slug>.md` に設計を起こす ／ 例: `draft/login-rate-limit.md` ／ 失効: なし
+- **設計の起点は draft**: 新機能・仕様変更は `docs/draft/<slug>.md` に設計を起こす ／ 例: `docs/draft/login-rate-limit.md` ／ 失効: なし
 - **承認してから台帳に載せる**: メインエージェントは、user 承認を得た draft だけを list.md の行にする ／ 例: draft 末尾に `approved: 2026-08-22` を書いてから `/new-task` 相当の追記をする ／ 失効: なし
 - **未承認は draft に留める**: 承認前の設計は draft dir に置いたままにし、list.md からリンクしない ／ 例: 検討中の案は draft のまま user レビューに出す ／ 失効: なし
 - **task から draft へリンクする**: メインエージェントは、task の詳細欄に元 draft への相対リンクを書く ／ 例: `詳細: [draft/login-rate-limit.md](../draft/login-rate-limit.md)` ／ 失効: draft を廃止したとき
@@ -36,4 +36,4 @@ paths:
 - **不採用も残す**: 不採用にしたタスクは parking-lot.md から消さず、判断日と理由を残す ／ 例: 「不採用 2026-08-22: 利用者ゼロのため」 ／ 失効: なし
 
 ---
-背景・過去の経緯・事故記録: `docs/rules-reference/`（`docs/` が無いリポジトリでは `.claude/rules-reference/`）
+背景・過去の経緯・事故記録: `docs/rules-reference/`

@@ -6,12 +6,26 @@
 #   使い方: scope-check.sh <プロジェクト側の .claude> <ホーム側の .claude>
 #   引数の順番は固定 (どちらの scope に配置した場合でも同じ順で渡す)。
 #   重なりが無ければ何も出さない。どの場合も exit 0 (検査で /init を止めない)。
+#
+# あわせて**台帳の二重存在**も見る。書類の置き場は常に `docs/` だが、v1.7.0 までに導入した環境は
+# `.claude/` の下に台帳がある。両方に在るとパス解決は `docs/` 側だけを返し、`.claude/` 側は
+# 誰にも読まれないまま残る (更新しても誰も見ない = 二重管理の始まり)。移行の取りこぼしをここで止める。
 set -uo pipefail
 
 proj="${1:-.claude}"
 home_dir="${2:-$HOME/.claude}"
+root="${3:-$(dirname "$proj")}"
 
 abspath() { (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"; }
+
+if [ -f "$root/docs/tasks/list.md" ] && [ -f "$root/.claude/tasks/list.md" ]; then
+  printf '⚠️ タスク一覧表が 2 か所にあります\n'
+  printf '   ・%s\n' "$root/docs/tasks/list.md"
+  printf '   ・%s\n' "$root/.claude/tasks/list.md"
+  printf '   読まれるのは docs/ 側だけです。.claude/ 側に書いても誰も見ません。\n'
+  printf '   中身を見比べて、残すほうを docs/tasks/list.md に 1 本化してください。\n'
+  printf '   (/hirai-lite:update の移行手順は、移動先に同名のファイルがあると移さずに両方残します)\n'
+fi
 
 [ -d "$proj/rules" ] || exit 0
 [ -d "$home_dir/rules" ] || exit 0

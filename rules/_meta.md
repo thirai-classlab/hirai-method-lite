@@ -1,6 +1,6 @@
 # ルール追加のルール
 
-1. **二度目で書く**: 事故 2 回目で初めてルール化する。1 回目は事故記録 (`docs/` があれば `docs/rules-reference/incidents.md`、無ければ `.claude/rules-reference/incidents.md`) に 1 行記録して終える
+1. **二度目で書く**: 事故 2 回目で初めてルール化する。1 回目は事故記録 (`docs/rules-reference/incidents.md`) に 1 行記録して終える
 2. **既定は T1**: 新規ルールは `paths:` 付きで置く。T0 にするには「全作業に例外なく効く」ことの立証が要る
 3. **予算制**: T0 合計は警告 6,000 tokens / 上限 10,000 tokens の 2 段階。6,000 超で `tests/smoke.sh` case 4 が警告を出し（PASS のまま。余裕があるうちに降格候補を決める）、10,000 超で FAIL する。10,000 超のときは既存 1 件を T1/T2 へ降格するまで追加しない。上限は「入れてよい量」ではない — 条 2 のとおり新規は T1 が既定で、T0 には立証が要る
 4. **1 ルール 1 事象・3 行以内**: 3 行で書けないものはルールでなく設計課題として扱う
@@ -16,7 +16,7 @@
 |---|---|---|
 | T0 | `CLAUDE.md` / `.claude/rules/_meta.md` / `.claude/rules/core.md` | 毎セッション常時（合計 警告 6,000 / 上限 10,000 tokens） |
 | T1 | `.claude/rules/<domain>.md`（`paths:` あり） | 該当ファイルを触った時（1 file 2,000 tokens） |
-| T2 | `docs/rules-reference/**`（無ければ `.claude/rules-reference/**`） | AI が明示 Read した時のみ |
+| T2 | `docs/rules-reference/**` | AI が明示 Read した時のみ |
 | T3 | `.claude/rules-archive/**` | ロードしない（失効ルールの履歴保持） |
 
 ## 数の予算

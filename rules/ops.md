@@ -35,4 +35,4 @@ paths:
 - **タイムアウトを書く**: 実装者は、CI の各 job に上限時間を設定する ／ 例: `timeout-minutes: 15` ／ 失効: なし
 
 ---
-背景・過去の経緯・事故記録: `docs/rules-reference/`（`docs/` が無いリポジトリでは `.claude/rules-reference/`）
+背景・過去の経緯・事故記録: `docs/rules-reference/`

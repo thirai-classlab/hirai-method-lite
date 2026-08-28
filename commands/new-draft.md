@@ -1,5 +1,5 @@
 ---
-description: draft dir (docs/draft/ または .claude/draft/) に設計 draft を起こす。承認を得るまでタスク化しない、設計→承認→タスク化フローの起点。
+description: draft dir (通常 docs/draft/) に設計 draft を起こす。承認を得るまでタスク化しない、設計→承認→タスク化フローの起点。
 ---
 
 # /new-draft <slug>
@@ -8,7 +8,7 @@ description: draft dir (docs/draft/ または .claude/draft/) に設計 draft �
 
 ## draft dir の解決 (最初に 1 回)
 
-draft dir は `$HARNESS_DRAFT_DIR` > 既存の `docs/draft/` > 既存の `.claude/draft/` > (どちらも無ければ) `docs/` があるリポジトリは `docs/draft/`、無ければ `.claude/draft/` の順に解決する。台帳と同じ解決順。
+draft dir は `$HARNESS_DRAFT_DIR` > 既存の `docs/draft/` > (旧レイアウト) 既存の `.claude/draft/` > (どちらも無ければ) `docs/draft/` の順に解決する。台帳と同じ解決順で、**新しく作るときは常に `docs/draft/`**。
 
 ```bash
 DRAFT="$(bash -c '. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; harness_draft_dir "$PWD"')"
@@ -65,7 +65,7 @@ approved_at:
 
 ## 判定できる終了条件
 
-- `$DRAFT/<slug>.md` が存在する (`docs/` があれば `docs/draft/`、無ければ `.claude/draft/` の下)。
+- `$DRAFT/<slug>.md` が存在する (通常 `docs/draft/` の下)。
 - 禁止語彙 grep が 0 件。
 - 承認済なら `grep '^approved_at: 20' "$DRAFT/<slug>.md"` が exit 0。
 
