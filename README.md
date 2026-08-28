@@ -153,7 +153,7 @@ Claude Code で次の 2 行を順に実行します。
 
 **4 を飛ばすと、画面下部の表示が古いままになります。** ステップ 1〜3 で新しくなるのはコマンド・自動処理・エージェント・外部ツール接続だけで、`/hirai-lite:init` のときにプロジェクトへ**コピーされた**ファイル（画面下部の表示スクリプトなど）は、その場に残った古いコピーのままだからです。
 
-ステップ 4 が入れ替えるのは、あなたが編集する前提でない 2 本（`statusline.sh` / `tasks-path.sh`）だけです。手を入れていた場合は、元の内容を `.bak` という名前で残してから入れ替えます。**決まりごと（ルール）・安全設定・mode（進め方）の設定・やることの一覧表には触りません。**
+ステップ 4 が入れ替えるのは、あなたが編集する前提でない 3 本（`statusline.sh` / `tasks-path.sh` / `context-usage.sh`）だけです。手を入れていた場合は、元の内容を `.bak` という名前で残してから入れ替えます。**決まりごと（ルール）・安全設定・mode（進め方）の設定・やることの一覧表には触りません。**
 
 ### 合図が出ないとき
 
@@ -231,7 +231,7 @@ Claude Code 2.1.247 で実際に確かめたところ、この表示が出てい
 
 ## statusline について
 
-`/hirai-lite:init` は `scripts/statusline.sh` と `scripts/tasks-path.sh` を配置先の `.claude/` へ複製し、`templates/settings.json` の `statusLine.command`（`bash "${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh"`）から呼ぶ。表示は **2 行**で、1 行目が**いまの状態**、2 行目が**次にできる操作**（v1.5.0 から）。
+`/hirai-lite:init` は `scripts/statusline.sh` と `scripts/tasks-path.sh` と `scripts/context-usage.sh` を配置先の `.claude/` へ複製し、`templates/settings.json` の `statusLine.command`（`bash "${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh"`）から呼ぶ。表示は **2 行**で、1 行目が**いまの状態**、2 行目が**次にできる操作**（v1.5.0 から）。
 
 ```
 Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: normal（確認あり） | feat/rate-limit | やること 4
@@ -247,7 +247,7 @@ Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: normal（確認あり） | f
 | 優先 | 出るとき | 表示 |
 |---|---|---|
 | 1 | 新しい版が出ている | `更新あり → /hirai-lite:update` |
-| 2 | ctx が閾値以上（既定 80%、`HC_CONTEXT_THRESHOLD` で変更） | `きりの良いところで /hirai-lite:state save` |
+| 2 | ctx が閾値以上（既定 80%、`HC_CONTEXT_THRESHOLD` で変更）| `きりの良いところで /hirai-lite:state save` |
 
 ```
 設定を確認・変更 → /hirai-lite:config    きりの良いところで /hirai-lite:state save
@@ -257,9 +257,36 @@ Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: normal（確認あり） | f
 
 全プロジェクト共通（`/hirai-lite:init user`）に入れた場合だけは、`statusLine.command` を `$HOME` を展開した絶対パス（例: `bash "/home/you/.claude/statusline.sh"`）に書き換える。`${CLAUDE_PROJECT_DIR}` は開いているプロジェクトごとに変わるため、全プロジェクト共通の設定からは使えないため。進め方（`mode.yml`）はプロジェクト側を先に見て、無ければホーム側を見る。
 
-`.claude/statusline.sh` と `.claude/tasks-path.sh` の 2 本は**プラグイン所有**であり、`/update` で配布版に置き換わる（中身を変えていた場合は `.bak` に退避してから置き換える）。`.claude/rules/` `settings.json` `mode.yml` `CLAUDE.md` 台帳は利用者所有で、更新では触らない。
+`.claude/statusline.sh` と `.claude/tasks-path.sh` と `.claude/context-usage.sh` の 3 本は**プラグイン所有**であり、`/update` で配布版に置き換わる（中身を変えていた場合は `.bak` に退避してから置き換える）。`.claude/rules/` `settings.json` `mode.yml` `CLAUDE.md` 台帳は利用者所有で、更新では触らない。
 
 プラグイン側のパスを直接指さないのは、**`${CLAUDE_PLUGIN_ROOT}` が settings.json では展開されないため**（[公式仕様](https://code.claude.com/docs/en/plugins-reference.md)の「Where `${CLAUDE_PLUGIN_ROOT}` is Available」に statusLine と project settings は含まれない）。手で配線する場合は `.claude/settings.json` に上記 `statusLine` ブロックを足すか、絶対パスを書く。不要なら `statusLine` キーを消す。
+
+## context 使用率の出し方（画面下部と自動処理で 1 本に統一）
+
+画面下部の `ctx <N>%` と、自動処理（`hooks/context-budget.sh`）が出す「context 使用率が N% に達しました」は、**v1.10.0 から同じ計算を通る**。計算は共通ライブラリ [`scripts/context-usage.sh`](scripts/context-usage.sh) の 1 か所にあり、両方がそれを読む（`scripts/tasks-path.sh` の `harness_mode` と同じ作法）。
+
+| | 中身 |
+|---|---|
+| 分子 | `input_tokens` + `cache_creation_input_tokens` + `cache_read_input_tokens` + `output_tokens`（**直近の応答 1 件**。会話全体の足し算ではない）|
+| 分母 | 窓（context window）のサイズ。`HC_CONTEXT_WINDOW` → 実測値の控え → 既定 `200000` の順に決める |
+| 使用率 | 分子 ÷ 分母 を四捨五入した整数の百分率 |
+| 閾値 | `HC_CONTEXT_THRESHOLD`（既定 `0.80`。`0.80` でも `80` でも受ける）。**使用率がこれ以上**で発火する（残量では見ない）|
+
+**窓のサイズは画面下部だけが知っている。** Claude Code が画面下部に渡す JSON には [`context_window.context_window_size`](https://code.claude.com/docs/en/statusline)（`200000` か `1000000`）が入っているが、**自動処理（hook）に渡される JSON にも、transcript にも、環境変数にも入っていない**。そこで画面下部が観測した値を `${TMPDIR:-/tmp}/claude-harness-lite/ctx-window-<セッション ID>` に控え、自動処理はそれを読む（更新の合図を SessionStart → 画面下部へ渡しているのと同じ作法）。
+
+**控えが無いときは 200,000 とみなす。** これが外れる条件は次のとおり。外れると使用率が実際より高く出て、早すぎる保存の催促につながる（低く出ることはない）。
+
+- `statusLine` を設定していない、または `/hirai-lite:init` を実行していない（画面下部が一度も動かないため控えができない）
+- 会話の 1 ターン目で、画面下部がまだ一度も描かれていない
+- 窓が 1,000,000 の会話（Claude Opus 5 など）で、上記のどちらかに当たる
+
+そのときは `HC_CONTEXT_WINDOW` で明示する。
+
+```bash
+export HC_CONTEXT_WINDOW=1000000   # 窓が 1M の会話
+```
+
+**v1.9.0 までの不具合**: 画面下部は Claude Code が計算済みの百分率をそのまま出し、自動処理は「直近のトークン数 ÷ 200,000 **固定**」を自分で計算していた。窓が 1,000,000 の会話では、同じ瞬間に画面下部が `ctx 17%`、自動処理が「83% に達しました」と表示した。**正しかったのは画面下部の 17%** で、自動処理の 83% は分母を 5 分の 1 に取り違えた誤りだった。
 
 ## 同梱している MCP サーバー（外部ツール接続）
 
@@ -320,7 +347,7 @@ claude plugins install mattpocock-skills
 
    commands / hooks / agents / MCP サーバー定義はこの時点で有効になる。**rules はまだ配られていない** — プラグインには rules というコンポーネントが無いため。
 
-2. **rules を配置する** — 対象プロジェクトを開いて `/hirai-lite:init` を実行する（全プロジェクト共通に入れるなら `/hirai-lite:init user`）。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ（`mode:` の値は手順 1 の質問 3 の答え。ホーム側にすでにあればそちらを使い、プロジェクト側に新設しない）、`templates/CLAUDE.md` をリポジトリ直下の `CLAUDE.md` へ（`user` 指定なら `~/.claude/CLAUDE.md`）、`scripts/statusline.sh` と `scripts/tasks-path.sh` を `.claude/` へ配置し、台帳・draft dir・事故記録・`.claude/rules-archive/` を作る。既存ファイルは上書きしない。
+2. **rules を配置する** — 対象プロジェクトを開いて `/hirai-lite:init` を実行する（全プロジェクト共通に入れるなら `/hirai-lite:init user`）。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ（`mode:` の値は手順 1 の質問 3 の答え。ホーム側にすでにあればそちらを使い、プロジェクト側に新設しない）、`templates/CLAUDE.md` をリポジトリ直下の `CLAUDE.md` へ（`user` 指定なら `~/.claude/CLAUDE.md`）、`scripts/statusline.sh` と `scripts/tasks-path.sh` と `scripts/context-usage.sh` を `.claude/` へ配置し、台帳・draft dir・事故記録・`.claude/rules-archive/` を作る。既存ファイルは上書きしない。
 
    台帳 / draft / 事故記録は **常に `docs/` 配下に作る（`docs/` が無ければ作る）**。旧レイアウト（`.claude/tasks/` `.claude/draft/` `.claude/rules-reference/` が残っている環境）のときは**ここでは何も作らず `/hirai-lite:update` の手順 2 に回す** — `docs/` 側に作るとパス解決が `docs/` を先に見るため既存の台帳が黙って隠れるので、先に `mv` で移してから 1 通りに揃える。`scripts/tasks-path.sh` の解決順（`$HARNESS_TASKS_FILE` → `docs/…` → `.claude/…`）は移行前・未移行の環境で台帳を見失わないために残してある。`user` 指定時は台帳 / draft / 事故記録を作らず、`statusLine.command` だけ絶対パスへ書き換える。
 
@@ -328,7 +355,7 @@ claude plugins install mattpocock-skills
 
 4. **ロード検証** — **`/init` の次に開くセッション**で行う（rules は起動時に読まれるため、`/init` を実行したセッション内では確認できない。`/init` の終了条件にも含めていない）。新しいセッションを開き、T0 の 3 ファイルが載っていること、T1 が `paths:` 該当ファイルを開くまで載らないことを確認する。想定と違えば frontmatter を直す。
 
-5. **更新する** — プラグインは自動更新されない。`/plugin marketplace update hirai-lite` → `/plugin update hirai-lite@hirai-lite` → 再起動 → `/hirai-lite:update`（旧レイアウトの書類を `docs/` へ `mv` で移す → rules を再配置 → プラグイン所有の `statusline.sh` と `tasks-path.sh` を、配置先 (`.claude/` または `$HOME/.claude/`) のうち**実際に在る側だけ**配布版に入れ替え）。利用者向けの手順は[更新する](#更新する自動では新しくなりません)。
+5. **更新する** — プラグインは自動更新されない。`/plugin marketplace update hirai-lite` → `/plugin update hirai-lite@hirai-lite` → 再起動 → `/hirai-lite:update`（旧レイアウトの書類を `docs/` へ `mv` で移す → rules を再配置 → プラグイン所有の `statusline.sh` / `tasks-path.sh` / `context-usage.sh` を、配置先 (`.claude/` または `$HOME/.claude/`) のうち**実際に在る側だけ**配布版に入れ替え）。利用者向けの手順は[更新する](#更新する自動では新しくなりません)。
 
 ## このリポジトリの構成
 
@@ -342,7 +369,7 @@ claude plugins install mattpocock-skills
 | `skills/` | スキル 1 個（`grilling`。MIT、出典は `NOTICE.md`）。`plugin.json` に `skills` キーは書かない（既定で読まれる） |
 | `hooks/` | `hooks.json` + SessionStart / UserPromptSubmit の 2 本 |
 | `rules/` | **プラグインは読まない。** `/init` が配置先の `.claude/rules/` へ配る素材 |
-| `scripts/` | hook / statusline が source する共通ライブラリ + `/init` の二重ロード検査 |
+| `scripts/` | hook / statusline が source する共通ライブラリ（パス解決 `tasks-path.sh` / context 使用率 `context-usage.sh` / 更新検知 `update-check.sh`）+ `/init` の二重ロード検査 |
 | `templates/` | `settings.json` / `mode.yml` / `CLAUDE.md` / draft / task の雛形（`CLAUDE.md` は `/init` が導入先へ置く。プラグイン直下に置くと `validate --strict` が警告するため `templates/` に置いている） |
 | `tests/smoke.sh` | 自己検証 10 case（予算監査を含む。hook 5 / command 12 / skill 3 / case 10 の数の予算も case 6 が見る） |
 | `CHANGELOG.md` | 版ごとの変更点。v0.6.0 以前の既知の不具合もここに記録 |

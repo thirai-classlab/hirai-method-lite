@@ -114,11 +114,11 @@ mkdir -p "$(dirname "$MF")"
 [ -e "$MF" ] && echo "kept   $MF" || { cp "$P/templates/mode.yml" "$MF" && sed -i.bak "s/^mode: .*/mode: $MODE/" "$MF" && rm -f "$MF.bak" && echo "placed $MF ($MODE)"; }
 grep -c '^mode: \(normal\|loop\)$' "$MF"
 C=CLAUDE.md; [ "$SCOPE" = user ] && C="$HOME/.claude/CLAUDE.md"; [ -e "$C" ] && echo "kept   $C" || { cp "$P/templates/CLAUDE.md" "$C" && echo "placed $C"; }
-for s in statusline.sh tasks-path.sh; do [ -e "$D/$s" ] && echo "kept   $D/$s" || { cp "$P/scripts/$s" "$D/$s" && chmod +x "$D/$s" && echo "placed $D/$s"; }; done
+for s in statusline.sh tasks-path.sh context-usage.sh; do [ -e "$D/$s" ] && echo "kept   $D/$s" || { cp "$P/scripts/$s" "$D/$s" && chmod +x "$D/$s" && echo "placed $D/$s"; }; done
 bash "$D/statusline.sh" </dev/null
 ```
 
-`statusline.sh` と `tasks-path.sh` の 2 本は**プラグイン所有**で、`/update` を実行すると配布版で置き換わる (中身を変えていた場合は `.bak` に退避される)。手を入れるなら別名でコピーして使う。`${CLAUDE_PLUGIN_ROOT}` は settings.json では展開されない (hook / MCP など プラグインコンポーネント側だけの機能) ため、statusline はスクリプトごと配置先へ複製し、手順 5 の `statusLine.command` から呼ぶ。最後に 2 行 (いまの状態 / 設定リンク) が出力されれば配線は成立している。進め方 (`mode.yml`) はプロジェクト側を先に見て、無ければホーム側を見る。
+`statusline.sh` と `tasks-path.sh` と `context-usage.sh` の 3 本は**プラグイン所有**で、`/update` を実行すると配布版で置き換わる (中身を変えていた場合は `.bak` に退避される)。手を入れるなら別名でコピーして使う。`context-usage.sh` は context 使用率の計算を集めた共通ライブラリで、`statusline.sh` が同じディレクトリから読む (v1.10.0 で追加。無くても画面下部は 2 行を返すが、使用率が Claude Code の済みの値になり自動処理と食い違う)。`${CLAUDE_PLUGIN_ROOT}` は settings.json では展開されない (hook / MCP など プラグインコンポーネント側だけの機能) ため、statusline はスクリプトごと配置先へ複製し、手順 5 の `statusLine.command` から呼ぶ。最後に 2 行 (いまの状態 / 設定リンク) が出力されれば配線は成立している。進め方 (`mode.yml`) はプロジェクト側を先に見て、無ければホーム側を見る。
 
 `CLAUDE.md` は**常時読まれる分 (T0) の 1 本**で、プロジェクト固有情報 (概要 / Tech Stack / Commands) と rules への index を持つ雛形。**無ければ黙って置き、あれば触らない** (`kept`)。質問は増やさない (手順 1 は 4 問が上限)。置き先は、このプロジェクトなら**リポジトリ直下の `CLAUDE.md`**、`user` 指定なら `~/.claude/CLAUDE.md` (`.claude/` の中ではない — Claude Code が読むのはこの 2 か所)。中身は `<...>` のプレースホルダのままなので、埋めてもらうことを手順 9 の報告で 1 行伝える。行動規範は書かない (それは `rules/core.md` の担当)。
 

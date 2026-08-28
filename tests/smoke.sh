@@ -236,7 +236,67 @@ case_3() {
   rm -rf "$td"
   if ! printf '%s' "$first" | grep -q '/state save'; then fail 3 "閾値超過で 1 度だけ発火" "1 回目が無出力"; return; fi
   if [ -n "$second" ]; then fail 3 "閾値超過で 1 度だけ発火" "2 回目も出力: $second"; return; fi
-  pass 3 "context-budget.sh は 0.85 で 1 度発火し 2 度目は沈黙"
+
+  # --- 画面下部と自動処理が同じ使用率を出す (v1.9.0 の不具合の再発検査) ---------------
+  # v1.9.0 は画面下部が Claude Code の済みの百分率をそのまま出し、hook は
+  # 「直近のトークン数 ÷ 200,000 固定」で計算していた。窓が 1,000,000 の会話では
+  # 画面下部 17% / hook 83% と同じ瞬間に矛盾する 2 つの数字が出た。
+  # 同じ量 (input + cache 作成 + cache 読み + output) と同じ窓を与えて、両者の値が
+  # 1 の位まで一致することを窓 2 通り × 使用率 5 通りで確かめる。
+  # 窓サイズは画面下部の入力 JSON にしか無いため、画面下部 → 控え → hook の受け渡しも同時に検査する。
+  local ct in_t out_t win want sl_p hk_p tr bad3=""
+  ct="$(mktemp -d)"
+  while read -r in_t out_t win want; do
+    [ -n "$in_t" ] || continue
+    tr="$ct/tr-${in_t}-${win}.jsonl"
+    # usage の中に iterations[] があっても、数えるのは最初の 1 組だけ (実物と同じ形にしてある)
+    printf '{"type":"assistant","message":{"usage":{"input_tokens":%s,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":%s,"server_tool_use":{"web_search_requests":0},"iterations":[{"input_tokens":999999,"output_tokens":999999}]}}}\n' \
+      "$in_t" "$out_t" > "$tr"
+    # 画面下部: 窓サイズを観測して控えに書く。表示の ctx は共通ライブラリで計算した値。
+    sl_p="$(printf '{"session_id":"pair","context_window":{"total_input_tokens":%s,"total_output_tokens":%s,"context_window_size":%s,"used_percentage":%s}}' \
+              "$in_t" "$out_t" "$win" "$want" \
+            | TMPDIR="$ct" NO_COLOR=1 CLAUDE_PROJECT_DIR="$ct" HARNESS_UPDATE_CHECK=off \
+              bash "$ROOT/scripts/statusline.sh" 2>/dev/null | sed -n '1s/.*ctx \([0-9]*\)%.*/\1/p')"
+    # 自動処理: 控えから窓サイズを読む。閾値を最小にして使用率そのものを取り出す。
+    hk_p="$(printf '{"session_id":"pair","transcript_path":"%s"}' "$tr" \
+            | TMPDIR="$ct" HC_CONTEXT_THRESHOLD=0.0001 bash "$HOOKS/context-budget.sh" 2>/dev/null \
+            | sed -n 's/.*使用率が \([0-9]*\)%.*/\1/p')"
+    rm -f "$ct/claude-harness-lite/ctx-pair.fired"
+    [ "$sl_p" = "$want" ] || bad3="$bad3 [in=${in_t} out=${out_t} 窓=${win}] 画面下部=${sl_p:-無}(期待 ${want})"
+    [ "$hk_p" = "$want" ] || bad3="$bad3 [in=${in_t} out=${out_t} 窓=${win}] 自動処理=${hk_p:-無}(期待 ${want})"
+  done <<'EOF'
+168000 2000 1000000 17
+168000 2000 200000 85
+40000 0 200000 20
+999999 1 1000000 100
+1000 0 200000 1
+EOF
+  if [ -n "$bad3" ]; then rm -rf "$ct"; fail 3 "画面下部と自動処理は同じ使用率を出す" "$bad3"; return; fi
+
+  # 窓サイズが分からないとき (控えも env も無い) は 200,000 とみなす。
+  # 併せて HC_CONTEXT_WINDOW の明示指定が控えより優先されることも見る。
+  local nw
+  rm -rf "$ct/claude-harness-lite"
+  nw="$(printf '{"session_id":"nowin","transcript_path":"%s"}' "$ct/tr-168000-1000000.jsonl" \
+        | TMPDIR="$ct" HC_CONTEXT_THRESHOLD=0.0001 bash "$HOOKS/context-budget.sh" 2>/dev/null \
+        | sed -n 's/.*使用率が \([0-9]*\)%.*/\1/p')"
+  [ "$nw" = "85" ] || bad3="$bad3 窓不明の既定=${nw:-無}(期待 85 = 170000/200000)"
+  nw="$(printf '{"session_id":"envwin","transcript_path":"%s"}' "$ct/tr-168000-1000000.jsonl" \
+        | TMPDIR="$ct" HC_CONTEXT_WINDOW=1000000 HC_CONTEXT_THRESHOLD=0.0001 \
+          bash "$HOOKS/context-budget.sh" 2>/dev/null \
+        | sed -n 's/.*使用率が \([0-9]*\)%.*/\1/p')"
+  [ "$nw" = "17" ] || bad3="$bad3 HC_CONTEXT_WINDOW 指定=${nw:-無}(期待 17)"
+  # 異常入力 (空 stdin / 壊れた JSON / transcript が無い) でも黙って exit 0
+  local src3 rc3 out
+  for src3 in '' '{"session_id":' 'zzz' '{"session_id":"x","transcript_path":"/nope/none.jsonl"}'; do
+    out="$(printf '%s' "$src3" | TMPDIR="$ct" bash "$HOOKS/context-budget.sh" 2>&1)"; rc3=$?
+    [ "$rc3" -eq 0 ] || bad3="$bad3 [異常入力 ${src3}] exit=${rc3}"
+    [ -z "$out" ] || bad3="$bad3 [異常入力 ${src3}] 出力あり: ${out}"
+  done
+  rm -rf "$ct"
+  if [ -n "$bad3" ]; then fail 3 "窓サイズ不明時の既定と異常入力" "$bad3"; return; fi
+
+  pass 3 "context-budget.sh は 0.85 で 1 度発火し 2 度目は沈黙 / 画面下部と自動処理が同じ使用率 (窓 200k・1M × 5 通りで一致) / 窓が分からなければ 200,000 とみなし HC_CONTEXT_WINDOW が優先 / 空 stdin・壊れた JSON・transcript 不在でも無出力 exit 0"
 }
 
 # ---------- case 4: T0 予算 (警告 6,000 tokens / 上限 10,000 tokens) ----------
@@ -523,6 +583,8 @@ case_8() {
 0.2.0 0.1.0 no
 0.9.0 0.10.0 yes
 0.10.0 0.9.0 no
+1.9.0 1.10.0 yes
+1.10.0 1.9.0 no
 EOF
 
   # 画面下部 2 行目のお知らせ。SessionStart が置いた控えを statusline が読むだけで、通信は起きない。
@@ -577,7 +639,7 @@ EOF
   fi
   rm -rf "$tmp" "$td"
   [ "$failed" -eq 0 ] || return
-  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 を数値比較 / 画面下部 2 行目は設定リンクを常時出しつつ お知らせは 更新あり > context 高 > 無表示 の順に 1 つだけ (off で停止・閾値可変・通信なし)"
+  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 と 1.9.0 < 1.10.0 を数値比較 / 画面下部 2 行目は設定リンクを常時出しつつ お知らせは 更新あり > context 高 > 無表示 の順に 1 つだけ (off で停止・閾値可変・通信なし)"
 }
 
 # ---------- case 9: マニフェストが妥当な JSON で、版が VERSION と一致する ----------

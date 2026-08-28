@@ -1,5 +1,5 @@
 ---
-description: ハーネス (プラグイン hirai-lite) を最新版に更新し、旧レイアウトの書類を docs/ へ移し、rules を再配置し、プラグイン所有の 2 ファイルを入れ替えて、VERSION で版が上がったことを検証する。
+description: ハーネス (プラグイン hirai-lite) を最新版に更新し、旧レイアウトの書類を docs/ へ移し、rules を再配置し、プラグイン所有の 3 ファイルを入れ替えて、VERSION で版が上がったことを検証する。
 ---
 
 # /update
@@ -9,7 +9,7 @@ description: ハーネス (プラグイン hirai-lite) を最新版に更新し�
 
 | 種別 | 対象 | 更新時の扱い |
 |---|---|---|
-| プラグイン所有 | `statusline.sh` / `tasks-path.sh` | **配布版で上書きする**（中身が違えば `.bak` に退避してから） |
+| プラグイン所有 | `statusline.sh` / `tasks-path.sh` / `context-usage.sh` | **配布版で上書きする**（中身が違えば `.bak` に退避してから） |
 | 利用者所有 | `rules/*.md` / `settings.json` / `mode.yml` / 台帳 (`list.md` `parking-lot.md`) / `CLAUDE.md` / `docs/` | **上書きしない** |
 
 配置先はプロジェクト側 (`.claude/`) と全プロジェクト共通 (`$HOME/.claude/`) の 2 通りある (`/init` に `user` を付けたかで決まる)。
@@ -130,10 +130,13 @@ rules から先に削除してから `/init` を実行する。手順 0 の控�
 `diff -ru /tmp/rules.bak.project .claude/rules` (ホーム側なら `diff -ru /tmp/rules.bak.home "$HOME/.claude/rules"`)
 で突き合わせ、自分の変更が消えていないかを確認する。
 
-## 手順 4: プラグイン所有の 2 ファイルを入れ替える
+## 手順 4: プラグイン所有の 3 ファイルを入れ替える
 
-`statusline.sh` と `tasks-path.sh` はプラグインの `scripts/` の複製であり、
-利用者が編集する前提のファイルではない。`/init` は既存を残すため、この 2 本だけはここで入れ替える。
+`statusline.sh` と `tasks-path.sh` と `context-usage.sh` はプラグインの `scripts/` の複製であり、
+利用者が編集する前提のファイルではない。`/init` は既存を残すため、この 3 本だけはここで入れ替える。
+`context-usage.sh` は v1.10.0 で足した context 使用率の共通ライブラリで、**`statusline.sh` と同じディレクトリに無いと
+画面下部と自動処理が別々の使用率を出す**（v1.9.0 の不具合）。v1.9.0 以前から使っている場合は
+まだ置かれていないので、下の `[ -e "$dst" ] || continue` を素通りしてしまう。`statusline.sh` が在る側にだけ新しく置く。
 **中身が配布版と違う場合は上書きせず先に `.bak` へ退避する**（手を入れていた場合の復旧経路）。
 
 **置いていない場所に新しく作らない。** プロジェクト側とホーム側の両方を見て、**すでに在るものだけ**を入れ替える
@@ -141,7 +144,10 @@ rules から先に削除してから `/init` を実行する。手順 0 の控�
 
 ```bash
 for D in .claude "$HOME/.claude"; do
-  for s in statusline.sh tasks-path.sh; do
+  [ -e "$D/statusline.sh" ] && [ ! -e "$D/context-usage.sh" ] \
+    && cp "$CLAUDE_PLUGIN_ROOT/scripts/context-usage.sh" "$D/context-usage.sh" \
+    && chmod +x "$D/context-usage.sh" && echo "placed $D/context-usage.sh"
+  for s in statusline.sh tasks-path.sh context-usage.sh; do
     src="$CLAUDE_PLUGIN_ROOT/scripts/$s"; dst="$D/$s"
     [ -e "$dst" ] || continue
     if cmp -s "$src" "$dst"; then
@@ -160,7 +166,7 @@ done
 - 最後に 2 行出力されれば、入れ替え後も画面下部の表示は動いている。出力が無い / エラーになる場合は
   `cp <その statusline.sh>.bak <その statusline.sh>` で戻し、内容を報告する。
 - `.bak` を作ったときは手順 6 の報告に必ず 1 行入れる。作っていなければ触れない。
-- **この 2 本以外には触れない。**
+- **この 3 本以外には触れない。**
 
 ## 手順 5: 版が上がったことを検証する
 
@@ -196,7 +202,7 @@ bash の出力は作業ログであって報告ではない。**最後に必ず�
    空になった .claude/tasks/ .claude/draft/ .claude/rules-reference/ は片付けました
 ✅ statusLine（画面下部の情報表示）のスクリプトを最新版にしました
    変更されていたため、元の内容を .claude/statusline.sh.bak に保存しました
-✅ タスク一覧の置き場所を調べるスクリプトを最新版にしました
+✅ タスク一覧の置き場所を調べるスクリプトと、context（会話の入れ物）の使用率を出すスクリプトを最新版にしました
 ✅ ルール・設定・mode（進め方）の設定・タスク一覧はそのままにしました（あなたが育てたものなので触りません）
 ✅ 自己チェック 10 項目すべて問題なしでした
 
@@ -241,7 +247,8 @@ cat "$CLAUDE_PLUGIN_ROOT/VERSION"                                               
   `R` (rename) か 削除 + 追加 として見える）。移行が不要だった場合は最初から何も返さない。
 - 手順 4 で `same` / `updated` と出た `$D` (プロジェクト側 / ホーム側のうち実際に置いてある方) について、
   `cmp -s "$CLAUDE_PLUGIN_ROOT/scripts/statusline.sh" "$D/statusline.sh"` と
-  `cmp -s "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh" "$D/tasks-path.sh"` が両方 exit 0。
+  `cmp -s "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh" "$D/tasks-path.sh"` と
+  `cmp -s "$CLAUDE_PLUGIN_ROOT/scripts/context-usage.sh" "$D/context-usage.sh"` が 3 つとも exit 0。
 - `bash "$D/statusline.sh" </dev/null` が 2 行出力する (1 行目 = いまの状態 / 2 行目 = 設定リンク)。
 - `bash "$CLAUDE_PLUGIN_ROOT/tests/smoke.sh"` が exit 0。
 - `git status --short` に `CLAUDE.md` `docs/` `.claude/rules/` の変更が出ていない。

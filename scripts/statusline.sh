@@ -45,18 +45,31 @@ pct() {  # 使用率を整数 % + 色に。非数は "—"。0-100 に clamp。
   printf '%s%s%%%s' "$col" "$v" "$R"
 }
 
-# ctx_over_threshold <使用率> -> 閾値以上なら rc 0。閾値は HC_CONTEXT_THRESHOLD で、
-# 0.80 のような割合でも 80 のような百分率でも受ける (既定 0.80 = 80%)。非数は常に rc 1。
-ctx_over_threshold() {
-  local v="${1%%.*}"
-  case "$v" in ''|null|*[!0-9]*) return 1 ;; esac
-  awk -v r="$v" -v th="${HC_CONTEXT_THRESHOLD:-0.80}" \
-    'BEGIN {t = th + 0; if (t <= 1) t *= 100; exit !(r + 0 >= t)}' 2>/dev/null
-}
-
 model="$(jqf '.model.display_name')"; [ -n "$model" ] || model="Claude"
-ctx_raw="$(jqf '.context_window.used_percentage')"
-ctx="$(pct "$ctx_raw")"
+
+# --- context 使用率 ---------------------------------------------------------
+# 計算は scripts/context-usage.sh に集約している (自動処理 hooks/context-budget.sh も同じ関数を通す)。
+# ここで独自に割り算しない。v1.9.0 までは画面下部が Claude Code の済みの百分率をそのまま出し、
+# hook は 200,000 固定で割っていたため、窓が 1,000,000 の会話で 17% と 83% が同時に出た。
+#
+# 窓サイズ (context_window_size) は**画面下部の入力 JSON にしか無い**。hook 側の入力にも
+# transcript にも環境変数にも無いので、ここで観測して控えへ書き、hook はそれを読む。
+[ -f "$here/context-usage.sh" ] && . "$here/context-usage.sh" 2>/dev/null || true
+
+ctx_pct=""
+if command -v harness_ctx_percent >/dev/null 2>&1; then
+  ctx_session="$(harness_ctx_json_string "$input" session_id || true)"
+  ctx_win_seen="$(harness_ctx_window_from_json "$input" || true)"
+  [ -n "$ctx_win_seen" ] && harness_ctx_window_remember "$ctx_session" "$ctx_win_seen"
+  ctx_tokens="$(harness_ctx_tokens_from_json "$input" || true)"
+  if [ -n "$ctx_tokens" ]; then
+    ctx_pct="$(harness_ctx_percent "$ctx_tokens" "$(harness_ctx_window "$ctx_session")")"
+  fi
+fi
+# トークン数が取れない Claude Code (旧版) では、渡された済みの百分率をそのまま使う。
+[ -n "$ctx_pct" ] || ctx_pct="$(jqf '.context_window.used_percentage')"
+
+ctx="$(pct "$ctx_pct")"
 h5="$(pct "$(jqf '.rate_limits.five_hour.used_percentage')")"
 d7="$(pct "$(jqf '.rate_limits.seven_day.used_percentage')")"
 
@@ -98,7 +111,8 @@ if [ "${HC_STATUSLINE_NOTICE:-on}" != "off" ]; then
   if [ "${HARNESS_UPDATE_CHECK:-on}" != "off" ] \
     && [ -s "${TMPDIR:-/tmp}/claude-harness-lite/update-available" ]; then
     notice="更新あり → /hirai-lite:update"
-  elif ctx_over_threshold "$ctx_raw"; then
+  elif command -v harness_ctx_over_threshold >/dev/null 2>&1 \
+    && harness_ctx_over_threshold "${ctx_pct%%.*}"; then
     notice="きりの良いところで /hirai-lite:state save"
   fi
 fi
