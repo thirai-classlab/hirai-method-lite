@@ -217,14 +217,103 @@ EOF
   pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く / /update 手順 2-2 の移行は中身を保ち同名は上書きせず両方残し、移行後は冒頭と画面下部が docs/ の台帳を読む"
 }
 
-# ---------- case 2: 閾値未満では無出力 ----------
+# ---------- case 2: UserPromptSubmit の 2 本は、出してよい時だけ出す ----------
+# (a) context-budget.sh は閾値未満で無出力
+# (b) loop-reminder.sh は進め方が loop のときだけ出す (v1.11.0)。
+#     **normal での無出力が最重要**。確認しながら進めたい利用者に毎ターン「確認を求めるな」が
+#     入るのは、機能ではなく害。進め方の解決は scripts/tasks-path.sh の harness_mode 1 本に
+#     通しているので、置き場 6 通り (ホーム / プロジェクト / 両方 / 無し) で出す・出さないを見る。
 case_2() {
   local out rc
   out="$(TMPDIR="$(mktemp -d)" HC_CONTEXT_RATIO=0.50 bash "$HOOKS/context-budget.sh" \
         <<< '{"session_id":"smoke-under"}' 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ]; then fail 2 "閾値未満は無出力" "exit=$rc"; return; fi
   if [ -n "$out" ]; then fail 2 "閾値未満は無出力" "出力あり: $out"; return; fi
-  pass 2 "context-budget.sh は閾値未満 (0.50) で無出力"
+
+  local lr="$HOOKS/loop-reminder.sh"
+  if [ ! -f "$lr" ]; then fail 2 "loop-reminder.sh が存在する" "$lr が無い"; return; fi
+  local lw h p want where bad="" n
+  lw="$(mktemp -d)"; mkdir -p "$lw/home/.claude" "$lw/proj/.claude"
+
+  # lr_run [env=値 ...] -> hook を実行し stdout+stderr を返す (rc は $lr_rc に入れる)
+  lr_rc=0
+  lr_run() {
+    local o
+    o="$(printf '%s' '{"session_id":"loop","prompt":"次を進めて"}' \
+         | env "$@" HOME="$lw/home" CLAUDE_PLUGIN_ROOT="$ROOT" CLAUDE_PROJECT_DIR="$lw/proj" \
+           bash "$lr" 2>&1)"; lr_rc=$?
+    printf '%s' "$o"
+  }
+
+  # <ホーム側> <プロジェクト側> <出すか yes|no> <説明>   ("-" は mode.yml を置かない)
+  while read -r h p want where; do
+    [ -n "$h" ] || continue
+    rm -f "$lw/home/.claude/mode.yml" "$lw/proj/.claude/mode.yml"
+    [ "$h" = "-" ] || printf 'mode: %s\n' "$h" > "$lw/home/.claude/mode.yml"
+    [ "$p" = "-" ] || printf 'mode: %s\n' "$p" > "$lw/proj/.claude/mode.yml"
+    out="$(lr_run SMOKE=1)"
+    [ "$lr_rc" -eq 0 ] || bad="$bad [${where}] exit=${lr_rc}"
+    if [ "$want" = "yes" ]; then
+      [ -n "$out" ] || bad="$bad [${where}] loop なのに無出力"
+    else
+      [ -z "$out" ] || bad="$bad [${where}] 出さないはずが出力: ${out}"
+    fi
+  done <<'EOF'
+loop   -      yes ホームのみloop
+-      loop   yes プロジェクトのみloop
+normal loop   yes 両方あればプロジェクト側loop
+loop   normal no  両方あればプロジェクト側normal
+-      -      no  どちらも無し
+normal -      no  ホームのみnormal
+EOF
+  if [ -n "$bad" ]; then rm -rf "$lw"; fail 2 "loop のときだけ出す" "$bad"; return; fi
+
+  # loop の中身: 3〜5 行 / 全行 [harness] 始まり / 要点 4 つ (loop・stop・subagent・確認) が揃う
+  rm -f "$lw/home/.claude/mode.yml"; printf 'mode: loop\n' > "$lw/proj/.claude/mode.yml"
+  out="$(lr_run SMOKE=1)"
+  n="$(printf '%s\n' "$out" | grep -c . || true)"
+  if [ "${n:-0}" -lt 3 ] || [ "${n:-0}" -gt 5 ]; then
+    rm -rf "$lw"; fail 2 "loop の再注入は 3〜5 行" "${n} 行: $out"; return
+  fi
+  if [ "$(printf '%s\n' "$out" | grep -c '^\[harness\] ' || true)" != "$n" ]; then
+    rm -rf "$lw"; fail 2 "全行が [harness] で始まる" "$out"; return
+  fi
+  for h in 'loop' 'stop' 'subagent' '確認'; do
+    printf '%s' "$out" | grep -qF "$h" || bad="$bad 要点[${h}]が無い"
+  done
+  if [ -n "$bad" ]; then rm -rf "$lw"; fail 2 "loop の要点が揃う" "$bad -- $out"; return; fi
+  local lines="$n"
+
+  # 止める手段と fail-open: off / 壊れた mode.yml / 読めない mode.yml / 共通ライブラリ不在 /
+  # 空 stdin / 壊れた JSON。いずれも exit 0 で、出力は「無い」か「4 行そのまま」のどちらか。
+  out="$(lr_run HC_LOOP_REMINDER=off)"
+  { [ "$lr_rc" -eq 0 ] && [ -z "$out" ]; } || bad="$bad [off] exit=${lr_rc} 出力:${out}"
+  printf 'mode: LOOP\n' > "$lw/proj/.claude/mode.yml"     # 大文字は loop ではない
+  out="$(lr_run SMOKE=1)"
+  { [ "$lr_rc" -eq 0 ] && [ -z "$out" ]; } || bad="$bad [大文字LOOP] exit=${lr_rc} 出力:${out}"
+  printf '\001garbage\002 no colon\n' > "$lw/proj/.claude/mode.yml"
+  out="$(lr_run SMOKE=1)"
+  { [ "$lr_rc" -eq 0 ] && [ -z "$out" ]; } || bad="$bad [壊れた mode.yml] exit=${lr_rc} 出力:${out}"
+  printf 'mode: loop\n' > "$lw/proj/.claude/mode.yml"; chmod 000 "$lw/proj/.claude/mode.yml"
+  out="$(lr_run SMOKE=1)"
+  { [ "$lr_rc" -eq 0 ] && [ -z "$out" ]; } || bad="$bad [読めない mode.yml] exit=${lr_rc} 出力:${out}"
+  chmod 644 "$lw/proj/.claude/mode.yml"
+  # 共通ライブラリ (scripts/tasks-path.sh) が無い置き方では、loop でも黙って通す
+  mkdir -p "$lw/plug/hooks" && cp "$lr" "$lw/plug/hooks/"
+  out="$(printf '%s' '{}' | HOME="$lw/home" CLAUDE_PLUGIN_ROOT="$lw/plug" \
+        CLAUDE_PROJECT_DIR="$lw/proj" bash "$lw/plug/hooks/loop-reminder.sh" 2>&1)"; rc=$?
+  { [ "$rc" -eq 0 ] && [ -z "$out" ]; } || bad="$bad [ライブラリ不在] exit=${rc} 出力:${out}"
+  local src
+  for src in '' '{"session_id":' 'zzz'; do
+    out="$(printf '%s' "$src" | HOME="$lw/home" CLAUDE_PLUGIN_ROOT="$ROOT" \
+          CLAUDE_PROJECT_DIR="$lw/proj" bash "$lr" 2>&1)"; rc=$?
+    n="$(printf '%s\n' "$out" | grep -c . || true)"
+    { [ "$rc" -eq 0 ] && [ "${n:-0}" -eq 4 ]; } || bad="$bad [異常入力 ${src:-空}] exit=${rc} ${n} 行"
+  done
+  rm -rf "$lw"
+  if [ -n "$bad" ]; then fail 2 "止める手段と fail-open" "$bad"; return; fi
+
+  pass 2 "context-budget.sh は閾値未満 (0.50) で無出力 / loop-reminder.sh は置き場 6 通りで loop のときだけ ${lines} 行を出し normal では 1 バイトも出さない (要点 4 つ入り・全行 [harness] 始まり) / HC_LOOP_REMINDER=off・大文字 LOOP・壊れた/読めない mode.yml・共通ライブラリ不在でも exit 0 無出力"
 }
 
 # ---------- case 3: 閾値超過で 1 度だけ発火 ----------

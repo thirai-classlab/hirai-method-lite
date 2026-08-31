@@ -16,6 +16,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/loop-reminder.sh\"",
+            "timeout": 3
+          },
+          {
+            "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/context-budget.sh\"",
             "timeout": 3
           }

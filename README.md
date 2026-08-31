@@ -54,14 +54,16 @@ Claude Code で次の 2 行を順に実行します。
 |---|---|
 | コマンド 12 個 + スキル 1 個（画面では合わせて **Skills**） | `/hirai-lite:init` `/hirai-lite:commit` など、こちらから呼び出して使う操作 12 個と、AI が必要なときに自分で読む手引き `grilling` 1 個 |
 | エージェント 3 個（**Agents**） | テストの進め方・コード品質・脆弱性をそれぞれ見る担当（`tdd-guide` / `code-reviewer` / `security-reviewer`） |
-| 自動処理 2 個（**Hooks**） | セッション開始時の 1 行表示と、容量が増えたときの警告 |
+| 自動処理 3 本（画面では **Hooks (2)**） | セッション開始時の 1 行表示、容量が増えたときの警告、`loop`（自動で進む）のときの進め方の再掲 |
 | 外部ツール接続 2 個（**MCP servers**） | コードを検索する `serena` と、ライブラリの公式ドキュメントを取ってくる `context7` |
 
 あわせて、毎回のセッションで常にかかる容量の見積もりも出ます（v1.8.0 をターミナルの `claude plugin details` で見ると `Always-on: ~520 tok` と表示されました。v1.7.0 は約 452 tokens で、増えた分は `grilling` の名前と説明が常時載るぶんです）。
 
 > **`Skills` の件数はコマンドとスキルの合計です。** v1.8.0 の `claude plugin details hirai-lite` は `Skills (13)` と出ます — コマンド 12 個 + スキル 1 個（`grilling`）で、**コマンドが 13 個に増えたわけではありません**。コマンドは `/hirai-lite:` から始まる 12 個のままです。
+>
+> **`Hooks` の件数はスクリプトの本数ではなく、きっかけ（イベント）の種類数です。** v1.11.0 の `claude plugin details hirai-lite` は `Hooks (2)  SessionStart, UserPromptSubmit` と出ますが、スクリプトは 3 本あります（`UserPromptSubmit` に 2 本ぶら下がっているため）。偽 HOME への実インストールで確かめた挙動で、3 本目を足しても表示は `(2)` のままです（別イベントを足したコピーでは `(3)` に増えました）。本数を数えるなら `ls <プラグイン>/hooks/*.sh`、または `tests/smoke.sh` case 6 の `hook=3/5` を見てください。
 
-- **自動処理（hooks）だけを対象にした承認画面は出ません。** 入れた時点で動きます。中身は `hooks/session-start.sh` と `hooks/context-budget.sh` の 2 本だけで、どちらも短いシェルスクリプトです。
+- **自動処理（hooks）だけを対象にした承認画面は出ません。** 入れた時点で動きます。中身は `hooks/session-start.sh` と `hooks/context-budget.sh` と `hooks/loop-reminder.sh` の 3 本だけで、どれも短いシェルスクリプトです。**どれも操作を止めません**（文章を足すだけ）。`loop-reminder.sh` は進め方が `loop` のときだけ動き、`normal`（確認あり）では 1 バイトも出しません。
 - **外部ツール接続（MCP）の 2 つも、承認なしで自動的につながります。** `claude mcp list` で確かめると `plugin:hirai-lite:serena: uvx … - ✔ Connected` のように、名前の頭に `plugin:hirai-lite:` が付いて出ます。`serena` は `uvx`（[uv](https://docs.astral.sh/uv/)）、`context7` は `npx`（Node.js）が必要です。無い場合は該当のものが「つながらない」と出るだけで、ほかの機能はそのまま動きます。
 
 選び終わると `Plugin is now active.`（もう使えます）か `Run /reload-plugins to activate.`（`/reload-plugins` と入力すると使えます）のどちらかが出ます。後者なら、そのまま `/reload-plugins` を実行してください。
@@ -221,6 +223,13 @@ Claude Code 2.1.247 で実際に確かめたところ、この表示が出てい
 | `normal`（既定） | `normal（確認あり）` | 重要な分かれ道で確認しながら進む |
 | `loop` | `loop（自動で進む）` | 確認を求めず最後まで自動で進む（止めたいときは「stop」と伝える） |
 
+**`loop` の進め方は毎ターン思い出させる（v1.11.0）。** ルール本体（`.claude/rules/core.md`）はセッション開始時に一度読まれるだけなので、会話が長くなると効きが薄れて途中で止まる（実使用で「よく止まる」と報告された）。`hooks/loop-reminder.sh` が毎ターン 4 行だけ要点を差し込んで、これを補う。
+
+- **止まる条件は 3 つだけ**（「stop」と言われた / やることが終わった / 続けられないエラー）、**subagent の完了待ちは停止理由にならない**、**ただし新しい設計の追加・決めた内容の変更・元に戻せない操作は `loop` でも確認する**、の 3 点を再掲する
+- **`normal` のときは 1 バイトも出さない。** 確認しながら進めたい人に「確認を求めるな」が毎ターン入るのは害でしかないため（`tests/smoke.sh` case 2 が置き場 6 通りで検査する）
+- **何も止めない。** 文章を足すだけで、操作を BLOCK も `ask` もしない（`rules/_meta.md` 条 5 の「機械強制は不可逆操作のみ」は**止める**仕組みへの制限なので、reminder は対象外）
+- 止めたいときは環境変数 `HC_LOOP_REMINDER=off`
+
 ## ultracode について
 
 `templates/settings.json` は `"ultracode": true` を含む。ultracode は xhigh 推論と、タスクごとの自動 workflow オーケストレーションを常時 on にする設定で、**通常運用よりトークン消費が大きい**。従量課金で使う場合はコスト増を見込むこと。
@@ -367,7 +376,7 @@ claude plugins install mattpocock-skills
 | `agents/` | サブエージェント 3 個（MIT、出典は `NOTICE.md`） |
 | `commands/` | スラッシュコマンド 12 個 |
 | `skills/` | スキル 1 個（`grilling`。MIT、出典は `NOTICE.md`）。`plugin.json` に `skills` キーは書かない（既定で読まれる） |
-| `hooks/` | `hooks.json` + SessionStart / UserPromptSubmit の 2 本 |
+| `hooks/` | `hooks.json` + SessionStart 1 本（`session-start.sh`）と UserPromptSubmit 2 本（`loop-reminder.sh` / `context-budget.sh`）。いずれも context を足すだけで、操作は止めない |
 | `rules/` | **プラグインは読まない。** `/init` が配置先の `.claude/rules/` へ配る素材 |
 | `scripts/` | hook / statusline が source する共通ライブラリ（パス解決 `tasks-path.sh` / context 使用率 `context-usage.sh` / 更新検知 `update-check.sh`）+ `/init` の二重ロード検査 |
 | `templates/` | `settings.json` / `mode.yml` / `CLAUDE.md` / draft / task の雛形（`CLAUDE.md` は `/init` が導入先へ置く。プラグイン直下に置くと `validate --strict` が警告するため `templates/` に置いている） |
@@ -404,9 +413,9 @@ T2 を `.claude/rules/` の**外**に置くのは意図的。`rules/` の中に�
 
 **2. 事故 2 回目で初めてルール化する。** 1 回目は事故記録（`docs/rules-reference/incidents.md`）に 1 行記録するだけ。推測による予防ルールを禁じる。前身のハーネスでは、規範の多くが発火実績ゼロの先回りだった。
 
-**3. 機械強制は不可逆操作のみ。** `settings.json` の `deny` / `ask` と hook で止めてよいのは「間違えたら戻せない」操作だけ。無害な操作を止める guard は速度を削り、やがて無効化されて規範と実挙動の乖離を生む。
+**3. 機械強制は不可逆操作のみ。** `settings.json` の `deny` / `ask` と hook で止めてよいのは「間違えたら戻せない」操作だけ。無害な操作を止める guard は速度を削り、やがて無効化されて規範と実挙動の乖離を生む。禁じているのは**止めること**なので、context を注ぐだけの hook（`loop-reminder.sh` のような reminder、`session-start.sh` のような表示）はこの条の対象外である。
 
-**4. メタルールが最初に適用される対象は、メタルール自身。** 「機械強制は不可逆操作のみ」に従えば、予算監査そのものを hook にはできない（予算超過は不可逆ではない）。よって予算チェックと層違反検出は `tests/smoke.sh` の case として実装し、commit 前に走らせる。結果 hook は 2 本に収まる。
+**4. メタルールが最初に適用される対象は、メタルール自身。** 「機械強制は不可逆操作のみ」に従えば、予算監査そのものを hook にはできない（予算超過は不可逆ではない）。よって予算チェックと層違反検出は `tests/smoke.sh` の case として実装し、commit 前に走らせる。結果 hook は 3 本（いずれも止めない）に収まる。
 
 **5. ゼロから始めて、必要になったものだけ足す。** 前身の 1,629 file から選び出すのではない。実プロジェクトで使い、不足したものだけを `/add-rule` のパイプライン経由で戻す。何が本当に必要かは、削ってみないと分からない。
 
