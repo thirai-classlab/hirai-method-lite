@@ -214,7 +214,54 @@ EOF
     *) fail 1 "移行後は画面下部が docs/ の台帳を読む" "$sl3"; return ;;
   esac
 
-  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く / /update 手順 2-2 の移行は中身を保ち同名は上書きせず両方残し、移行後は冒頭と画面下部が docs/ の台帳を読む"
+  # /init 第 2 段階 (案件ヒアリング) の並び。v1.11.0 は grilling に**観点だけ**を渡し、事実も
+  # 対象範囲も渡していなかったため、実使用で「弁護士費用パッケージの一括発注 (予算枠の確保)」という
+  # このリポジトリの開発と無関係な質問が出た (調達・法務へ枝が伸びた)。ここでは
+  # (a) 並びが 事実収集 → 範囲提示 → grilling 呼び出し であること (b) その事実収集の bash が
+  # **中身のあるリポジトリでも空のリポジトリでも動く**こと (c) grilling へ渡す指示に範囲の制約が
+  # 入っていること、を手順書から逐語に取り出して確かめる。文書と実挙動が離れた時点でここが落ちる。
+  local im="$ROOT/commands/init.md" p_f p_s p_g iblk iinst iw iout irc bad4="" f4
+  if [ ! -f "$im" ]; then fail 1 "commands/init.md が存在する" "$im が無い"; return; fi
+  p_f="$(grep -n '== 設定ファイル ==' "$im" | head -1 | cut -d: -f1)"
+  p_s="$(grep -n 'ここから伺うのは' "$im" | head -1 | cut -d: -f1)"
+  p_g="$(grep -n 'ツールで `grilling` を呼び' "$im" | head -1 | cut -d: -f1)"
+  if [ -z "$p_f" ] || [ -z "$p_s" ] || [ -z "$p_g" ]; then
+    fail 1 "第 2 段階は 事実収集 → 範囲提示 → grilling 呼び出し の順" \
+      "見つからない (事実収集=${p_f:-無} 範囲提示=${p_s:-無} grilling=${p_g:-無})"; return
+  fi
+  if [ "$p_f" -ge "$p_s" ] || [ "$p_s" -ge "$p_g" ]; then
+    fail 1 "第 2 段階は 事実収集 → 範囲提示 → grilling 呼び出し の順" \
+      "並びが違う (事実収集=${p_f} 範囲提示=${p_s} grilling=${p_g})"; return
+  fi
+  # grilling へ渡す指示 (呼び出し行の直後の囲み) に範囲の制約が入っている
+  iinst="$(awk -v s="$p_g" 'NR >= s && /^```$/ { c++; next } c == 1 { print }' "$im")"
+  for f4 in '調達' '法務' '踏み込まない' 'その質問は不要' '自分で調べる'; do
+    printf '%s' "$iinst" | grep -qF "$f4" || bad4="$bad4 grilling へ渡す指示に[${f4}]が無い"
+  done
+  # 事実収集の bash を逐語に取り出す (見出し番号ではなく中身で選ぶ)
+  iblk="$(awk '/^```bash$/ { b = ""; c = 1; next }
+               c && /^```$/ { if (b ~ /== 設定ファイル ==/) { printf "%s", b; exit } c = 0; next }
+               c { b = b $0 "\n" }' "$im")"
+  if [ -z "$iblk" ]; then fail 1 "事実収集の bash を取り出せる" "commands/init.md に無い"; return; fi
+  iw="$(mktemp -d)"; mkdir -p "$iw/full/src" "$iw/full/docs" "$iw/empty"
+  printf '# demo-app\n\n買い物かごの API。\n' > "$iw/full/README.md"
+  printf '{"name":"demo-app","scripts":{"dev":"next dev"},"dependencies":{"next":"^15"}}\n' \
+    > "$iw/full/package.json"
+  printf '# 概要\n' > "$iw/full/docs/overview.md"
+  # (a) 中身のあるプロジェクト: README / 設定ファイル / 構成 / 既存の書類 が実際に出る
+  iout="$(cd "$iw/full" && bash -c "$iblk" 2>&1)"; irc=$?
+  [ "$irc" -eq 0 ] || bad4="$bad4 [中身あり] exit=${irc}"
+  for f4 in 'demo-app' '買い物かごの API' 'あり package.json' 'scripts: dev' 'deps: next' 'src/' 'docs/overview.md'; do
+    printf '%s' "$iout" | grep -qF "$f4" || bad4="$bad4 [中身あり] ${f4} が出ない"
+  done
+  # (b) 空のプロジェクト: 材料がゼロでもエラーにせず最後まで進む (set -e 付きでも落ちない)
+  iout="$(cd "$iw/empty" && bash -c "$(printf 'set -e\n%s' "$iblk")" 2>&1)"; irc=$?
+  rm -rf "$iw"
+  [ "$irc" -eq 0 ] || bad4="$bad4 [空] exit=${irc}: ${iout}"
+  printf '%s' "$iout" | grep -qF '== 以上 ==' || bad4="$bad4 [空] 最後まで進まない: ${iout}"
+  if [ -n "$bad4" ]; then fail 1 "第 2 段階は事実を集めてから範囲を区切って伺う" "$bad4"; return; fi
+
+  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く / /update 手順 2-2 の移行は中身を保ち同名は上書きせず両方残し、移行後は冒頭と画面下部が docs/ の台帳を読む / /init 第 2 段階は 事実収集 → 範囲提示 → grilling 呼び出し の順で、事実収集の bash は中身ありでも空でも exit 0、grilling へ渡す指示に範囲の制約 (調達・法務へ踏み込まない / 不要な質問は落とす / 事実は自分で調べる) が入っている"
 }
 
 # ---------- case 2: UserPromptSubmit の 2 本は、出してよい時だけ出す ----------
