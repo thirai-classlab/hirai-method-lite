@@ -149,3 +149,96 @@ harness_update_flag_sync() (
   rm -f "$flag" 2>/dev/null
   return 0
 )
+
+# --- 更新後のスクリプト入れ替え ------------------------------------------------
+# プラグイン本体が新しくなっても、導入先 (.claude/ または $HOME/.claude/) へ**複製された**
+# 3 ファイルは古いまま残る。ここはその 1 点だけを機械的に揃える。
+#
+#   対象     : statusline.sh / tasks-path.sh / context-usage.sh (プラグイン所有)
+#   触らない : rules/ settings.json mode.yml CLAUDE.md 台帳 (すべて利用者所有)
+#   既定     : off。opt-in (harness_auto_sync = on) のときだけ動く
+#   きっかけ : プラグインの版が前回入れ替えた版と違うときだけ (同じ版なら比較すらしない)
+#   退避     : 中身が配布版と違うファイルは .bak に控えてから入れ替える
+#   反映     : 画面下部は次の描き直しから、共通ライブラリは次回起動から
+#
+# マーケットプレイスとプラグイン本体の更新はここでは行わない。Claude Code 自身が
+# 「マーケットプレイス単位の自動更新」を持っており (既定 off / /plugin の Marketplaces から
+# 切り替え)、そちらが起動後に背景で済ませる。hook から `claude plugin update` を叩くのは
+# 二重実装なうえ、セッション開始を通信で待たせることになるので行わない。
+
+HARNESS_OWNED_SCRIPTS_DEFAULT="statusline.sh tasks-path.sh context-usage.sh"
+
+# harness_sync_stamp_file [plugin_root] -> 前回入れ替えた版を控えるパスを stdout (作成はしない)
+harness_sync_stamp_file() (
+  set -uo pipefail
+  printf '%s/synced' "$(harness_update_cache_dir "${1:-}")"
+)
+
+# harness_sync_owned_scripts <plugin_root> <project_root> [force]
+#   -> 入れ替えたら報告を stdout。常に rc 0 (失敗してもセッションを壊さない)。
+#   force を渡すと opt-in と版の控えを両方とばし、/update の手順 4 と同じ 1 行ずつの
+#   作業ログ (same / updated / placed) を出す。省略時は opt-in のときだけ動き、
+#   変わったときだけ 1 行にまとめて報告する。
+harness_sync_owned_scripts() (
+  set -uo pipefail
+  local plug="${1:-${CLAUDE_PLUGIN_ROOT:-}}" root="${2:-${CLAUDE_PROJECT_DIR:-$PWD}}" force="${3:-}"
+  [ -n "$plug" ] && [ -d "$plug/scripts" ] || return 0
+
+  local cur stamp prev=""
+  cur="$(harness_local_version "$plug" 2>/dev/null)" || cur=""
+  if [ "$force" != "force" ]; then
+    # opt-in。既定 off。共通ライブラリが読めない置き方でも off に落ちる (勝手に入れ替えない)。
+    case "$(harness_auto_sync "$root" 2>/dev/null || printf 'off')" in
+      on|true|yes) ;;
+      *) return 0 ;;
+    esac
+    [ -n "$cur" ] || return 0
+    stamp="$(harness_sync_stamp_file "$plug")"
+    [ -f "$stamp" ] && prev="$(head -1 "$stamp" 2>/dev/null | tr -d '\r\n')"
+    # 版が同じ = やることなし。比較も I/O もせずに抜ける。
+    [ "$prev" = "$cur" ] && return 0
+  fi
+
+  local d s src dst n=0 b=0 placed=0
+  for d in "$root/.claude" "${HOME:+$HOME/.claude}"; do
+    [ -n "$d" ] || continue
+    [ -d "$d" ] || continue
+    # v1.10.0 で足した相棒は、statusline.sh を置いている側にだけ新しく置く
+    # (無いと画面下部と自動処理が別々の使用率を出す。v1.9.0 の不具合)。
+    if [ -e "$d/statusline.sh" ] && [ ! -e "$d/context-usage.sh" ] \
+       && [ -f "$plug/scripts/context-usage.sh" ]; then
+      if cp "$plug/scripts/context-usage.sh" "$d/context-usage.sh" 2>/dev/null; then
+        chmod +x "$d/context-usage.sh" 2>/dev/null
+        placed=$(( placed + 1 ))
+        [ "$force" = "force" ] && printf 'placed  %s\n' "$d/context-usage.sh"
+      fi
+    fi
+    for s in ${HARNESS_OWNED_SCRIPTS:-$HARNESS_OWNED_SCRIPTS_DEFAULT}; do
+      src="$plug/scripts/$s"; dst="$d/$s"
+      [ -f "$src" ] || continue
+      [ -e "$dst" ] || continue          # 置いていない場所に新しく作らない
+      if cmp -s "$src" "$dst"; then
+        [ "$force" = "force" ] && printf 'same    %s\n' "$dst"
+        continue
+      fi
+      # **控えを取れなければ入れ替えない。** 手を入れていた場合の戻り道を必ず残す。
+      cp "$dst" "$dst.bak" 2>/dev/null || continue
+      b=$(( b + 1 ))
+      if cp "$src" "$dst" 2>/dev/null; then
+        chmod +x "$dst" 2>/dev/null
+        n=$(( n + 1 ))
+        [ "$force" = "force" ] && printf 'updated %s (backup: %s.bak)\n' "$dst" "$dst"
+      fi
+    done
+  done
+
+  if [ "$force" != "force" ]; then
+    stamp="$(harness_sync_stamp_file "$plug")"
+    mkdir -p "${stamp%/*}" 2>/dev/null && printf '%s' "$cur" > "$stamp" 2>/dev/null
+    [ "$(( n + placed ))" -gt 0 ] || return 0
+    printf '[harness] v%s に合わせてスクリプト %s 件を入れ替えました' "$cur" "$(( n + placed ))"
+    [ "$b" -gt 0 ] && printf ' (元の内容は .bak に保存)'
+    printf ' — 反映は次回起動から\n'
+  fi
+  return 0
+)

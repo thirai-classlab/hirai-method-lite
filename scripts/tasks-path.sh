@@ -15,6 +15,7 @@
 # 進め方 / ルールは配置先が 2 通りある (プロジェクト側 = .claude/ と 全プロジェクト共通 = $HOME/.claude/)。
 # どちらに置いたかを決め打ちすると、片方に置いた利用者に対して黙って外れる。**在る側**を選ぶ。
 #   進め方   : HC_MODE (env) > <root>/.claude/mode.yml > $HOME/.claude/mode.yml > normal
+#   入れ替え : HC_AUTO_SYNC (env) > 同じ mode.yml の auto_sync > off (既定は入れ替えない)
 #   ルール   : HARNESS_RULES_DIR > <root>/.claude/rules > $HOME/.claude/rules > <root>/.claude/rules
 #
 # file-top に set -e / set -o pipefail を書かない。source 元の shell flags を汚染し、
@@ -116,6 +117,46 @@ harness_mode() {
   [ -n "$m" ] || m="normal"
   printf '%s' "$m"
 }
+
+# --- 更新後の入れ替え (auto_sync) ---------------------------------------------
+# プラグイン所有の 3 ファイル (statusline.sh / tasks-path.sh / context-usage.sh) を、
+# プラグインが新しくなった後に自動で入れ替えるかどうか。**既定は off (入れ替えない)。**
+# 更新は挙動の変更なので、黙って書き換わると「昨日と違う動きをする理由」を追えなくなる。
+# 解決順: env HC_AUTO_SYNC > 在る側の mode.yml の auto_sync > off
+# 進め方 (mode) と同じ 1 本を通す (置き場を自分で組み立てない)。
+
+# harness_auto_sync [root] -> on / off (未知の値はそのまま) を stdout。常に rc 0。
+harness_auto_sync() {
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" f v=""
+  if [ -n "${HC_AUTO_SYNC:-}" ]; then
+    printf '%s' "$HC_AUTO_SYNC"
+    return 0
+  fi
+  if f="$(harness_mode_file "$root")"; then
+    v="$(sed -n 's/^[[:space:]]*auto_sync:[[:space:]]*\([A-Za-z]*\).*/\1/p' "$f" 2>/dev/null | head -1)"
+  fi
+  [ -n "$v" ] || v="off"
+  printf '%s' "$v"
+}
+
+# harness_yml_set <file> <キー> <値> -> その 1 行だけを書き換える (他の行は 1 バイトも触らない)。
+# キーの行が無ければ末尾に足し、file が無ければ作る。書けたら rc 0。
+# mode.yml に 2 つ以上のキーが載るようになったため、丸ごと書き直すともう片方が消える。
+harness_yml_set() (
+  set -uo pipefail
+  local f="${1:-}" k="${2:-}" v="${3:-}" tmp
+  [ -n "$f" ] && [ -n "$k" ] || return 1
+  mkdir -p "$(dirname "$f")" 2>/dev/null || return 1
+  [ -f "$f" ] || : > "$f" 2>/dev/null || return 1
+  tmp="$f.tmp.$$"
+  # awk は 1 行ずつ print するので、元が改行で終わっていなくても行が繋がらない。
+  awk -v k="$k" -v v="$v" '
+    $0 ~ "^[[:space:]]*" k ":" && !d { print k ": " v; d = 1; next }
+    { print }
+    END { if (!d) print k ": " v }
+  ' "$f" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+  mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+)
 
 # --- ルール (rules) -----------------------------------------------------------
 # /add-rule の予算計算と /rules-audit の棚卸しが見る置き場。プロジェクト側を決め打ちすると、

@@ -2,7 +2,22 @@
 
 版の付け方は [semver](https://semver.org/lang/ja/)。`VERSION` / `.claude-plugin/plugin.json` / `.claude-plugin/marketplace.json` の 3 つは常に同じ値を持ち、`tests/smoke.sh` case 9 が一致を検証する。
 
-更新のしかたは [README の「更新する」](README.md#更新する自動では新しくなりません)。**プラグインは自動更新されない。**
+更新のしかたは [README の「更新する」](README.md#更新する既定では自動で新しくなりません)。**既定では自動更新しない**（v1.13.0 から opt-in で自動にできる）。
+
+## v1.13.0
+
+- **更新の自動化を opt-in で足した。既定は無効のままである。** 「アップデートの自動化は?」という質問に対し、まず**自前で作る前に Claude Code 本体を調べた**。結論は「**本体にある**」で、手順 1〜3（マーケットプレイスと本体の入れ替え）は**マーケットプレイス単位の自動更新**として Claude Code 自身が持っている。`/plugin` → **Marketplaces** → `hirai-lite` → **Enable auto-update**（同じ切り替えは `settings.json` の `extraKnownMarketplaces.hirai-lite.autoUpdate` に載る）。`hirai-lite` のような第三者マーケットプレイスは**既定で無効**、Anthropic 公式のものは既定で有効。**したがってこの部分は 1 行も実装していない**（車輪の再発明を避けた）。README と `/hirai-lite:config` はその案内に徹する。
+- **ハーネスが実装したのは手順 4 だけ — `/init` が導入先へ複製した 3 本（`statusline.sh` / `tasks-path.sh` / `context-usage.sh`）の入れ替えである。** ここは Claude Code の自動更新の対象外（プラグイン本体の外にある複製なので、本体が新しくなっても古いまま残る）で、かつ判断を要さない機械的な作業なので自動化の価値がある。`mode.yml` に `auto_sync: on` を書いた人だけ、**プラグインの版が変わった回のセッション冒頭に限り**実行し、何件入れ替えたかを 1 行報告する。
+- **新しい hook もコマンドも作っていない。** 入れ替えは既存の `hooks/session-start.sh` の末尾に足し（hook は 3/5 のまま）、切り替えは既存の `/hirai-lite:config` の項目 7 に足した（command は 12/12 のまま）。`commands/init.md`（298/300 行）は 1 バイトも触っていない。
+- **設定の置き場は `mode.yml` を選んだ。** 候補は `settings.json` と `mode.yml` の 2 つ。`settings.json` は**利用者所有**で、自動処理が読み書きするたびに JSON を壊す危険があり、既存の作法（`/update` の所有区分表）でも「更新では触らない」側に置かれている。`mode.yml` は**ハーネス所有**の小さな YAML で、`scripts/tasks-path.sh` の `harness_mode` が読む置き場解決（プロジェクト側 → ホーム側）をそのまま再利用でき、hook 側は `sed` 1 行で読める（JSON パーサに依存しない）。読みは `harness_auto_sync`（`HC_AUTO_SYNC` → `mode.yml` の `auto_sync` → `off`）で、進め方と**同じ 1 本**を通す。
+- **`mode.yml` に 2 つ目のキーが載ったので、書き込みを行単位に変えた。** `/config` の `mode` 変更はこれまで `printf 'mode: normal\n' > "$f"` とファイルを丸ごと書き直しており、そのままだと `auto_sync` が消える。`scripts/tasks-path.sh` に `harness_yml_set <file> <キー> <値>`（該当行だけ差し替え、無ければ末尾に足す。元が改行で終わっていなくても行が繋がらない）を足し、`/config` の 1 と 7 の両方をこれに通した。
+- **入れ替えの実装は 1 か所に集約した。** `scripts/update-check.sh` の `harness_sync_owned_scripts <plugin_root> <project_root> [force]` を、`/update` の手順 4（`force` 付き = 設定に関係なく必ず実行し、1 件ずつ `same` / `updated` / `placed` の作業ログを出す）と SessionStart の自動入れ替え（opt-in + 版が変わった回だけ + 1 行報告）が**同じ関数**を通る。手順書の bash と自動処理が別実装だと、片方だけ直って作法が離れる。
+- **安全側の作り。** (a) **既定 off** — `auto_sync` を書いていない環境は 1 バイトも変わらず、`.bak` も版の控えも作らない。(b) **版が同じ回は何もしない** — 比較すらしないので、ふだんのセッション開始は遅くならず、手を入れた複製もその版のうちは上書きされない。(c) **控えが取れなければ入れ替えない** — `cp "$dst" "$dst.bak"` が失敗したファイルは触らず、戻り道を必ず残す。(d) **対象は 3 本だけ** — `rules/` `settings.json` `CLAUDE.md` 台帳は自動では一切書き換えない。(e) **通信も CLI 呼び出しもしない** — 何が起きても `exit 0` で抜ける。(f) 1 回だけ止めるなら `HC_AUTO_SYNC=off`（`mode.yml` より優先）。
+- **hook から `claude plugin update` を叩く案は、動くと確かめたうえで採らなかった。** 実測では、**動いている Claude Code セッションの内側から**呼んでも成功する（`claude plugin marketplace update hirai-lite` 約 1.8 秒 / `claude plugin update hirai-lite@hirai-lite --scope user` 約 0.4 秒、1.9.0 → 1.12.0 を確認。ロック競合や待ちは起きず、非対話でも `-y` は不要 = `command` ソースのプラグインだけが要求する）。採らない理由は 2 つで、(1) 本体が同じことを既に持っており二重実装になる (2) SessionStart は通信を待たせない設計（更新検知すら背景 + 24 時間に 1 回）なのに、ここで 2 秒の通信を挟むと起動が遅くなる。**反映にはどのみち再起動が要る**（CLI 自身が `Restart to apply changes.` と出し、`claude plugin update --help` も `(restart required to apply)` と書く）ので、急ぐ理由も無い。
+- **検査は既存の case 7 に追加した（case は 10 のまま増やしていない）。** 追加したのは (1) **既定では導入先が 1 バイトも変わらず、`.bak` も版の控えも作られない**（最重要）(2) opt-in 時はプラグイン所有の 3 本が配布版になり、元の内容が `.bak` に残り、実行できる状態で置かれる (3) `rules/core.md` `settings.json` `CLAUDE.md` `docs/tasks/list.md` が 1 バイトも変わらない (4) 同じ版では 2 度目が走らず、手を入れた複製が残る (5) 版が上がった回だけまた入れ替わる (6) `HC_AUTO_SYNC=off` が `mode.yml` より優先され、壊れた `VERSION` でも `exit 0`。**壊して確かめた**: opt-in ゲートを外す / `.bak` 退避をやめる / 対象に `settings.json` を混ぜる / 版の一致判定を外す、の 4 通りいずれでも `FAIL case 7` になり exit 1 になる。
+- 予算は据え置き（T0 警告 6,000 / 上限 10,000、hook 5 / command 12 / skill 3 / smoke case 10）。**T0 実測 4,114 tokens で v1.12.0 から変化なし**（`rules/` と `templates/CLAUDE.md` を触っていない）。hook 3/5・command 12/12・skill 1/3・smoke case 10/10 も据え置き。
+- **実測。** (1) smoke 10 case 全 PASS / exit 0、`claude plugin validate --strict` PASS。(2) 既定・opt-in・同じ版・新しい版・`HC_AUTO_SYNC=off`・壊れた `VERSION`・読めないファイル・不正な `TMPDIR`・`PATH` 空 の 9 通りで `exit 0` を確認。(3) `/update` の手順 4 を共通関数に差し替えたうえで逐語実行し、`placed` / `updated` / `same` の作業ログと画面下部 2 行が従来どおり出ることを確認した。(4) Claude Code 2.1.258 の偽 HOME で、マーケットプレイス追加 → 1.9.0 を導入 → 上流を 1.12.0 に進める → `marketplace update` + `plugin update` の一連を通し、`claude plugin list --json` が `1.12.0` を返すことを確認した。(5) 公開版を偽 HOME に実インストールして届いていることを確認した。
+- 事故台帳（`docs/rules-reference/plugin-development.md` の 5 番）を「第三者マーケットプレイスは既定で自動更新されない」に書き直し、**「本体に無い」と決める前に本体の設定を先に探す**という一般形を足した。
 
 ## v1.12.0
 

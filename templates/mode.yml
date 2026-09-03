@@ -13,3 +13,20 @@
 # 読む人   : プラグインの hooks/session-start.sh と scripts/statusline.sh
 
 mode: normal
+
+# auto_sync（更新後の入れ替え） — 値は on か off の 2 つだけ。**既定は off。**
+#
+#   off : 何もしない。更新は /hirai-lite:update で自分のタイミングで行う (最初はこちら)
+#   on  : プラグインの版が変わった回のセッション冒頭だけ、/init が導入先へ複製した
+#         3 本 (statusline.sh / tasks-path.sh / context-usage.sh) を配布版に揃え、
+#         何件入れ替えたかを 1 行報告する。中身が違うものは .bak に控えてから入れ替える。
+#         決まりごと (rules) ・安全設定 (settings.json) ・CLAUDE.md ・やることの一覧表は
+#         **自動では一切書き換えない。** 版が同じ回は何もしない。
+#
+# 切り替え : /hirai-lite:config の項目 7
+# 一時的に : 環境変数 HC_AUTO_SYNC=off (このファイルより優先される)
+#
+# プラグイン本体そのものの自動更新は **Claude Code 本体の機能**でここでは扱わない
+# (/plugin → Marketplaces → Enable auto-update。第三者マーケットプレイスは既定 off)。
+
+auto_sync: off

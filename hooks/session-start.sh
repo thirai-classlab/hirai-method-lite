@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SessionStart hook: 現在の mode / 未完了タスク数 / 直近 state を 5 行以内で出力する。
+# 更新の合図と「更新後の入れ替え」の報告は、該当する回だけ末尾に 1 行ずつ足す。
 # 対象ファイルが 1 つも無くても正常終了する (fail-open)。
 #
 # パス解決は 2 段構え。
@@ -52,6 +53,7 @@ fi
 # --- 更新検知: 取得は背景 + 24h に 1 回、表示は前回キャッシュ値 (通信を待たない) ---
 # 版を比べる VERSION はプラグイン側にあるので plugin_root を渡す。
 update_line=""
+sync_line=""
 if [ -f "$plugin_root/scripts/update-check.sh" ]; then
   # shellcheck source=../scripts/update-check.sh
   . "$plugin_root/scripts/update-check.sh" 2>/dev/null || true
@@ -60,6 +62,12 @@ if [ -f "$plugin_root/scripts/update-check.sh" ]; then
     update_line="$(harness_update_notice "$plugin_root" 2>/dev/null || true)"
     # 画面下部のお知らせ枠へ結果を渡す (statusline はプラグインのパスを知れないため)。
     harness_update_flag_sync "$plugin_root" >/dev/null 2>&1 || true
+  fi
+  # --- 更新後の入れ替え: **既定 off**。/config で on にした人だけ、プラグインが
+  # 新しくなった回に限り、複製された 3 ファイル (statusline.sh / tasks-path.sh /
+  # context-usage.sh) を配布版に揃える。ルール・設定・CLAUDE.md・台帳には触らない。
+  if command -v harness_sync_owned_scripts >/dev/null 2>&1; then
+    sync_line="$(harness_sync_owned_scripts "$plugin_root" "$root" 2>/dev/null || true)"
   fi
 fi
 
@@ -79,5 +87,6 @@ else
   echo "[harness] 前回の続き: なし"
 fi
 [ -n "$update_line" ] && echo "$update_line"
+[ -n "$sync_line" ] && echo "$sync_line"
 
 exit 0

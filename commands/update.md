@@ -142,21 +142,13 @@ rules から先に削除してから `/init` を実行する。手順 0 の控�
 **置いていない場所に新しく作らない。** プロジェクト側とホーム側の両方を見て、**すでに在るものだけ**を入れ替える
 (片方に決め打ちすると、`/init user` で入れた人はホーム側が古いまま残り、使われないファイルがプロジェクト側に増える)。
 
+入れ替えそのものは共通ライブラリの `harness_sync_owned_scripts` 1 本に集約してある
+（セッション冒頭の自動入れ替えと**同じ関数**を通す。手順書と自動処理で作法が離れないようにするため）。
+`force` を渡すと、設定に関係なく必ず実行し、1 件ずつ作業ログを出す。
+
 ```bash
-for D in .claude "$HOME/.claude"; do
-  [ -e "$D/statusline.sh" ] && [ ! -e "$D/context-usage.sh" ] \
-    && cp "$CLAUDE_PLUGIN_ROOT/scripts/context-usage.sh" "$D/context-usage.sh" \
-    && chmod +x "$D/context-usage.sh" && echo "placed $D/context-usage.sh"
-  for s in statusline.sh tasks-path.sh context-usage.sh; do
-    src="$CLAUDE_PLUGIN_ROOT/scripts/$s"; dst="$D/$s"
-    [ -e "$dst" ] || continue
-    if cmp -s "$src" "$dst"; then
-      echo "same    $dst"
-    else
-      cp "$dst" "$dst.bak" && cp "$src" "$dst" && chmod +x "$dst" && echo "updated $dst (backup: $dst.bak)"
-    fi
-  done
-done
+. "$CLAUDE_PLUGIN_ROOT/scripts/update-check.sh"
+harness_sync_owned_scripts "$CLAUDE_PLUGIN_ROOT" "$PWD" force
 for D in .claude "$HOME/.claude"; do
   [ -e "$D/statusline.sh" ] && bash "$D/statusline.sh" </dev/null && echo
 done
@@ -217,6 +209,19 @@ bash の出力は作業ログであって報告ではない。**最後に必ず�
   いまは両方残っています。読まれるのは docs/ 側です。中身を見比べて、残すほうを教えてください。`
 - 手順 2 の `scope-check.sh` が警告を出していたら、報告の末尾にその全文をそのまま貼る。
 - 途中で止まったら同じ調子で「何が起きたか」「どうすればよいか」「ここまでにやったこと」を書く。
+
+## 手動でやらずに済ませたいとき（既定は無効）
+
+上の手順 1 と手順 4 は、それぞれ**自動にできる**。どちらも既定は無効で、`/hirai-lite:config` の
+項目 7 から切り替える。**有効にするかどうかは利用者が決める**ので、こちらから勝手に有効化しない。
+
+| 手順 | 自動にする方法 | 受け持ち |
+|---|---|---|
+| 1（本体の入れ替え） | `/plugin` → Marketplaces → `hirai-lite` → **Enable auto-update** | **Claude Code 本体の機能。** 起動後の背景で最大 10 分の遅延を挟んで実行し、反映は `/reload-plugins` か次回起動から |
+| 4（複製した 3 本） | `/hirai-lite:config` → 7 → 更新後の入れ替えを有効 | ハーネス。プラグインの版が変わった回のセッション冒頭だけ実行する |
+
+手順 2（書類の移動）と手順 3（rules の再配置）は**自動にしない**。どちらも利用者が書いた中身に
+関わる判断（同名衝突をどちらに寄せるか / どのルールを新しくするか）を含むので、必ず人が見る。
 
 ## 更新検知について
 

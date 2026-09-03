@@ -681,7 +681,92 @@ case_7() {
   if printf '%s' "$out" | grep -q '更新あり'; then rm -rf "$tmp" "$td"; fail 7 "off で無出力" "更新あり が出た: $out"; return; fi
 
   rm -rf "$tmp" "$td"
-  pass 7 "VERSION=${ver} は semver 1 行 / キャッシュ有効時と off 指定は通信も出力もしない"
+
+  # (c) 更新後の入れ替え (v1.13.0)。**既定 off が最重要** — opt-in していない利用者の
+  # 導入先が、セッションを開いただけで 1 バイトでも変わってはいけない。そのうえで
+  # opt-in したときは「版が変わった回だけ」「プラグイン所有の 3 本だけ」を入れ替え、
+  # 利用者所有 (rules / settings.json / CLAUDE.md / 台帳) には触らないことを見る。
+  local sw sp out7 bad7="" f7
+  sw="$(mktemp -d)"; sp="$sw/plug"
+  mkdir -p "$sp/hooks" "$sw/proj/.claude/rules" "$sw/proj/docs/tasks" "$sw/home/.claude" "$sw/td"
+  cp -R "$ROOT/scripts" "$sp/" 2>/dev/null
+  cp "$HOOKS/session-start.sh" "$sp/hooks/" 2>/dev/null
+  printf '9.9.0\n' > "$sp/VERSION"
+  # 導入先: プラグイン所有の複製が古い状態 + 利用者所有のファイル一式
+  printf '#!/usr/bin/env bash\necho OLD-statusline\n' > "$sw/proj/.claude/statusline.sh"
+  printf '# OLD tasks-path\n'                         > "$sw/proj/.claude/tasks-path.sh"
+  printf '# 決まりごと\n'                             > "$sw/proj/.claude/rules/core.md"
+  printf '{"statusLine":{"command":"x"}}\n'           > "$sw/proj/.claude/settings.json"
+  printf '# CLAUDE\n'                                 > "$sw/proj/CLAUDE.md"
+  printf '| 1 | 未着手 | やること |\n'                > "$sw/proj/docs/tasks/list.md"
+  printf 'mode: normal\n'                             > "$sw/proj/.claude/mode.yml"
+  cp -R "$sw/proj" "$sw/orig"
+  # run_sync <mode.yml の中身> -> セッション冒頭を 1 回動かして出力を返す (通信はしない)
+  run_sync() {
+    printf '%s' "$1" > "$sw/proj/.claude/mode.yml"
+    HOME="$sw/home" TMPDIR="$sw/td" HARNESS_UPDATE_CHECK=off \
+      CLAUDE_PLUGIN_ROOT="$sp" CLAUDE_PROJECT_DIR="$sw/proj" \
+      bash "$sp/hooks/session-start.sh" 2>&1
+  }
+  # 1) 既定 (auto_sync を書いていない) では何も起きない
+  out7="$(run_sync 'mode: normal
+')"
+  printf '%s' "$out7" | grep -q '入れ替えました' && bad7="$bad7 既定で入れ替えの報告が出た"
+  for f7 in .claude/statusline.sh .claude/tasks-path.sh; do
+    cmp -s "$sw/orig/$f7" "$sw/proj/$f7" || bad7="$bad7 既定で ${f7} が書き換わった"
+  done
+  [ -e "$sw/proj/.claude/context-usage.sh" ] && bad7="$bad7 既定で context-usage.sh が新設された"
+  ls "$sw/proj/.claude"/*.bak >/dev/null 2>&1 && bad7="$bad7 既定で .bak が作られた"
+  [ -d "$sw/td/claude-harness-lite" ] && bad7="$bad7 既定で版の控えが作られた"
+  # 2) opt-in すると入れ替わる。中身が違うものは .bak に控えてから。
+  out7="$(run_sync 'mode: normal
+auto_sync: on
+')"
+  printf '%s' "$out7" | grep -q '入れ替えました' || bad7="$bad7 opt-in で報告が出ない: $out7"
+  for f7 in statusline.sh tasks-path.sh context-usage.sh; do
+    cmp -s "$sp/scripts/$f7" "$sw/proj/.claude/$f7" || bad7="$bad7 opt-in で ${f7} が配布版になっていない"
+  done
+  grep -q 'OLD-statusline' "$sw/proj/.claude/statusline.sh.bak" 2>/dev/null \
+    || bad7="$bad7 元の statusline.sh が .bak に控えられていない"
+  [ -x "$sw/proj/.claude/statusline.sh" ] || bad7="$bad7 入れ替え後に実行できない"
+  # 3) 利用者所有は 1 バイトも変わらない (mode.yml は検査側で書き換えているので対象外)
+  for f7 in .claude/rules/core.md .claude/settings.json CLAUDE.md docs/tasks/list.md; do
+    cmp -s "$sw/orig/$f7" "$sw/proj/$f7" || bad7="$bad7 利用者所有の ${f7} が書き換わった"
+  done
+  # 4) 版が同じ回は何もしない (手を入れた複製もその版のうちは上書きしない)
+  printf '#!/usr/bin/env bash\necho USER-EDIT\n' > "$sw/proj/.claude/statusline.sh"
+  out7="$(run_sync 'mode: normal
+auto_sync: on
+')"
+  printf '%s' "$out7" | grep -q '入れ替えました' && bad7="$bad7 同じ版で 2 度目の入れ替えが走った"
+  grep -q 'USER-EDIT' "$sw/proj/.claude/statusline.sh" || bad7="$bad7 同じ版なのに上書きされた"
+  # 5) 版が上がった回だけ、また入れ替わる
+  printf '9.9.1\n' > "$sp/VERSION"
+  out7="$(run_sync 'mode: normal
+auto_sync: on
+')"
+  printf '%s' "$out7" | grep -q '入れ替えました' || bad7="$bad7 新しい版で入れ替えが走らない: $out7"
+  cmp -s "$sp/scripts/statusline.sh" "$sw/proj/.claude/statusline.sh" \
+    || bad7="$bad7 新しい版で配布版に戻っていない"
+  grep -q 'USER-EDIT' "$sw/proj/.claude/statusline.sh.bak" 2>/dev/null \
+    || bad7="$bad7 直前の内容が .bak に残っていない"
+  # 6) HC_AUTO_SYNC=off は mode.yml より優先 / 壊れた環境でも exit 0
+  printf '%s' 'x' > "$sw/proj/.claude/statusline.sh"
+  printf 'mode: normal\nauto_sync: on\n' > "$sw/proj/.claude/mode.yml"
+  printf '9.9.2\n' > "$sp/VERSION"
+  HC_AUTO_SYNC=off HOME="$sw/home" TMPDIR="$sw/td" HARNESS_UPDATE_CHECK=off \
+    CLAUDE_PLUGIN_ROOT="$sp" CLAUDE_PROJECT_DIR="$sw/proj" \
+    bash "$sp/hooks/session-start.sh" >/dev/null 2>&1
+  grep -q '^x$' "$sw/proj/.claude/statusline.sh" || bad7="$bad7 HC_AUTO_SYNC=off が効かない"
+  printf 'not a semver\n' > "$sp/VERSION"
+  run_sync 'mode: normal
+auto_sync: on
+' >/dev/null 2>&1 || bad7="$bad7 VERSION が壊れていると exit 0 で抜けない"
+  unset -f run_sync
+  rm -rf "$sw"
+  if [ -n "$bad7" ]; then fail 7 "更新後の入れ替えは既定 off で、版が変わった回だけ 3 本を揃える" "$bad7"; return; fi
+
+  pass 7 "VERSION=${ver} は semver 1 行 / キャッシュ有効時と off 指定は通信も出力もしない / 更新後の入れ替えは既定 off (opt-in しなければ導入先は 1 バイトも変わらず .bak も版の控えも作られない)、opt-in 時はプラグイン所有の 3 本だけを版が変わった回に揃えて .bak に控え、rules・settings.json・CLAUDE.md・台帳には触らず、同じ版では何もせず、HC_AUTO_SYNC=off と壊れた VERSION でも exit 0"
 }
 
 # ---------- case 8: 新版キャッシュのみ通知し、semver を数値比較する ----------

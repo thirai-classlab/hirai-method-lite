@@ -130,9 +130,9 @@ Claude Code で次の 2 行を順に実行します。
 
 （`/clear` と「閉じて開き直す」が細かい点まで完全に同じかどうかは、公式ドキュメントに書かれていません。迷うときは閉じて開き直すほうが確実です。）
 
-## 更新する（自動では新しくなりません）
+## 更新する（既定では自動で新しくなりません）
 
-⚠️ **Claude Code のプラグインは、放っておいても新しくなりません。** 入れたときの中身がそのまま残り続けます。新しい版が出たら、下の手順で自分で入れ替えてください。
+⚠️ **既定では、放っておいても新しくなりません。** 入れたときの中身がそのまま残り続けます。新しい版が出たら、下の手順で自分で入れ替えてください。自動にすることもできます（[更新を自動にする](#更新を自動にする既定は無効)）が、**このプラグインは自動処理と決まりごとを配るので、更新は動きの変更になります。** 黙って書き換わると「昨日と違う動きをする理由」を追えなくなるため、**既定は無効**にしてあります。
 
 ### 更新の合図
 
@@ -156,6 +156,41 @@ Claude Code で次の 2 行を順に実行します。
 **4 を飛ばすと、画面下部の表示が古いままになります。** ステップ 1〜3 で新しくなるのはコマンド・自動処理・エージェント・外部ツール接続だけで、`/hirai-lite:init` のときにプロジェクトへ**コピーされた**ファイル（画面下部の表示スクリプトなど）は、その場に残った古いコピーのままだからです。
 
 ステップ 4 が入れ替えるのは、あなたが編集する前提でない 3 本（`statusline.sh` / `tasks-path.sh` / `context-usage.sh`）だけです。手を入れていた場合は、元の内容を `.bak` という名前で残してから入れ替えます。**決まりごと（ルール）・安全設定・mode（進め方）の設定・やることの一覧表には触りません。**
+
+### 更新を自動にする（既定は無効）
+
+ステップ 1〜3 と ステップ 4 は、それぞれ別々に自動にできます。**どちらも既定は無効**で、`/hirai-lite:config` の項目 7 で今の状態を確認・切り替えできます。片方だけ有効にしても構いません。
+
+| 自動にできるもの | 切り替え方 | 誰がやるのか |
+|---|---|---|
+| **ステップ 1〜3**（本体の入れ替え） | `/plugin` → **Marketplaces** → `hirai-lite` → **Enable auto-update** | **Claude Code 本体の機能です。** このプラグインは何もしていません |
+| **ステップ 4**（複製された 3 本） | `/hirai-lite:config` → 7 → 更新後の入れ替えを有効 | このプラグイン |
+
+**ステップ 1〜3 の自動化は、Claude Code がもともと持っている仕組みです。** マーケットプレイス単位で切り替えるもので、`hirai-lite` のような第三者のマーケットプレイスは**既定で無効**です（Anthropic 公式のものは既定で有効）。有効にすると、Claude Code がセッション開始後の背景で（最大 10 分の遅延を挟んで）一覧と本体を新しくします。**動いているセッションはそのまま**で、反映は `/reload-plugins` か次に開いたときからです。同じ切り替えは `settings.json` に直接書くこともできます。
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "hirai-lite": {
+      "source": { "source": "github", "repo": "thirai-classlab/hirai-method-lite" },
+      "autoUpdate": true
+    }
+  }
+}
+```
+
+**ステップ 4 の自動化がこのプラグインの受け持ちです。** 有効にすると、`mode.yml` に `auto_sync: on` が書かれ、**プラグインの版が変わった回のセッション冒頭だけ**、複製された 3 本を配布版に揃えて 1 行報告します。
+
+```
+[harness] v1.13.0 に合わせてスクリプト 2 件を入れ替えました (元の内容は .bak に保存) — 反映は次回起動から
+```
+
+- **版が同じ回は何もしません。** 比較すらしないので、ふだんのセッション開始は 1 バイトも遅くなりません。手を入れた複製も、その版のうちは上書きされません。
+- **中身が配布版と違うものは `.bak` に控えてから**入れ替えます。控えが取れなかったファイルは入れ替えません（戻り道を必ず残します）。
+- **決まりごと（ルール）・安全設定・`CLAUDE.md`・やることの一覧表は、自動では一切書き換えません。** 対象は上の 3 本だけです。
+- 失敗してもセッションは壊れません（通信も CLI 呼び出しもせず、何が起きても `exit 0` で抜けます）。
+- ステップ 2（書類の移動）と ステップ 3（rules の再配置）は**自動にできません**。どちらも「同名衝突をどちらに寄せるか」「どのルールを新しくするか」という利用者の判断を含むので、`/hirai-lite:update` で人が見ます。
+- 1 回だけ止めたいときは環境変数 `HC_AUTO_SYNC=off`（`mode.yml` より優先されます）。
 
 ### 合図が出ないとき
 
@@ -266,7 +301,7 @@ Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: normal（確認あり） | f
 
 全プロジェクト共通（`/hirai-lite:init user`）に入れた場合だけは、`statusLine.command` を `$HOME` を展開した絶対パス（例: `bash "/home/you/.claude/statusline.sh"`）に書き換える。`${CLAUDE_PROJECT_DIR}` は開いているプロジェクトごとに変わるため、全プロジェクト共通の設定からは使えないため。進め方（`mode.yml`）はプロジェクト側を先に見て、無ければホーム側を見る。
 
-`.claude/statusline.sh` と `.claude/tasks-path.sh` と `.claude/context-usage.sh` の 3 本は**プラグイン所有**であり、`/update` で配布版に置き換わる（中身を変えていた場合は `.bak` に退避してから置き換える）。`.claude/rules/` `settings.json` `mode.yml` `CLAUDE.md` 台帳は利用者所有で、更新では触らない。
+`.claude/statusline.sh` と `.claude/tasks-path.sh` と `.claude/context-usage.sh` の 3 本は**プラグイン所有**であり、`/update` で配布版に置き換わる（中身を変えていた場合は `.bak` に退避してから置き換える）。`.claude/rules/` `settings.json` `mode.yml` `CLAUDE.md` 台帳は利用者所有で、更新では触らない。入れ替えの実装は `scripts/update-check.sh` の `harness_sync_owned_scripts` 1 本に集約してあり、`/update` の手順 4（`force` 付き = 必ず実行 + 1 件ずつ作業ログ）と SessionStart の自動入れ替え（opt-in + 版が変わった回だけ + 1 行報告）が**同じ関数**を通る。
 
 プラグイン側のパスを直接指さないのは、**`${CLAUDE_PLUGIN_ROOT}` が settings.json では展開されないため**（[公式仕様](https://code.claude.com/docs/en/plugins-reference.md)の「Where `${CLAUDE_PLUGIN_ROOT}` is Available」に statusLine と project settings は含まれない）。手で配線する場合は `.claude/settings.json` に上記 `statusLine` ブロックを足すか、絶対パスを書く。不要なら `statusLine` キーを消す。
 
@@ -364,7 +399,7 @@ claude plugins install mattpocock-skills
 
 4. **ロード検証** — **`/init` の次に開くセッション**で行う（rules は起動時に読まれるため、`/init` を実行したセッション内では確認できない。`/init` の終了条件にも含めていない）。新しいセッションを開き、T0 の 3 ファイルが載っていること、T1 が `paths:` 該当ファイルを開くまで載らないことを確認する。想定と違えば frontmatter を直す。
 
-5. **更新する** — プラグインは自動更新されない。`/plugin marketplace update hirai-lite` → `/plugin update hirai-lite@hirai-lite` → 再起動 → `/hirai-lite:update`（旧レイアウトの書類を `docs/` へ `mv` で移す → rules を再配置 → プラグイン所有の `statusline.sh` / `tasks-path.sh` / `context-usage.sh` を、配置先 (`.claude/` または `$HOME/.claude/`) のうち**実際に在る側だけ**配布版に入れ替え）。利用者向けの手順は[更新する](#更新する自動では新しくなりません)。
+5. **更新する** — 既定では自動更新しない（本体の自動更新は Claude Code 本体の機能で、第三者マーケットプレイスは既定 off。複製された 3 本の入れ替えは `mode.yml` の `auto_sync`、既定 off。どちらも `/hirai-lite:config` の項目 7）。手順は `/plugin marketplace update hirai-lite` → `/plugin update hirai-lite@hirai-lite` → 再起動 → `/hirai-lite:update`（旧レイアウトの書類を `docs/` へ `mv` で移す → rules を再配置 → プラグイン所有の `statusline.sh` / `tasks-path.sh` / `context-usage.sh` を、配置先 (`.claude/` または `$HOME/.claude/`) のうち**実際に在る側だけ**配布版に入れ替え）。利用者向けの手順は[更新する](#更新する既定では自動で新しくなりません)。
 
 ## このリポジトリの構成
 
