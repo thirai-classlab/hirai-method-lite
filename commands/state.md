@@ -54,7 +54,7 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 8. **0 件なら「次回に効くものはありません」と 1 行返してこの節を終える。** 無理に記録を作らない（既定は入れない）。ここで作った 1 件が来年も毎セッション載り続ける。
 9. 各件の置き場を `.claude/rules/_meta.md` の条文で決める（条 1 = 事故 1 回目は記録して終わり / 条 2 = 既定は T1 / 条 5 = 元に戻せない操作だけ `settings.json` の `deny` / `ask` / 条 8 = 追加は承認必須）。4 択に整理した表は上の skill の §3 にある。**新しい判定基準を作らない。**
 10. **自動で書いてよいもの**（承認不要。**追記のみ**で、既存行の書き換え・削除はしない）。
-    - 事故 1 回目 / 背景・経緯 / 詳細 → 事故記録（`bash -c '. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; harness_incidents_file "$PWD"'` が返すパス。通常は `docs/rules-reference/incidents.md`）か `docs/rules-reference/` の該当ファイル
+    - 事故 1 回目 / 背景・経緯 / 詳細 → 事故記録（`tasks-path.sh` の `harness_incidents_file "$PWD"` が返すパス。通常は `docs/rules-reference/incidents.md`）か `docs/rules-reference/` の該当ファイル
     - 意思決定の記録 → `docs/` の該当ファイル（技術判断なら `docs/architecture.md`）
 11. **ルールの追加（T0 / T1 / `settings.json`）は自分で書かない。** 本文に **何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか** の 5 点をこの語で示し（型と記入例は `docs/rules-reference/approval-template.md`）、そのうえで `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）を出す。5 項目は本文に書き、選択肢の説明文に詰め込まない。**承認されたものだけ** `/hirai-lite:add-rule "<ルール案 1 行>"` に渡す（分類 → 重複検査 → 層決定 → 記述最適化 → 予算 → 配置とロード検証の 6 工程）。承認が得られなければ 1 バイトも書かない（`_meta.md` 条 8）。ここで自前の追記手順を作らない。実際に出す文面の例:
 
@@ -134,7 +134,7 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 
 ## loop 引数
 
-`/state resume loop` で呼ばれた場合、6 のサマリ出力後に mode（進め方）を `loop`（自動で進む）へ書き換え（書き込み先は決め打ちせず `. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; harness_mode_write_file "$PWD"` が返す**すでに在る側**。`/hirai-lite:config` と同じ経路）、台帳の `進行中` → `未着手` の順に連続で着手する。着手できるのは対応 draft の `approved_at:` が埋まっているタスクのみ。空のタスクに到達したら、その id を報告して停止する。
+`/state resume loop` で呼ばれた場合、6 のサマリ出力後に mode（進め方）を `loop`（自動で進む）へ書き換え（書き込み先は決め打ちせず `tasks-path.sh` の `harness_mode_write_file "$PWD"` が返す**すでに在る側**。`/hirai-lite:config` と同じ経路）、台帳の `進行中` → `未着手` の順に連続で着手する。着手できるのは対応 draft の `approved_at:` が埋まっているタスクのみ。空のタスクに到達したら、その id を報告して停止する。
 
 loop 実行を止める条件は 3 つ。
 - user が停止を指示した。

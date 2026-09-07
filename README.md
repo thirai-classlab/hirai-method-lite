@@ -305,7 +305,7 @@ Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: normal（確認あり） | f
 
 全プロジェクト共通（`/hirai-lite:init user`）に入れた場合だけは、`statusLine.command` を `$HOME` を展開した絶対パス（例: `bash "/home/you/.claude/statusline.sh"`）に書き換える。`${CLAUDE_PROJECT_DIR}` は開いているプロジェクトごとに変わるため、全プロジェクト共通の設定からは使えないため。進め方（`mode.yml`）はプロジェクト側を先に見て、無ければホーム側を見る。
 
-`.claude/statusline.sh` と `.claude/tasks-path.sh` と `.claude/context-usage.sh` の 3 本は**プラグイン所有**であり、`/update` で配布版に置き換わる（中身を変えていた場合は `.bak` に退避してから置き換える）。`.claude/rules/` `settings.json` `mode.yml` `CLAUDE.md` 台帳は利用者所有で、更新では触らない。入れ替えの実装は `scripts/update-check.sh` の `harness_sync_owned_scripts` 1 本に集約してあり、`/update` の手順 4（`force` 付き = 必ず実行 + 1 件ずつ作業ログ）と SessionStart の自動入れ替え（opt-in + 版が変わった回だけ + 1 行報告）が**同じ関数**を通る。
+`.claude/statusline.sh` と `.claude/tasks-path.sh` と `.claude/context-usage.sh` の 3 本は**プラグイン所有**であり、`/update` で配布版に置き換わる（中身を変えていた場合は `.bak` に控えを取ってから置き換える。コピーなので元の内容は残る）。`.claude/rules/` `settings.json` `mode.yml` `CLAUDE.md` 台帳は利用者所有で、更新では触らない。入れ替えの実装は `scripts/update-check.sh` の `harness_sync_owned_scripts` 1 本に集約してあり、`/update` の手順 4（`force` 付き = 必ず実行 + 1 件ずつ作業ログ）と SessionStart の自動入れ替え（opt-in + 版が変わった回だけ + 1 行報告）が**同じ関数**を通る。
 
 プラグイン側のパスを直接指さないのは、**`${CLAUDE_PLUGIN_ROOT}` が settings.json では展開されないため**（[公式仕様](https://code.claude.com/docs/en/plugins-reference.md)の「Where `${CLAUDE_PLUGIN_ROOT}` is Available」に statusLine と project settings は含まれない）。手で配線する場合は `.claude/settings.json` に上記 `statusLine` ブロックを足すか、絶対パスを書く。不要なら `statusLine` キーを消す。
 

@@ -11,7 +11,8 @@ description: draft dir (通常 docs/draft/) に設計 draft を起こす。承�
 draft dir は `$HARNESS_DRAFT_DIR` > 既存の `docs/draft/` > (旧レイアウト) 既存の `.claude/draft/` > (どちらも無ければ) `docs/draft/` の順に解決する。台帳と同じ解決順で、**新しく作るときは常に `docs/draft/`**。
 
 ```bash
-DRAFT="$(bash -c '. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; harness_draft_dir "$PWD"')"
+P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
+. "$P/scripts/tasks-path.sh"; DRAFT="$(harness_draft_dir "$PWD")"
 mkdir -p "$DRAFT"
 echo "$DRAFT"
 ```
@@ -61,7 +62,7 @@ approved_at:
 3. §1〜§6 を埋める。§5 は `npm test` の exit 0 のような判定できる形にする。埋められない項目は `未定:` を付けて残し、user に質問する。
 4. 禁止語彙を検査する。`grep -nE '適切に|必要に応じて|可能な限り|十分に|慎重に' "$DRAFT/<slug>.md"` が 1 件でもヒットしたら、その行を判定できる条件へ書き換えて再検査する。
 5. draft の §3 採用案と §5 完了条件を要約してチャットに提示し、承認を求める。
-   **承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（無ければ `$CLAUDE_PLUGIN_ROOT/docs/rules-reference/approval-template.md`）。 「何をしたいか」には §3 採用案の要旨を、「どうやるか」には §5 完了条件と step 数を入れる。
+   **承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル）。 「何をしたいか」には §3 採用案の要旨を、「どうやるか」には §5 完了条件と step 数を入れる。
 6. user が承認したら frontmatter の `approved_at:` に当日の日付を入れ、§7 に `- YYYY-MM-DD 承認` を追記する。承認が無い間 `approved_at:` は空のままにする。
 
 ## 判定できる終了条件

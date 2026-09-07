@@ -12,7 +12,8 @@ argument-hint: [mode normal|loop]
 ## 読み取り (ここでは 1 バイトも書き換えない)
 置き場所は人によって 2 通りある (このプロジェクトの `.claude/` と全プロジェクト共通の `~/.claude/`)。**解決を自分で組み立てず**、セッション冒頭・画面下部と同じ共通ライブラリに任せる。
 ```bash
-. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"
+P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
+. "$P/scripts/tasks-path.sh"
 R="$(harness_rules_dir "$PWD")"; D="$(dirname "$R")"
 m="$(harness_mode "$PWD")"; case "$m" in normal) m="normal（確認あり）" ;; loop) m="loop（自動で進む）" ;; esac
 echo "mode（進め方）: $m / 設定ファイル: $(harness_mode_write_file "$PWD")"
@@ -23,9 +24,9 @@ for f in CLAUDE.md "$HOME/.claude/CLAUDE.md" "$R"/*.md; do
   [ -f "$f" ] || continue
   head -5 "$f" | grep -q '^paths:' || wc -c "$f"
 done | awk '{s+=$1} END {print "常時読まれる量:", int(s/3)}'
-. "$CLAUDE_PLUGIN_ROOT/scripts/update-check.sh"
+. "$P/scripts/update-check.sh"
 [ "${HARNESS_UPDATE_CHECK:-on}" = off ] && echo "更新の確認: 無効" || echo "更新の確認: 有効"
-date -r "$(harness_update_cache_dir "$CLAUDE_PLUGIN_ROOT")/stamp" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "最後に確認: まだありません"
+date -r "$(harness_update_cache_dir "$P")/stamp" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "最後に確認: まだありません"
 # 7-a プラグイン本体の自動更新は **Claude Code 本体の機能**（マーケットプレイス単位）。既定は無効。
 #     置き場は settings.json の extraKnownMarketplaces.hirai-lite.autoUpdate で、
 #     /plugin の Marketplaces タブの切り替えと同じ場所を読む（ここで独自の仕組みを作らない）。
@@ -76,7 +77,8 @@ echo "更新後の入れ替え: $as / 設定ファイル: $(harness_mode_write_f
 ### 1. mode（進め方）
 `/hirai-lite:config mode loop` のように引数で直接指定してもよい（`進め方 確認あり` / `進め方 自動` のような日本語でも受け付ける）。書き込み先は**すでに在る側**で、両方に無いときだけこのプロジェクト側に作る（共通側に置いている人のプロジェクトへ新しく作ると、共通側を黙って覆い隠す）。
 ```bash
-. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"
+P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
+. "$P/scripts/tasks-path.sh"
 f="$(harness_mode_write_file "$PWD")"; echo "変えるファイル: $f"
 harness_yml_set "$f" mode normal   # 自動で進めるときは loop
 grep -c '^mode: \(normal\|loop\)$' "$f"
@@ -91,7 +93,7 @@ grep -c '^mode: \(normal\|loop\)$' "$f"
 ### 2. ultracode（深く考えて自動で手分けする。利用量が増える）
 `$D/settings.json` の `ultracode` を切り替える。**有効にすると利用量（費用）が増える。** 無効にするときは `ultracode` と `workflowSizeGuideline` の 2 つを外す。書き換えたら `python3 -m json.tool "$D/settings.json"` を通し、失敗したら編集前へ戻す。
 
-**費用に影響するので、有効にする前に承認を求める。** 本文に **何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか** の 5 点をこの語で示してから `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）を出す。5 項目は本文に書き、選択肢の説明文に詰め込まない。型と記入例は `docs/rules-reference/approval-template.md`（無ければ `$CLAUDE_PLUGIN_ROOT/docs/rules-reference/approval-template.md`）。**無効に戻すとき（費用が減る方向）と、利用者が自分から「有効にして」と言ったときは、この確認は要らない。** 実際に出す文面の例:
+**費用に影響するので、有効にする前に承認を求める。** 本文に **何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか** の 5 点をこの語で示してから `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）を出す。5 項目は本文に書き、選択肢の説明文に詰め込まない。型と記入例は `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル）。**無効に戻すとき（費用が減る方向）と、利用者が自分から「有効にして」と言ったときは、この確認は要らない。** 実際に出す文面の例:
 
 ```
 ### 提案: ultracode（深く考えて自動で手分けする）を有効にする
@@ -138,7 +140,8 @@ python3 -m json.tool "$f" >/dev/null && echo "OK $f"
 プラグイン本体が新しくなっても、`/hirai-lite:init` で**導入先へ複製された** 3 本（`statusline.sh` / `tasks-path.sh` / `context-usage.sh`）は古いまま残る。有効にすると、**プラグインの版が変わった回のセッション冒頭だけ**、その 3 本を配布版に揃え、何件入れ替えたかを 1 行で報告する（中身が違うものは `.bak` に控えてから）。**決まりごと・安全設定・`CLAUDE.md`・やることの一覧表には触らない。** 版が同じ回は何もしない（手を入れた複製も、その版のうちは上書きされない）。
 
 ```bash
-. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"
+P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
+. "$P/scripts/tasks-path.sh"
 f="$(harness_mode_write_file "$PWD")"; echo "変えるファイル: $f"
 harness_yml_set "$f" auto_sync on   # 止めるときは off
 harness_auto_sync "$PWD"

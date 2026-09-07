@@ -12,8 +12,9 @@ description: 四半期のルール棚卸し。T0/T1 の全ルールを列挙し�
 (`/init` に `user` を付けたかで決まる)。**決め打ちすると対象 0 件で棚卸しが空振りする。**
 
 ```bash
-. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"; echo "ルールの置き場 $R"
-bash "$CLAUDE_PLUGIN_ROOT/scripts/scope-check.sh" .claude "$HOME/.claude"
+P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
+. "$P/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"; echo "ルールの置き場 $R"
+bash "$P/scripts/scope-check.sh" .claude "$HOME/.claude"
 ```
 
 以降の `$R` はここで解決した置き場。2 行目が警告を出したら 2 か所に同じルールが在り、**両方が読み込まれている**
@@ -22,7 +23,8 @@ bash "$CLAUDE_PLUGIN_ROOT/scripts/scope-check.sh" .claude "$HOME/.claude"
 ## ① 全ルールの列挙
 
 ```bash
-. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"
+P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
+. "$P/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"
 for f in CLAUDE.md "$HOME/.claude/CLAUDE.md" "$R"/*.md; do
   [ -f "$f" ] || continue
   if head -5 "$f" | grep -q '^paths:'; then L=T1; else L=T0; fi
@@ -36,15 +38,16 @@ done
 ## ② 予算の実測
 
 ```bash
-. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"
+P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
+. "$P/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"
 for f in CLAUDE.md "$HOME/.claude/CLAUDE.md" "$R"/*.md; do
   [ -f "$f" ] || continue; head -5 "$f" | grep -q '^paths:' || wc -c "$f"
 done | awk '{s+=$1} END {print "T0:", s, "bytes ≈", int(s/3), "tokens / 警告 6000 / 上限 10000"}'
 for f in "$R"/*.md; do [ -f "$f" ] && head -5 "$f" | grep -q '^paths:' \
   && echo "T1 $f $(( $(wc -c < "$f") / 3 )) tokens / 上限 2000"; done
 ls "$R"/*.md | wc -l                                 # T1 は 6 本まで (導入先の rules)
-ls "$CLAUDE_PLUGIN_ROOT"/hooks/*.sh | wc -l          # hook は 5 本まで (プラグイン側)
-ls "$CLAUDE_PLUGIN_ROOT"/commands/*.md | wc -l       # command は 12 個まで (プラグイン側)
+ls "$P"/hooks/*.sh | wc -l          # hook は 5 本まで (プラグイン側)
+ls "$P"/commands/*.md | wc -l       # command は 12 個まで (プラグイン側)
 ```
 
 ## ③ 失効条件の点検
@@ -86,7 +89,7 @@ git log --since='3 months ago' -S'<ルールに出てくる固有語>' --oneline
 
 1 と 2 は user 承認なしで削除する。削除したルールは行ごと `$R` と同じ側の `rules-archive/<元ファイル名>.md`
 (`$(dirname "$R")/rules-archive/…`) へ移し、日付と削除理由 1 行を添える。3 と 4 は user に選ばせる。
-**承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（無ければ `$CLAUDE_PLUGIN_ROOT/docs/rules-reference/approval-template.md`）。 「どうやるか」には T0 の現在値 → 削除後の値を数字で入れる。
+**承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル）。 「どうやるか」には T0 の現在値 → 削除後の値を数字で入れる。
 
 削除後に ② を再実行し、T0 tokens が減ったことを実測する。
 

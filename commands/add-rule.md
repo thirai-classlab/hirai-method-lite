@@ -6,18 +6,19 @@ description: ルールを 6 工程パイプライン (分類→重複検査→�
 
 引数が空なら追加したい規範を 1 行で聞き返して停止する。以下 6 工程を順に実行し、各工程の判定結果をチャットに 1 行ずつ出力する。
 
-**ルールの置き場を決め打ちしない。** ルールはこのプロジェクト (`.claude/rules/`) と全プロジェクト共通 (`~/.claude/rules/`) の 2 通りに置ける (`/init` に `user` を付けたかで決まる)。工程 ② と ⑤ は下の 1 行で置き場を解決してから走らせる。決め打ちすると、全プロジェクト共通に置いた利用者に対して「既存ルール 0 件・予算 0 tokens」と誤判定し、重複ルールを素通しさせる。
+**ルールの置き場を決め打ちしない。** ルールはこのプロジェクト (`.claude/rules/`) と全プロジェクト共通 (`~/.claude/rules/`) の 2 通りに置ける (`/init` に `user` を付けたかで決まる)。工程 ② と ⑤ は下のブロック（1 行目が素材行）で置き場を解決してから走らせる。決め打ちすると、全プロジェクト共通に置いた利用者に対して「既存ルール 0 件・予算 0 tokens」と誤判定し、重複ルールを素通しさせる。
 
 ```bash
-. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"; echo "ルールの置き場 $R"
-bash "$CLAUDE_PLUGIN_ROOT/scripts/scope-check.sh" .claude "$HOME/.claude"
+P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
+. "$P/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"; echo "ルールの置き場 $R"
+bash "$P/scripts/scope-check.sh" .claude "$HOME/.claude"
 ```
 
 2 行目が警告を出したら 2 か所に同じルールが在る (= 二重ロード)。その場合は**両方が読み込まれている**ので予算は 2 か所の合計で効いている。先に警告の指示どおり片方を消してから工程 ② に進む。
 
 ## ① 分類
 1. 「この事象は何回目ですか?」と聞く。
-2. 「1 回目」→ 事故記録 (`bash -c '. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; harness_incidents_file "$PWD"'` が返すパス。通常は `docs/rules-reference/incidents.md`) に `- YYYY-MM-DD <事象 1 行> / 対処: <1 行>` を追記して**終了**。ルール化しない。
+2. 「1 回目」→ 事故記録 (`tasks-path.sh` の `harness_incidents_file "$PWD"` が返すパス。通常は `docs/rules-reference/incidents.md`) に `- YYYY-MM-DD <事象 1 行> / 対処: <1 行>` を追記して**終了**。ルール化しない。
 3. 「2 回目以降」→ 「不可逆操作 (実行後に元へ戻せない操作) ですか?」と聞く。
 4. Yes → `.claude/settings.json` の `permissions.deny` (常に禁止) か `permissions.ask` (承認すれば実行可) に 1 行追加する案を作り工程 ⑤ へ飛ぶ。
 5. No → 工程 ② へ。
@@ -44,7 +45,8 @@ bash "$CLAUDE_PLUGIN_ROOT/scripts/scope-check.sh" .claude "$HOME/.claude"
 ## ⑤ 予算チェック
 T0 実測 (frontmatter に `paths:` を持たないファイルの合計) を測る。`CLAUDE.md` も置き場に合わせて 2 通りあるので、在るものだけを足す。
 ```bash
-. "$CLAUDE_PLUGIN_ROOT/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"
+P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
+. "$P/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"
 for f in CLAUDE.md "$HOME/.claude/CLAUDE.md" "$R"/*.md; do
   [ -f "$f" ] || continue
   head -5 "$f" | grep -q '^paths:' || wc -c "$f"
@@ -57,7 +59,7 @@ T1 は対象 1 ファイルのみ同じ式で測る。追加案の推定バイ�
 
 ## ⑥ 配置と検証
 1. 「失効条件はいつ成立しますか?」と聞き ④ の `失効:` を確定する。
-2. **承認を求める。** 本文に次の 5 点を**この語で**示してから `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）を出す。**5 項目は本文に書き、選択肢の説明文に詰め込まない**（切り詰められて肝心の数字が消える）。型と記入例は `docs/rules-reference/approval-template.md`（無ければ `$CLAUDE_PLUGIN_ROOT/docs/rules-reference/approval-template.md`）。
+2. **承認を求める。** 本文に次の 5 点を**この語で**示してから `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）を出す。**5 項目は本文に書き、選択肢の説明文に詰め込まない**（切り詰められて肝心の数字が消える）。型と記入例は `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル）。
    - **何をしたいか** — 追加する行の**全文**と配置先のフルパス（「1 件足します」では判断できない）
    - **なぜ** — このセッションで観測した事実。① で聞いた「何回目か」を含める
    - **しないとどうなる** — 放置した結果。**確かめていないなら「〜の可能性がある」と書く**

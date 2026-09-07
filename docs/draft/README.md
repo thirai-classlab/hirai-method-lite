@@ -7,7 +7,7 @@
 ## 流れ
 
 ```
-1. 起案   docs/draft/<slug>.md を $CLAUDE_PLUGIN_ROOT/templates/draft.md から作る
+1. 起案   docs/draft/<slug>.md を プラグイン同梱の templates/draft.md から作る
 2. 承認   user がレビューし、承認したら draft 冒頭に approved: YYYY-MM-DD を書く
 3. 台帳化 docs/tasks/list.md に 1 行 (status = 未着手) を追加し、詳細欄から draft へリンク
 4. 着手   status を 進行中 にしてから実装を始める

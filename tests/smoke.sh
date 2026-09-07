@@ -1101,7 +1101,97 @@ print(" ".join(k for k in ("commands", "agents", "hooks") if k in m))
   done
   if [ -n "$bad" ]; then fail 10 "承認を求める箇所は判断材料 5 項目を出す" "$bad"; return; fi
 
-  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) に 5 項目 + AskUserQuestion + 記入例 ${n_ex} 件 + 悪い例/良い例 / 承認を求める ${n_site} コマンドすべてがそこを指している"
+  # (f) プラグイン本体の場所の解決 (素材行)。$CLAUDE_PLUGIN_ROOT は**空で渡ることがある**ため、
+  # これを直にパスの前へ置いた行は実環境で失敗する。v1.4.0 に /init で直したのに /update には
+  # 取り残され、v1.14.0 の /update が手順 0 の冒頭で落ちた。**同じクラスの欠陥を横に残さない**ため、
+  # commands/ 全体を機械で見る — (1) 無防備な使用が 0 件 (2) 素材行は 1 種類だけ (2 か所で
+  # 書き方が割れると片方だけ直る) (3) 未設定でも実際に最新の版を解決できる (4) 共通ライブラリの
+  # harness_plugin_root と同じ答えを返す (解決の作法が離れたらここが落ちる)。
+  local pr_bad="" boot n_boot n_uniq unguarded pw out_boot out_fn n_up
+  unguarded="$(grep -n 'CLAUDE_PLUGIN_ROOT' "$ROOT"/commands/*.md \
+               | grep -v 'plugins/cache/hirai-lite' | head -3)"
+  [ -z "$unguarded" ] || pr_bad="$pr_bad 無防備な使用:[${unguarded}]"
+  n_boot="$(grep -h '^P="${CLAUDE_PLUGIN_ROOT' "$ROOT"/commands/*.md | grep -c . | tr -d ' ')"
+  n_uniq="$(grep -h '^P="${CLAUDE_PLUGIN_ROOT' "$ROOT"/commands/*.md | sort -u | grep -c . | tr -d ' ')"
+  [ "${n_boot:-0}" -ge 2 ] || pr_bad="$pr_bad 素材行が ${n_boot:-0} 本 (init と update の両方に要る)"
+  [ "${n_uniq:-0}" -eq 1 ] || pr_bad="$pr_bad 素材行の書き方が ${n_uniq:-0} 通りに割れている"
+  for f in init.md update.md; do
+    grep -q '^P="${CLAUDE_PLUGIN_ROOT' "$ROOT/commands/$f" || pr_bad="$pr_bad ${f}:素材行が無い"
+  done
+  boot="$(grep -h -m1 '^P="${CLAUDE_PLUGIN_ROOT' "$ROOT/commands/update.md")"
+  if [ -z "$boot" ]; then
+    fail 10 "/update の素材行" "commands/update.md から取り出せない"; return
+  fi
+  # 未設定 + 偽 HOME で逐語実行する。キャッシュに 2 版を置き、**版が新しいほう**を選ぶことも見る
+  # (単純な辞書順だと 1.10.0 < 1.9.0 になり、古い版を素材にしてしまう)。
+  pw="$(mktemp -d)"; mkdir -p "$pw/proj" "$pw/td"
+  # 0.9.0 / 1.2.0 / 1.9.0 / 1.10.0 の 4 版。版順で並べれば 1.10.0 が最新だが、辞書順では
+  # 先頭が 0.9.0・末尾が 1.9.0 になる。sort -V を落としても head/tail を取り違えても外れる。
+  local v10
+  for v10 in 0.9.0 1.2.0 1.9.0 1.10.0; do
+    mkdir -p "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite/$v10"
+    printf 'OLD\n' > "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite/$v10/VERSION"
+  done
+  printf 'NEW\n' > "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite/1.10.0/VERSION"
+  out_boot="$(cd "$pw/proj" && env -u CLAUDE_PLUGIN_ROOT HOME="$pw/home" TMPDIR="$pw/td" \
+              bash -c "$boot"'; cat "$P/VERSION"' 2>&1)"
+  [ "$out_boot" = NEW ] || pr_bad="$pr_bad 未設定時に最新版を解決しない:[${out_boot}]"
+  out_boot="$(cd "$pw/proj" && env -u CLAUDE_PLUGIN_ROOT HOME="$pw/home" TMPDIR="$pw/td" \
+              bash -c "$boot"'; printf %s "$P"' 2>&1)"
+  out_fn="$(cd "$pw/proj" && env -u CLAUDE_PLUGIN_ROOT HOME="$pw/home" TMPDIR="$pw/td" \
+            bash -c ". \"$ROOT/scripts/update-check.sh\"; harness_plugin_root" 2>&1)"
+  [ "$out_boot" = "$out_fn" ] || pr_bad="$pr_bad 素材行と harness_plugin_root の答えが違う:[${out_boot}] [${out_fn}]"
+  # 手順 0 を逐語実行する。**控えはコピーであって移動ではない** — 元の rules が残ること、控えが
+  # /tmp 直下ではなく一時領域の専用フォルダに出来ること、いつ消えるかを画面に出していること、の
+  # 3 点を実挙動で見る (v1.14.0 は「退避」と表示し、利用者は自分のルールが /tmp へ移されたと
+  # 受け取った)。文言だけを grep すると、別の場所に同じ語が残っているだけで素通りする。
+  local s0 out_s0
+  s0="$(awk '/^## 手順 0:/ {f=1} f && /^```bash$/ {c=1; next} c && /^```$/ {exit} c' \
+        "$ROOT/commands/update.md")"
+  if [ -z "$s0" ]; then rm -rf "$pw"; fail 10 "/update 手順 0 を取り出せる" "取り出せない"; return; fi
+  mkdir -p "$pw/proj/.claude/rules" "$pw/home/.claude/rules"
+  printf 'PROJ-SENTINEL\n' > "$pw/proj/.claude/rules/core.md"
+  printf 'HOME-SENTINEL\n' > "$pw/home/.claude/rules/core.md"
+  out_s0="$(cd "$pw/proj" && env -u CLAUDE_PLUGIN_ROOT HOME="$pw/home" TMPDIR="$pw/td" \
+            bash -c "$s0" 2>&1)"
+  printf '%s' "$out_s0" | grep -q 'NEW' || pr_bad="$pr_bad 手順 0 が更新前の版を出さない:[${out_s0}]"
+  printf '%s' "$out_s0" | grep -q '控え' || pr_bad="$pr_bad 手順 0 が控えをコピーと呼んでいない"
+  printf '%s' "$out_s0" | grep -q '再起動' || pr_bad="$pr_bad 手順 0 が控えの消えるタイミングを出していない"
+  printf '%s' "$out_s0" | grep -q '退避' && pr_bad="$pr_bad 手順 0 がコピーを 退避 と表示している"
+  grep -q 'PROJ-SENTINEL' "$pw/proj/.claude/rules/core.md" 2>/dev/null \
+    || pr_bad="$pr_bad 控えを取ったあと元の .claude/rules が残っていない (移動になっている)"
+  grep -q 'HOME-SENTINEL' "$pw/home/.claude/rules/core.md" 2>/dev/null \
+    || pr_bad="$pr_bad 控えを取ったあと元の ~/.claude/rules が残っていない (移動になっている)"
+  grep -rq 'PROJ-SENTINEL' "$pw/td/claude-harness-lite"/rules-backup-*/ 2>/dev/null \
+    || pr_bad="$pr_bad 控えが 一時領域/claude-harness-lite/rules-backup-*/ に出来ていない"
+  grep -rq 'HOME-SENTINEL' "$pw/td/claude-harness-lite"/rules-backup-*/ 2>/dev/null \
+    || pr_bad="$pr_bad ホーム側の控えが取れていない"
+  rm -rf "$pw"
+  # 素材を読む bash ブロックは**必ず素材行から始まる**。ブロックごとに新しいシェルで動くので、
+  # 別ブロックで解決した $P は持ち越されない。素材行を落としたブロックは空の $P で走り、
+  # v1.14.0 の /update と同じ失敗 (パスの先頭が消えて読めない) になる。
+  local blk_bad
+  blk_bad="$(awk -v boot="$boot" '
+    FILENAME != prev { prev = FILENAME; inb = 0 }
+    /^```bash[[:space:]]*$/ { inb = 1; hasBoot = 0; usesP = 0; start = FNR; next }
+    inb && /^```[[:space:]]*$/ { if (usesP && !hasBoot) printf "%s:%d ", FILENAME, start; inb = 0; next }
+    inb { if ($0 == boot) { hasBoot = 1; next }
+          if ($0 ~ /\$P[^A-Za-z0-9_]/ || $0 ~ /\$P$/) usesP = 1 }
+  ' "$ROOT"/commands/*.md)"
+  [ -z "$blk_bad" ] || pr_bad="$pr_bad 素材行なしで \$P を使うブロック:[${blk_bad}]"
+
+  # /update の分量と、控え (コピー) の作法。「退避」はコピーを移動と誤解させるので使わない。
+  n_up="$(grep -c '' "$ROOT/commands/update.md" | tr -d ' ')"
+  [ "${n_up:-0}" -le 200 ] || pr_bad="$pr_bad update.md ${n_up} 行 (<=200)"
+  # 「退避」はコピーを移動と誤解させる語。禁止を述べている 1 行 (…と書かない) 以外に出たら落とす。
+  if grep -n '退避' "$ROOT/commands/update.md" | grep -qv 'と書かない'; then
+    pr_bad="$pr_bad update.md にコピーを移動と誤解させる語 (退避) が残っている"
+  fi
+  grep -q '/tmp/rules' "$ROOT/commands/update.md" \
+    && pr_bad="$pr_bad 控えが /tmp 直下に置かれている (再起動で消えるうえ他の利用者と混ざる)"
+  if [ -n "$pr_bad" ]; then fail 10 "commands はプラグイン本体の場所を素材行で解決する" "$pr_bad"; return; fi
+
+  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) に 5 項目 + AskUserQuestion + 記入例 ${n_ex} 件 + 悪い例/良い例 / 承認を求める ${n_site} コマンドすべてがそこを指している / commands の CLAUDE_PLUGIN_ROOT 無防備使用 0 件・素材行 ${n_boot} 本が 1 種類で \$P を使う全ブロックに在り、未設定でも最新版 (4 版から) を解決し harness_plugin_root と一致 / update.md ${n_up} 行 (<=200) / 手順 0 の逐語実行で 控えはコピー (project 側も home 側も元が残る)・置き場は一時領域の rules-backup-*・消えるタイミングを表示 を実挙動で確認"
 }
 
 case_1; case_2; case_3; case_4; case_5; case_6; case_7; case_8; case_9; case_10

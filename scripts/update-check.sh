@@ -14,6 +14,25 @@
 
 HARNESS_UPDATE_URL_DEFAULT="https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/main/VERSION"
 
+# --- プラグイン本体の置き場所 --------------------------------------------------
+# $CLAUDE_PLUGIN_ROOT は**空で渡ることがある**。渡らない実行経路があるため、これを直に
+# パスの前に置いた行は「/VERSION」を読みに行って失敗する (v1.14.0 の /update が実環境で
+# 動かなかった原因)。空・不在なら 3 段で探す — 環境変数 → キャッシュ (版が最新のもの) →
+# マーケットプレイス。commands/*.md 冒頭の「素材行」と同じ 3 段で、
+# tests/smoke.sh case 10 (f) が「素材行の結果」と「この関数の結果」の一致を検査する。
+# シェルから使えるのはこの関数だが、**コマンド手順書は素材行のほうを使う** —
+# 関数を読むには先にこのファイルの場所が要る (それを解決するのが素材行の仕事)。
+harness_plugin_root() (
+  set -uo pipefail
+  local p="${1:-${CLAUDE_PLUGIN_ROOT:-}}"
+  if [ ! -d "$p" ]; then
+    p="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"
+    p="${p%/}"
+  fi
+  [ -d "$p" ] || p="$HOME/.claude/plugins/marketplaces/hirai-lite"
+  printf '%s' "$p"
+)
+
 # harness_update_enabled -> 有効なら rc 0 (HARNESS_UPDATE_CHECK=off で rc 1)
 harness_update_enabled() {
   [ "${HARNESS_UPDATE_CHECK:-on}" != "off" ]
@@ -182,7 +201,10 @@ harness_sync_stamp_file() (
 harness_sync_owned_scripts() (
   set -uo pipefail
   local plug="${1:-${CLAUDE_PLUGIN_ROOT:-}}" root="${2:-${CLAUDE_PROJECT_DIR:-$PWD}}" force="${3:-}"
-  [ -n "$plug" ] && [ -d "$plug/scripts" ] || return 0
+  # 呼び出し側が $CLAUDE_PLUGIN_ROOT をそのまま渡し、それが空だった場合でも黙って
+  # 何もしない (= 更新されていないのに更新できたように見える) 事故を避ける。
+  [ -n "$plug" ] && [ -d "$plug/scripts" ] || plug="$(harness_plugin_root)"
+  [ -d "$plug/scripts" ] || return 0
 
   local cur stamp prev=""
   cur="$(harness_local_version "$plug" 2>/dev/null)" || cur=""
