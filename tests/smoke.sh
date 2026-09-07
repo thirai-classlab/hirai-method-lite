@@ -762,11 +762,28 @@ auto_sync: on
   run_sync 'mode: normal
 auto_sync: on
 ' >/dev/null 2>&1 || bad7="$bad7 VERSION が壊れていると exit 0 で抜けない"
+  # 7) 控えを取れないときは入れ替えない (戻り道が無いまま書き換えない)。
+  #    導入先を書き込み禁止にして .bak を作れなくする。root は権限を素通りするので飛ばす。
+  if [ "$(id -u 2>/dev/null || printf 0)" != 0 ]; then
+    mkdir -p "$sw/ro/.claude"
+    printf 'RO-SENTINEL\n'                  > "$sw/ro/.claude/statusline.sh"
+    printf 'mode: normal\nauto_sync: on\n'  > "$sw/ro/.claude/mode.yml"
+    printf '9.9.3\n' > "$sp/VERSION"
+    chmod 555 "$sw/ro/.claude"
+    HOME="$sw/home" TMPDIR="$sw/td2" HARNESS_UPDATE_CHECK=off \
+      CLAUDE_PLUGIN_ROOT="$sp" CLAUDE_PROJECT_DIR="$sw/ro" \
+      bash "$sp/hooks/session-start.sh" >/dev/null 2>&1 \
+      || bad7="$bad7 控えを作れない環境で exit 0 にならない"
+    chmod 755 "$sw/ro/.claude"
+    grep -q 'RO-SENTINEL' "$sw/ro/.claude/statusline.sh" \
+      || bad7="$bad7 控えを作れないのに入れ替えた"
+    [ -e "$sw/ro/.claude/statusline.sh.bak" ] && bad7="$bad7 控えが無いのに .bak ができた"
+  fi
   unset -f run_sync
   rm -rf "$sw"
   if [ -n "$bad7" ]; then fail 7 "更新後の入れ替えは既定 off で、版が変わった回だけ 3 本を揃える" "$bad7"; return; fi
 
-  pass 7 "VERSION=${ver} は semver 1 行 / キャッシュ有効時と off 指定は通信も出力もしない / 更新後の入れ替えは既定 off (opt-in しなければ導入先は 1 バイトも変わらず .bak も版の控えも作られない)、opt-in 時はプラグイン所有の 3 本だけを版が変わった回に揃えて .bak に控え、rules・settings.json・CLAUDE.md・台帳には触らず、同じ版では何もせず、HC_AUTO_SYNC=off と壊れた VERSION でも exit 0"
+  pass 7 "VERSION=${ver} は semver 1 行 / キャッシュ有効時と off 指定は通信も出力もしない / 更新後の入れ替えは既定 off (opt-in しなければ導入先は 1 バイトも変わらず .bak も版の控えも作られない)、opt-in 時はプラグイン所有の 3 本だけを版が変わった回に揃えて .bak に控え、rules・settings.json・CLAUDE.md・台帳には触らず、同じ版では何もせず、控えを作れないときは入れ替えず、HC_AUTO_SYNC=off と壊れた VERSION でも exit 0"
 }
 
 # ---------- case 8: 新版キャッシュのみ通知し、semver を数値比較する ----------
