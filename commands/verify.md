@@ -49,7 +49,7 @@ git diff | grep -nE '^\+.*(console\.log|debugger|TODO:)'
 git diff | grep -inE '^\+.*(api[_-]?key|secret|password|token)\s*[:=]\s*["'"'"'][^"'"'"']{8,}'
 ```
 
-該当した行を提示し、削除するか user に確認する。
+該当した行を提示し、削除するか user に確認する。元に戻せない操作なので、**承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（無ければ `$CLAUDE_PLUGIN_ROOT/docs/rules-reference/approval-template.md`）。
 
 ## 判定できる終了条件
 

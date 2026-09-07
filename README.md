@@ -52,14 +52,14 @@ Claude Code で次の 2 行を順に実行します。
 
 | 表示 | 中身 |
 |---|---|
-| コマンド 12 個 + スキル 1 個（画面では合わせて **Skills**） | `/hirai-lite:init` `/hirai-lite:commit` など、こちらから呼び出して使う操作 12 個と、AI が必要なときに自分で読む手引き `grilling` 1 個 |
+| コマンド 12 個 + スキル 2 個（画面では合わせて **Skills**） | `/hirai-lite:init` `/hirai-lite:commit` など、こちらから呼び出して使う操作 12 個と、AI が必要なときに自分で読む手引き 2 個（`grilling` / `context-engineering`） |
 | エージェント 3 個（**Agents**） | テストの進め方・コード品質・脆弱性をそれぞれ見る担当（`tdd-guide` / `code-reviewer` / `security-reviewer`） |
 | 自動処理 3 本（画面では **Hooks (2)**） | セッション開始時の 1 行表示、容量が増えたときの警告、`loop`（自動で進む）のときの進め方の再掲 |
 | 外部ツール接続 2 個（**MCP servers**） | コードを検索する `serena` と、ライブラリの公式ドキュメントを取ってくる `context7` |
 
 あわせて、毎回のセッションで常にかかる容量の見積もりも出ます（v1.8.0 をターミナルの `claude plugin details` で見ると `Always-on: ~520 tok` と表示されました。v1.7.0 は約 452 tokens で、増えた分は `grilling` の名前と説明が常時載るぶんです）。
 
-> **`Skills` の件数はコマンドとスキルの合計です。** v1.8.0 の `claude plugin details hirai-lite` は `Skills (13)` と出ます — コマンド 12 個 + スキル 1 個（`grilling`）で、**コマンドが 13 個に増えたわけではありません**。コマンドは `/hirai-lite:` から始まる 12 個のままです。
+> **`Skills` の件数はコマンドとスキルの合計です。** v1.14.0 の `claude plugin details hirai-lite` は `Skills (14)` と出ます — コマンド 12 個 + スキル 2 個（`grilling` / `context-engineering`）で、**コマンドが 14 個に増えたわけではありません**。コマンドは `/hirai-lite:` から始まる 12 個のままです（v1.8.0〜v1.13.0 はスキル 1 個で `Skills (13)` でした）。
 >
 > **`Hooks` の件数はスクリプトの本数ではなく、きっかけ（イベント）の種類数です。** v1.11.0 の `claude plugin details hirai-lite` は `Hooks (2)  SessionStart, UserPromptSubmit` と出ますが、スクリプトは 3 本あります（`UserPromptSubmit` に 2 本ぶら下がっているため）。偽 HOME への実インストールで確かめた挙動で、3 本目を足しても表示は `(2)` のままです（別イベントを足したコピーでは `(3)` に増えました）。本数を数えるなら `ls <プラグイン>/hooks/*.sh`、または `tests/smoke.sh` case 6 の `hook=3/5` を見てください。
 
@@ -127,6 +127,10 @@ Claude Code で次の 2 行を順に実行します。
 会話が長くなったら `/clear` と入力してリセットできます。**消えるのは会話の履歴だけ**です。`CLAUDE.md` と `.claude/rules/` に書いた決まりごとは、[新しい会話のはじめに読み込み直されます](https://code.claude.com/docs/en/memory.md)ので、消えません。ウィンドウを閉じて開き直しても結果は同じで、どちらでも構いません。
 
 ただし**会話の中だけで伝えたことは消えます**。続きをやるなら、消す前に `/hirai-lite:state save` で今の状況を保存し、リセットしたあとに `/hirai-lite:state resume` と入力してください。
+
+`/hirai-lite:state save` は、今の状況を保存したあとに **「次回以降も効くもの」を仕分けます**（v1.14.0）。会話で決まった判断や、詰まって学んだことを、`docs/` 側（背景・事故記録・技術判断）へは**そのまま追記**し、**ルールにあたるもの（`.claude/rules/` や `settings.json`）は必ず承認を取ってから** `/hirai-lite:add-rule` の 6 工程に通します。**次回に効くものが無ければ何も書かず、その旨を 1 行返します**（セッションのたびにルールが勝手に増えないように）。
+
+**承認を求めるときは、判断できるだけの材料を出します**（v1.14.0）。「追記してよいですか」では決められないので、**何をしたいか（追加する行の全文）/ なぜ（今回起きた事実）/ しないとどうなる / トレードオフ（得るもの・失うもの）/ どうやるか（置き場と、常時読まれる量が何 tokens から何 tokens になるか）** の 5 点を本文に出したうえで、承認する・承認しない・修正して提案し直す、から選んでいただきます。**同じ型を、承認を求めるすべての場面で使います** — ルール追加（`/add-rule`）、タスクの着手・完了（`/start-task` `/finish-task`）、設計メモの承認（`/new-draft`）、ルールの棚卸し（`/rules-audit`）、commit の分割と元に戻せない操作（`/commit`）、費用や動きが変わる設定（`/config`）、参照されていないファイルの削除（`/verify`）。型の本体は `docs/rules-reference/approval-template.md`（記入例 3 つと、悪い例→良い例つき）で、**常時読まれる場所には 5 項目の名前だけ**を置いています。
 
 （`/clear` と「閉じて開き直す」が細かい点まで完全に同じかどうかは、公式ドキュメントに書かれていません。迷うときは閉じて開き直すほうが確実です。）
 
@@ -348,15 +352,16 @@ export HC_CONTEXT_WINDOW=1000000   # 窓が 1M の会話
 
 ## 同梱している skill（スキル）
 
-`skills/` に 1 つ。コマンドと違って**こちらから呼び出さなくてよい** — 必要な場面を AI が判断して自分で読む手引き。
+`skills/` に 2 つ（上限 3）。コマンドと違って**こちらから呼び出さなくてよい** — 必要な場面を AI が判断して自分で読む手引き。名前と説明だけが常時載り、**本文は読まれた時にだけ**コンテキストに入る（[公式](https://code.claude.com/docs/en/skills)）ので、長い手引きを持っても普段の容量を食わない。
 
 | 名前 | 役割 |
 |---|---|
 | `grilling` | 決めごとを掘り下げて聞く進め方。決定事項を design tree に置き、**前提が確定した質問だけをまとめて 1 ラウンドで出し、各問に推奨回答を添える**。事実（ファイルの中身・依存・既存コマンド）は AI が自分で調べ、**決定だけを利用者に聞く** |
+| `context-engineering` | 決まったこと・学んだことを**次のセッションでも読まれる場所**へ置く判断。T0（毎回）/ T1（該当ファイルを触った時）/ T2（明示 Read のみ）/ T3（読まない）のどれに何をどう書くか、予算をどう守るかを、**Anthropic 公式の記述と URL つき**でまとめてある。承認の型は全作業に効く汎用規範なのでこの skill には入れず、T2 に置いてある（v1.14.0） |
 
-`/hirai-lite:init` の 2 回目（案件ヒアリング）がこれを呼ぶ。単体でも「この案を詰めたい」「grill me」のように頼めば起動する。
+`/hirai-lite:init` の 2 回目（案件ヒアリング）が `grilling` を呼ぶ。単体でも「この案を詰めたい」「grill me」のように頼めば起動する。`context-engineering` は `/hirai-lite:state save` の「次回に効くものを置く」工程と `/hirai-lite:add-rule` が参照する。出典は `skills/context-engineering/references/official-sources.md` に逐語引用と取得日つきで置いてある。
 
-[mattpocock/skills](https://github.com/mattpocock/skills)（MIT License, Copyright (c) 2026 Matt Pocock）の `skills/productivity/grilling/SKILL.md` を **1 バイトも変えずに**取り込み、出典・commit・sha256 を [`NOTICE.md`](NOTICE.md) に保持している。
+[mattpocock/skills](https://github.com/mattpocock/skills)（MIT License, Copyright (c) 2026 Matt Pocock）の `skills/productivity/grilling/SKILL.md` を **1 バイトも変えずに**取り込み、出典・commit・sha256 を [`NOTICE.md`](NOTICE.md) に保持している（`context-engineering` は本ハーネスの自作）。
 
 **上流にはこれを含む 25 個のスキルがある。** 全部欲しいときは、このプラグインとは別に入れる:
 
@@ -364,7 +369,7 @@ export HC_CONTEXT_WINDOW=1000000   # 窓が 1M の会話
 claude plugins install mattpocock-skills
 ```
 
-（このハーネスが `grilling` だけを同梱しているのは、`rules/_meta.md` の「数の予算」で skill を 3 個までに抑えているため。25 個を抱えると `name` と `description` が常時ロードされて予算を食う。）
+（上流から取り込んだのが `grilling` 1 個だけなのは、`rules/_meta.md` の「数の予算」で skill を 3 個までに抑えているため。25 個を抱えると `name` と `description` が常時ロードされて予算を食う。）
 
 ## 同梱しているエージェント
 
@@ -410,7 +415,7 @@ claude plugins install mattpocock-skills
 | `.mcp.json` | 同梱する MCP サーバー 2 つの定義（キーは環境変数参照のみ） |
 | `agents/` | サブエージェント 3 個（MIT、出典は `NOTICE.md`） |
 | `commands/` | スラッシュコマンド 12 個 |
-| `skills/` | スキル 1 個（`grilling`。MIT、出典は `NOTICE.md`）。`plugin.json` に `skills` キーは書かない（既定で読まれる） |
+| `skills/` | スキル 2 個（`grilling` は MIT で出典は `NOTICE.md` / `context-engineering` は自作、`references/` に公式出典）。`plugin.json` に `skills` キーは書かない（既定で読まれる） |
 | `hooks/` | `hooks.json` + SessionStart 1 本（`session-start.sh`）と UserPromptSubmit 2 本（`loop-reminder.sh` / `context-budget.sh`）。いずれも context を足すだけで、操作は止めない |
 | `rules/` | **プラグインは読まない。** `/init` が配置先の `.claude/rules/` へ配る素材 |
 | `scripts/` | hook / statusline が source する共通ライブラリ（パス解決 `tasks-path.sh` / context 使用率 `context-usage.sh` / 更新検知 `update-check.sh`）+ `/init` の二重ロード検査 |
@@ -429,7 +434,7 @@ Claude Code は `.claude/rules/*.md` を再帰的に発見する。`paths:` fron
 |---|---|---|---|---|
 | **T0 常時** | `CLAUDE.md` / `.claude/rules/*.md`（frontmatter 無し） | 毎セッション | **警告 6,000 / 上限 10,000 tokens** | 全作業に例外なく効く規範のみ。既定では入れない |
 | **T1 条件** | `.claude/rules/*.md`（`paths:` あり） | 該当ファイルを触った時 | 1 file 2,000 tokens | ドメイン規範（タスク運用 / コード / インフラ） |
-| **T2 参照** | `docs/rules-reference/**` | AI が明示 Read した時のみ | 無制限 | 背景・事故記録・詳細手順・過去の経緯 |
+| **T2 参照** | `docs/rules-reference/**` | AI が明示 Read した時のみ | 無制限 | 背景・事故記録・詳細手順・過去の経緯・**承認テンプレート** |
 | **T3 退避** | `.claude/rules-archive/**` | ロードしない | — | 失効したルール（履歴として保持） |
 
 T2 を `.claude/rules/` の**外**に置くのは意図的。`rules/` の中に置くと `paths:` を書き忘れた瞬間に T0 へ昇格してしまう。物理配置でこの事故を防いでいる。同じ理由で T0 から T2 へのポインタは張らない（張ると T0 が背景説明で膨らむ）。ポインタは T1 から張る。

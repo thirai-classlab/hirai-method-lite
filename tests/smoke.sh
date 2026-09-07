@@ -23,6 +23,18 @@ T0_MAX=3
 T0_BUDGET_WARN=6000
 T0_BUDGET_MAX=10000
 
+# 承認を求めるときに本文へ出す 5 項目。SSoT は T2 の docs/rules-reference/approval-template.md
+# (T0 rules/core.md には 5 項目の名前だけを置く)。承認はルール追加に限らず、タスク・設計・
+# 設定変更・元に戻せない操作にも効く汎用規範なので、本体は skill ではなく T2 に置いてある。
+# 語を変えると「どれが欠けているか」を数えられなくなるので、この語のまま検査する。
+APPROVAL_ITEMS='何をしたいか なぜ しないとどうなる トレードオフ どうやるか'
+APPROVAL_TEMPLATE='docs/rules-reference/approval-template.md'
+# 承認を求める箇所 (commands/ を全部 grep して洗い出した)。ここに載るコマンドは T2 の型を
+# 参照していなければならない。テンプレートは丸写ししない (2 か所に書くと片方が陳腐化する)。
+#   init.md は「触らない」指示があるため対象外 (手順 8 の settings.json 差分承認が該当する)。
+#   update.md / new-task.md は承認を求める箇所を持たない (報告して止まるだけ)。
+APPROVAL_SITES='add-rule.md state.md config.md new-draft.md start-task.md finish-task.md commit.md rules-audit.md verify.md'
+
 # smoke 自体は外部通信しない。更新検知を要する case 7/8 だけが個別に on を渡す。
 export HARNESS_UPDATE_CHECK=off
 
@@ -561,7 +573,41 @@ case_5() {
     fail 5 "T0 rule は許可リスト (${T0_ALLOWLIST}) のみ" "許可リストが T0 に不在:${missing}"; return
   fi
   if [ "$n" -gt "$T0_MAX" ]; then fail 5 "T0 rule <= ${T0_MAX} 本" "${n} 本:${names}"; return; fi
-  pass 5 "T0 層の rule は許可リストどおり ${n} 本 <= ${T0_MAX} (${names# })"
+
+  # 承認の規範は 3 点セットで成り立つ — T0 に 5 項目の名前 (ここ) / T1 からポインタ (ここ) /
+  # T2 に本体と記入例 (case 10)。T0 側だけ消えると、コマンドを経由しない承認
+  # (会話の中でのタスク着手や仕様変更の提案) が素通りする。承認は全作業に起きるので T0 に置く。
+  local core="$ROOT/rules/core.md" it bad5="" nline
+  if [ ! -f "$core" ]; then fail 5 "rules/core.md が存在する" "無い"; return; fi
+  nline="$(grep -c '承認は判断材料つきで求める' "$core" | tr -d ' ')"
+  if [ "${nline:-0}" -eq 0 ]; then
+    bad5="承認の 1 行が core.md に無い"
+  else
+    # T0 に置いてよいのは 5 項目の名前まで。本体を書き写して T0 を太らせない (2 行以内)。
+    # その 1 件が占める物理行数 = 見出し行 + 次の箇条書き/空行/見出しに当たるまでの続き行。
+    local own
+    own="$(awk '
+      f && (/^- / || /^[[:space:]]*$/ || /^#/) { exit }
+      f { n++ }
+      /承認は判断材料つきで求める/ { f = 1; n = 1 }
+      END { print n + 0 }
+    ' "$core")"
+    if [ "${own:-0}" -gt 2 ]; then
+      bad5="$bad5 core.md:承認の記述が ${own} 行 (2 行以内。本体は T2 へ)"
+    fi
+    for it in $APPROVAL_ITEMS; do
+      grep -qF "$it" "$core" || bad5="$bad5 core.md:[${it}]が無い"
+    done
+  fi
+  # T1 (タスク・設計の承認を扱う層) から T2 へのポインタ
+  local tk="$ROOT/rules/tasks.md"
+  if [ ! -f "$tk" ]; then bad5="$bad5 rules/tasks.md が無い"
+  elif ! grep -qF "$APPROVAL_TEMPLATE" "$tk"; then
+    bad5="$bad5 tasks.md:承認テンプレートへのポインタが無い"
+  fi
+  if [ -n "$bad5" ]; then fail 5 "承認は T0 に名前 / T1 からポインタ" "$bad5"; return; fi
+
+  pass 5 "T0 層の rule は許可リストどおり ${n} 本 <= ${T0_MAX} (${names# }) / core.md に承認の 1 行 (5 項目入り・2 行以内) / tasks.md から T2 テンプレートへのポインタ"
 }
 
 # ---------- case 6: 数の予算 (hook<=5 / command<=12 / skill<=3 / smoke case<=10) ----------
@@ -579,7 +625,34 @@ case_6() {
      || [ "${cases:-0}" -gt 10 ]; then
     fail 6 "数の予算" "$msg"; return
   fi
-  pass 6 "数の予算 ${msg}"
+
+  # 数えるだけでは「消えた」「壊れた」に気づけない。同梱する skill が実在し、
+  # frontmatter の name がフォルダ名と一致し、description を持つことまで見る。
+  # 説明文は毎セッション載る (rules/_meta.md 「数の予算」) ので、
+  # 壊れた skill は予算だけ食って何もしない状態になる。
+  local want sf nm ds bad6=""
+  for want in grilling context-engineering; do
+    sf="$ROOT/skills/$want/SKILL.md"
+    if [ ! -f "$sf" ]; then bad6="$bad6 ${want}:SKILL.md が無い"; continue; fi
+    nm="$(awk 'NR==1&&$0!="---"{exit} NR>1&&/^---[[:space:]]*$/{exit} sub(/^name:[[:space:]]*/,""){print;exit}' "$sf")"
+    ds="$(awk 'NR==1&&$0!="---"{exit} NR>1&&/^---[[:space:]]*$/{exit} /^description:[[:space:]]*./{print "ok";exit}' "$sf")"
+    [ "$nm" = "$want" ] || bad6="$bad6 ${want}:name=${nm:-無し}"
+    [ "$ds" = "ok" ] || bad6="$bad6 ${want}:description 無し"
+  done
+  # context-engineering は「公式を調べて書く」ことが存在意義なので、出典 URL が消えたら意味が無い。
+  local ce="$ROOT/skills/context-engineering/references/official-sources.md" u
+  if [ ! -f "$ce" ]; then
+    bad6="$bad6 context-engineering:references/official-sources.md が無い"
+  else
+    for u in 'anthropic.com/engineering/effective-context-engineering-for-ai-agents' \
+             'code.claude.com/docs/en/memory' 'code.claude.com/docs/en/skills' \
+             'code.claude.com/docs/en/context-window'; do
+      grep -qF "$u" "$ce" || bad6="$bad6 出典[${u}]が無い"
+    done
+  fi
+  if [ -n "$bad6" ]; then fail 6 "同梱 skill が実在し出典を持つ" "不備:$bad6"; return; fi
+
+  pass 6 "数の予算 ${msg} / 同梱 skill 2 件の name はフォルダ名と一致し description を持つ / 出典 URL 4 件が残っている"
 }
 
 # 更新検知 case (7/8) 用の作業 dir を組む。プラグインと同じ配置 (hooks/ scripts/ VERSION) にする。
@@ -978,7 +1051,57 @@ print(" ".join(k for k in ("commands", "agents", "hooks") if k in m))
   if [ -n "$bad" ]; then
     fail 10 "plugin.json は既定フォルダを再宣言しない" "既定を上書きするキー:$bad"; return
   fi
-  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている"
+
+  # (d) /state save の「次回に効くもの」工程。手順書そのものを検査する。
+  # 承認の要否を取り違えると 2 方向に壊れる — (1) ルールが承認なしに増え、毎セッションの
+  # 予算が黙って尽きる (2) 逆に T2 への追記まで止まり、何も残らない。並びと語で両方を止める。
+  # 位置は見出し番号ではなくバイト位置で見るので、番号を振り直しても壊れない。
+  local sm="$ROOT/commands/state.md" n_sm marker off prev=-1 key
+  if [ ! -f "$sm" ]; then fail 10 "commands/state.md が存在する" "無い"; return; fi
+  n_sm="$(grep -c '' "$sm" | tr -d ' ')"
+  if [ "${n_sm:-0}" -gt 150 ]; then
+    fail 10 "commands/state.md <= 150 行" "${n_sm} 行 -- 詳細は skill 側へ出す"; return
+  fi
+  # 並び: 節の見出し → 0 件なら書かない → 承認を取る → /add-rule へ渡す
+  for marker in '次回に効くものを置く' '0 件なら' 'AskUserQuestion' 'hirai-lite:add-rule'; do
+    off="$(grep -obF -m1 "$marker" "$sm" 2>/dev/null | cut -d: -f1)"
+    if [ -z "$off" ]; then bad="$bad state.md:[${marker}]が無い"; continue; fi
+    if [ "$off" -le "$prev" ]; then bad="$bad state.md:[${marker}]の順序が逆"; fi
+    prev="$off"
+  done
+  # 自動で書く側 (承認不要・追記のみ) と、承認が要る側の切り分けが本文に残っている
+  for key in 'harness_incidents_file' '追記のみ' '承認不要' 'Documents index' \
+             'hirai-lite:context-engineering'; do
+    grep -qF "$key" "$sm" || bad="$bad state.md:[${key}]が無い"
+  done
+  if [ -n "$bad" ]; then fail 10 "/state save が次回へ効かせる工程を持つ" "$bad"; return; fi
+
+  # (e) 承認テンプレート (T2) の本体と、承認を求める全コマンドからのポインタ。
+  # 「〜してよいですか」だけでは承認する側が判断できない (rules/core.md 「承認は判断材料つきで
+  # 求める」)。本体は T2 の 1 か所に置き、各コマンドはポインタだけを持つ
+  # (丸写しすると片方が陳腐化する)。適用先はルール追加に限らず、タスク着手・完了・設計 draft・
+  # 設定変更・元に戻せない操作まで含む。
+  local at="$ROOT/$APPROVAL_TEMPLATE" it
+  if [ ! -f "$at" ]; then fail 10 "承認テンプレート (T2) が存在する" "$APPROVAL_TEMPLATE が無い"; return; fi
+  for it in $APPROVAL_ITEMS; do
+    grep -qF "$it" "$at" || bad="$bad 承認テンプレート:[${it}]が無い"
+  done
+  grep -qF 'AskUserQuestion' "$at" || bad="$bad 承認テンプレート:[AskUserQuestion]が無い"
+  # 記入例は 2 つ以上 (ルール追加だけの型にしない = 汎用であることの担保)
+  local n_ex; n_ex="$(grep -c '^## 記入例' "$at" | tr -d ' ')"
+  [ "${n_ex:-0}" -ge 2 ] || bad="$bad 承認テンプレート:記入例が ${n_ex:-0} 件 (2 件以上要る)"
+  grep -q '悪い例' "$at" || bad="$bad 承認テンプレート:悪い例と良い例が無い"
+  local site sp n_site=0
+  for site in $APPROVAL_SITES; do
+    sp="$ROOT/commands/$site"
+    if [ ! -f "$sp" ]; then bad="$bad commands/${site} が無い"; continue; fi
+    n_site=$(( n_site + 1 ))
+    grep -qF "$APPROVAL_TEMPLATE" "$sp" || bad="$bad ${site}:承認テンプレートへのポインタが無い"
+    grep -qF 'AskUserQuestion' "$sp" || bad="$bad ${site}:[AskUserQuestion]が無い"
+  done
+  if [ -n "$bad" ]; then fail 10 "承認を求める箇所は判断材料 5 項目を出す" "$bad"; return; fi
+
+  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) に 5 項目 + AskUserQuestion + 記入例 ${n_ex} 件 + 悪い例/良い例 / 承認を求める ${n_site} コマンドすべてがそこを指している"
 }
 
 case_1; case_2; case_3; case_4; case_5; case_6; case_7; case_8; case_9; case_10

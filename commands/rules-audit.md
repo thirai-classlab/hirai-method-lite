@@ -86,6 +86,7 @@ git log --since='3 months ago' -S'<ルールに出てくる固有語>' --oneline
 
 1 と 2 は user 承認なしで削除する。削除したルールは行ごと `$R` と同じ側の `rules-archive/<元ファイル名>.md`
 (`$(dirname "$R")/rules-archive/…`) へ移し、日付と削除理由 1 行を添える。3 と 4 は user に選ばせる。
+**承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（無ければ `$CLAUDE_PLUGIN_ROOT/docs/rules-reference/approval-template.md`）。 「どうやるか」には T0 の現在値 → 削除後の値を数字で入れる。
 
 削除後に ② を再実行し、T0 tokens が減ったことを実測する。
 
