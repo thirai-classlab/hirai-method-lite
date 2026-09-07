@@ -108,7 +108,7 @@ bash "$P/scripts/scope-check.sh" .claude "$HOME/.claude" .
 **rules はプラグイン更新では導入先に配られない。** 更新後に必ず `/hirai-lite:init` を実行する（全プロジェクト共通 `~/.claude/rules/` に入れている場合は `/hirai-lite:init user`）。どちらに入れたか分からないときは `ls ~/.claude/rules/*.md .claude/rules/*.md 2>/dev/null` で確かめる（両方に出たら二重ロードなので、`/init` の警告に従ってどちらか一方を消す）。
 `/init` は既存ファイルを 1 つも上書きしない。新しい rules を取り込むには、取り込みたいファイルを rules から先に削除してから `/init` を実行する。手順 0 の控えと `diff -ru "$B/rules.project" .claude/rules`（ホーム側なら `diff -ru "$B/rules.home" "$HOME/.claude/rules"`）で突き合わせ、自分の変更が消えていないかを確認する。
 
-## 手順 4: プラグイン所有の 3 ファイルを入れ替える
+## 手順 4: プラグイン所有の 3 ファイルを入れ替え、足りない参照資料を足す
 
 `statusline.sh` と `tasks-path.sh` と `context-usage.sh` はプラグインの `scripts/` の複製であり、利用者が編集する前提のファイルではない。`/init` は既存を残すため、この 3 本だけはここで入れ替える。`context-usage.sh` は v1.10.0 で足した context 使用率の共通ライブラリで、**`statusline.sh` と同じディレクトリに無いと画面下部と自動処理が別々の使用率を出す**（v1.9.0 の不具合）。v1.9.0 以前から使っている場合はまだ置かれていないので、`statusline.sh` が在る側にだけ新しく置く。**中身が配布版と違う場合は上書きせず、先に `.bak` へ控えを取る**（コピーなので、戻したいときは `.bak` から書き戻せる）。
 **置いていない場所に新しく作らない。** プロジェクト側とホーム側の両方を見て、**すでに在るものだけ**を入れ替える（片方に決め打ちすると、`/init user` で入れた人はホーム側が古いまま残り、使われないファイルがプロジェクト側に増える）。入れ替えそのものは共通ライブラリの `harness_sync_owned_scripts` 1 本に集約してある（セッション冒頭の自動入れ替えと**同じ関数**を通す。手順書と自動処理で作法が離れないようにするため）。`force` を渡すと、設定に関係なく必ず実行し、1 件ずつ作業ログを出す。
@@ -117,6 +117,7 @@ bash "$P/scripts/scope-check.sh" .claude "$HOME/.claude" .
 P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
 . "$P/scripts/update-check.sh"
 harness_sync_owned_scripts "$P" "$PWD" force
+[ -d docs/rules-reference ] && [ ! -e docs/rules-reference/approval-template.md ] && cp "$P/docs/rules-reference/approval-template.md" docs/rules-reference/ && echo "placed docs/rules-reference/approval-template.md"
 for D in .claude "$HOME/.claude"; do
   [ -e "$D/statusline.sh" ] && bash "$D/statusline.sh" </dev/null && echo
 done
@@ -124,7 +125,7 @@ done
 
 - `same` / `updated` が 1 件も出ない場合は、手順 3 の `/init` がまだ済んでいない。手順 3 に戻る。
 - 最後に 2 行出力されれば、入れ替え後も画面下部の表示は動いている。出力が無い / エラーになる場合は `cp <その statusline.sh>.bak <その statusline.sh>` で戻し、内容を報告する。
-- `.bak` を作ったときは手順 6 の報告に必ず 1 行入れる。作っていなければ触れない。**この 3 本以外には触れない。**
+- `.bak` を作ったときは手順 6 の報告に必ず 1 行入れる。作っていなければ触れない。**入れ替える（上書きする）のはこの 3 本だけ。** 承認の型 (`docs/rules-reference/approval-template.md`) は v1.14.2 で `/init` が配るようになった参照資料で、**それ以前に導入した環境には無い**。在れば 1 バイトも触らず、**無いときだけ足す**（利用者所有ファイルを上書きしないという原則は保ったまま、欠けているものだけ補う）。`docs/rules-reference/` が無い環境（全プロジェクト共通で入れた場合など）には置かない — ポインタの 2 段目「プラグイン同梱の同名ファイル」で解決する。
 
 ## 手順 5: 版が上がったことを検証する
 
@@ -164,7 +165,7 @@ bash の出力は作業ログであって報告ではない。**最後に必ず�
 
 - 移行が起きなかった場合（すでに `docs/` を使っている / `.claude/` に書類が無い）は、**書類の置き場の行を丸ごと省く**。移した件数とパスは手順 2 の実測値に差し替える（行数は 2-1 で控えた値）。
 - **移さなかったものがあれば必ず 1 行足す**（消していないこと・どちらを残すか決めてほしいことを伝える）。例: `⚠️ .claude/tasks/list.md は移していません。docs/tasks/list.md が既にあり、上書きすると中身が消えるためです。いまは両方残っています。読まれるのは docs/ 側です。中身を見比べて、残すほうを教えてください。`
-- `scope-check.sh` が警告を出していたら、報告の末尾にその全文をそのまま貼る。途中で止まったら同じ調子で「何が起きたか」「どうすればよいか」「ここまでにやったこと」を書く。
+- 手順 4 で `placed docs/rules-reference/approval-template.md` と出たときだけ 1 行足す: `✅ 承認をお願いするときの型を置きました → docs/rules-reference/approval-template.md`。`scope-check.sh` が警告を出していたら、報告の末尾にその全文をそのまま貼る。途中で止まったら同じ調子で「何が起きたか」「どうすればよいか」「ここまでにやったこと」を書く。
 
 ## 手動でやらずに済ませたいとき（既定は無効）
 
@@ -195,5 +196,5 @@ cat "$P/VERSION"                                                                
 - `cat "$P/VERSION"` が更新前より新しい semver を返す（`$P` は素材行で解決した値。環境変数を直に書いた行は空振りする）。
 - 手順 0 の控えが `${TMPDIR:-/tmp}/claude-harness-lite/rules-backup-*/` にあり、**元の `rules/` も残っている**（コピーであって移動ではない）。
 - 手順 2 のあと、`ls .claude/tasks .claude/draft .claude/rules-reference 2>/dev/null` が**移さなかったもの以外は何も返さない**（移した分は `docs/` 側に在り、`git status --short` で `R` (rename) か 削除 + 追加 として見える）。移行が不要だった場合は最初から何も返さない。
-- 手順 4 で `same` / `updated` と出た `$D`（プロジェクト側 / ホーム側のうち実際に置いてある方）について、`cmp -s "$P/scripts/statusline.sh" "$D/statusline.sh"` と `cmp -s "$P/scripts/tasks-path.sh" "$D/tasks-path.sh"` と `cmp -s "$P/scripts/context-usage.sh" "$D/context-usage.sh"` が 3 つとも exit 0。
+- 手順 4 で `same` / `updated` と出た `$D`（プロジェクト側 / ホーム側のうち実際に置いてある方）について、`cmp -s "$P/scripts/statusline.sh" "$D/statusline.sh"` と `cmp -s "$P/scripts/tasks-path.sh" "$D/tasks-path.sh"` と `cmp -s "$P/scripts/context-usage.sh" "$D/context-usage.sh"` が 3 つとも exit 0。 `docs/rules-reference/` がある環境では `ls docs/rules-reference/approval-template.md` も exit 0（元から在ったものは中身が変わっていない）。
 - `bash "$D/statusline.sh" </dev/null` が 2 行出力する（1 行目 = いまの状態 / 2 行目 = 設定リンク）。`bash "$P/tests/smoke.sh"` が exit 0 で、`git status --short` に `CLAUDE.md` `docs/` `.claude/rules/` の変更が出ていない。

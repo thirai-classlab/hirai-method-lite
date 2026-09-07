@@ -31,9 +31,11 @@ APPROVAL_ITEMS='何をしたいか なぜ しないとどうなる トレード�
 APPROVAL_TEMPLATE='docs/rules-reference/approval-template.md'
 # 承認を求める箇所 (commands/ を全部 grep して洗い出した)。ここに載るコマンドは T2 の型を
 # 参照していなければならない。テンプレートは丸写ししない (2 か所に書くと片方が陳腐化する)。
-#   init.md は「触らない」指示があるため対象外 (手順 8 の settings.json 差分承認が該当する)。
+#   init.md は手順 5 の settings.json 差分承認が該当する。v1.14.0 は行数の都合で対象外にし、
+#   その除外理由に「手順 8」と書いていた (実際の差分承認は手順 5、手順 8 は二重ロード検査)。
+#   v1.14.2 で誤記ごと解消し、検査対象に入れた。
 #   update.md / new-task.md は承認を求める箇所を持たない (報告して止まるだけ)。
-APPROVAL_SITES='add-rule.md state.md config.md new-draft.md start-task.md finish-task.md commit.md rules-audit.md verify.md'
+APPROVAL_SITES='init.md add-rule.md state.md config.md new-draft.md start-task.md finish-task.md commit.md rules-audit.md verify.md'
 
 # smoke 自体は外部通信しない。更新検知を要する case 7/8 だけが個別に on を渡す。
 export HARNESS_UPDATE_CHECK=off
@@ -1091,15 +1093,70 @@ print(" ".join(k for k in ("commands", "agents", "hooks") if k in m))
   local n_ex; n_ex="$(grep -c '^## 記入例' "$at" | tr -d ' ')"
   [ "${n_ex:-0}" -ge 2 ] || bad="$bad 承認テンプレート:記入例が ${n_ex:-0} 件 (2 件以上要る)"
   grep -q '悪い例' "$at" || bad="$bad 承認テンプレート:悪い例と良い例が無い"
-  local site sp n_site=0
+  # ファイルのどこかに path が在るだけでは足りない。承認の場面と結びついていない行
+  # (置き場の説明・配置手順など) でも grep は通ってしまい、v1.14.2 で init.md を検査対象に
+  # 入れた際に「承認のポインタを消しても、配置手順に同じパスが残っていて PASS する」ことが
+  # 実測で分かった。**ポインタは AskUserQuestion と同じ 1 行に在る**ことまで見る。
+  local site sp n_site=0 aline
   for site in $APPROVAL_SITES; do
     sp="$ROOT/commands/$site"
     if [ ! -f "$sp" ]; then bad="$bad commands/${site} が無い"; continue; fi
     n_site=$(( n_site + 1 ))
-    grep -qF "$APPROVAL_TEMPLATE" "$sp" || bad="$bad ${site}:承認テンプレートへのポインタが無い"
-    grep -qF 'AskUserQuestion' "$sp" || bad="$bad ${site}:[AskUserQuestion]が無い"
+    aline="$(grep -F "$APPROVAL_TEMPLATE" "$sp" 2>/dev/null | grep -cF 'AskUserQuestion' | tr -d ' ')"
+    if [ "${aline:-0}" -eq 0 ]; then
+      bad="$bad ${site}:型へのポインタが AskUserQuestion と同じ行に無い"; continue
+    fi
+    # 5 項目は同じ行のこともあれば直後の箇条書きのこともある (add-rule.md)。行は問わず、
+    # ファイル内に 5 語すべてが在ることを見る。
+    for it in $APPROVAL_ITEMS; do
+      grep -qF "$it" "$sp" || bad="$bad ${site}:[${it}]が無い"
+    done
   done
   if [ -n "$bad" ]; then fail 10 "承認を求める箇所は判断材料 5 項目を出す" "$bad"; return; fi
+
+  # 承認の型は**導入先にも要る**。ポインタは「導入先の docs/rules-reference/ (無ければプラグイン
+  # 同梱の同名ファイル)」の 2 段書きで必ず解決するが、v1.14.1 まで導入先に実体が無く、1 段目を
+  # 開いた利用者は空振りしていた。/init の手順 7 と /update の手順 4 を**逐語に取り出して**実行し、
+  # (a) 無ければ配布版と 1 バイト違わず置く (b) 在れば触らない (c) 全プロジェクト共通 (user) と
+  # docs/ の無い環境には作らない、を実挙動で確かめる。手順書そのものを走らせるので、
+  # 文書と実挙動が離れた時点でここが落ちる。
+  local at_blk ab ub aw abad=""
+  at_blk='/^```bash$/ { b = ""; c = 1; next }
+          c && /^```$/ { if (b ~ /rules-reference\/approval-template\.md/) { printf "%s", b; exit } c = 0; next }
+          c { b = b $0 "\n" }'
+  ab="$(awk "$at_blk" "$ROOT/commands/init.md")"
+  ub="$(awk "$at_blk" "$ROOT/commands/update.md")"
+  [ -n "$ab" ] || abad="$abad /init に承認の型を置く手順が無い"
+  [ -n "$ub" ] || abad="$abad /update に承認の型を足す手順が無い"
+  if [ -z "$abad" ]; then
+    aw="$(mktemp -d)"; mkdir -p "$aw/proj" "$aw/home" "$aw/u" "$aw/up/docs/rules-reference" "$aw/nod"
+    # (a) /init 手順 7: 何も無いところに、配布版と同じ中身で置く
+    ( cd "$aw/proj" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ab" ) >/dev/null 2>&1 \
+      || abad="$abad /init 手順 7 が exit 0 で終わらない"
+    cmp -s "$at" "$aw/proj/docs/rules-reference/approval-template.md" \
+      || abad="$abad /init が承認の型を置かない (または中身が配布版と違う)"
+    # (b) 2 回目は上書きしない (利用者が書き足した中身が消えない)
+    printf 'USER-EDIT\n' >> "$aw/proj/docs/rules-reference/approval-template.md"
+    ( cd "$aw/proj" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ab" ) >/dev/null 2>&1
+    grep -q 'USER-EDIT' "$aw/proj/docs/rules-reference/approval-template.md" \
+      || abad="$abad /init の 2 回目が承認の型を上書きした"
+    # (c) 全プロジェクト共通 (user) では docs/ ごと作らない
+    ( cd "$aw/u" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "${ab/SCOPE=;/SCOPE=user;}" ) >/dev/null 2>&1
+    [ -e "$aw/u/docs" ] && abad="$abad /init user が docs/ を作っている"
+    # (d) /update 手順 4: docs/rules-reference が在って型が無ければ足す / 在れば触らない
+    ( cd "$aw/up" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ub" ) >/dev/null 2>&1
+    cmp -s "$at" "$aw/up/docs/rules-reference/approval-template.md" \
+      || abad="$abad /update が承認の型を足さない"
+    printf 'USER-EDIT\n' >> "$aw/up/docs/rules-reference/approval-template.md"
+    ( cd "$aw/up" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ub" ) >/dev/null 2>&1
+    grep -q 'USER-EDIT' "$aw/up/docs/rules-reference/approval-template.md" \
+      || abad="$abad /update が既存の承認の型を上書きした"
+    # (e) docs/rules-reference が無い環境 (全プロジェクト共通で入れた場合) には新設しない
+    ( cd "$aw/nod" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ub" ) >/dev/null 2>&1
+    [ -e "$aw/nod/docs" ] && abad="$abad /update が docs/ を新設している"
+    rm -rf "$aw"
+  fi
+  if [ -n "$abad" ]; then fail 10 "承認の型は導入先にも置かれる" "$abad"; return; fi
 
   # (f) プラグイン本体の場所の解決 (素材行)。$CLAUDE_PLUGIN_ROOT は**空で渡ることがある**ため、
   # これを直にパスの前へ置いた行は実環境で失敗する。v1.4.0 に /init で直したのに /update には
@@ -1183,6 +1240,8 @@ print(" ".join(k for k in ("commands", "agents", "hooks") if k in m))
   # /update の分量と、控え (コピー) の作法。「退避」はコピーを移動と誤解させるので使わない。
   n_up="$(grep -c '' "$ROOT/commands/update.md" | tr -d ' ')"
   [ "${n_up:-0}" -le 200 ] || pr_bad="$pr_bad update.md ${n_up} 行 (<=200)"
+  n_in="$(grep -c '' "$ROOT/commands/init.md" | tr -d ' ')"
+  [ "${n_in:-0}" -le 305 ] || pr_bad="$pr_bad init.md ${n_in} 行 (<=305)"
   # 「退避」はコピーを移動と誤解させる語。禁止を述べている 1 行 (…と書かない) 以外に出たら落とす。
   if grep -n '退避' "$ROOT/commands/update.md" | grep -qv 'と書かない'; then
     pr_bad="$pr_bad update.md にコピーを移動と誤解させる語 (退避) が残っている"
@@ -1191,7 +1250,7 @@ print(" ".join(k for k in ("commands", "agents", "hooks") if k in m))
     && pr_bad="$pr_bad 控えが /tmp 直下に置かれている (再起動で消えるうえ他の利用者と混ざる)"
   if [ -n "$pr_bad" ]; then fail 10 "commands はプラグイン本体の場所を素材行で解決する" "$pr_bad"; return; fi
 
-  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) に 5 項目 + AskUserQuestion + 記入例 ${n_ex} 件 + 悪い例/良い例 / 承認を求める ${n_site} コマンドすべてがそこを指している / commands の CLAUDE_PLUGIN_ROOT 無防備使用 0 件・素材行 ${n_boot} 本が 1 種類で \$P を使う全ブロックに在り、未設定でも最新版 (4 版から) を解決し harness_plugin_root と一致 / update.md ${n_up} 行 (<=200) / 手順 0 の逐語実行で 控えはコピー (project 側も home 側も元が残る)・置き場は一時領域の rules-backup-*・消えるタイミングを表示 を実挙動で確認"
+  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) に 5 項目 + AskUserQuestion + 記入例 ${n_ex} 件 + 悪い例/良い例 / 承認を求める ${n_site} コマンドすべてが AskUserQuestion と同じ行にポインタを持ち 5 項目を備える / 手順書の逐語実行で /init は承認の型を導入先へ置き 2 回目は上書きせず user では docs/ を作らず、/update は無いときだけ足し在れば触らず docs/ を新設しない / commands の CLAUDE_PLUGIN_ROOT 無防備使用 0 件・素材行 ${n_boot} 本が 1 種類で \$P を使う全ブロックに在り、未設定でも最新版 (4 版から) を解決し harness_plugin_root と一致 / update.md ${n_up} 行 (<=200) / init.md ${n_in} 行 (<=305) / 手順 0 の逐語実行で 控えはコピー (project 側も home 側も元が残る)・置き場は一時領域の rules-backup-*・消えるタイミングを表示 を実挙動で確認"
 }
 
 case_1; case_2; case_3; case_4; case_5; case_6; case_7; case_8; case_9; case_10
