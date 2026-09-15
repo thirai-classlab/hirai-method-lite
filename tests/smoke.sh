@@ -286,10 +286,18 @@ EOF
 #     通しているので、置き場 6 通り (ホーム / プロジェクト / 両方 / 無し) で出す・出さないを見る。
 case_2() {
   local out rc
+  # 既定の閾値は 50% (v1.15.0、80% → 50% に変更)。HC_CONTEXT_THRESHOLD を指定せず境界を見る:
+  # 49% は無出力、50% ちょうどで発火する。
+  out="$(TMPDIR="$(mktemp -d)" HC_CONTEXT_RATIO=0.49 bash "$HOOKS/context-budget.sh" \
+        <<< '{"session_id":"smoke-under-49"}' 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then fail 2 "閾値未満 (49%) は無出力" "exit=$rc"; return; fi
+  if [ -n "$out" ]; then fail 2 "閾値未満 (49%) は無出力" "出力あり: $out"; return; fi
   out="$(TMPDIR="$(mktemp -d)" HC_CONTEXT_RATIO=0.50 bash "$HOOKS/context-budget.sh" \
-        <<< '{"session_id":"smoke-under"}' 2>&1)"; rc=$?
-  if [ "$rc" -ne 0 ]; then fail 2 "閾値未満は無出力" "exit=$rc"; return; fi
-  if [ -n "$out" ]; then fail 2 "閾値未満は無出力" "出力あり: $out"; return; fi
+        <<< '{"session_id":"smoke-at-50"}' 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then fail 2 "既定の閾値 50% ちょうどで発火" "exit=$rc"; return; fi
+  if ! printf '%s' "$out" | grep -q '使用率が 50%'; then
+    fail 2 "既定の閾値 50% ちょうどで発火" "出力: ${out:-無}"; return
+  fi
 
   local lr="$HOOKS/loop-reminder.sh"
   if [ ! -f "$lr" ]; then fail 2 "loop-reminder.sh が存在する" "$lr が無い"; return; fi
@@ -374,7 +382,7 @@ EOF
   rm -rf "$lw"
   if [ -n "$bad" ]; then fail 2 "止める手段と fail-open" "$bad"; return; fi
 
-  pass 2 "context-budget.sh は閾値未満 (0.50) で無出力 / loop-reminder.sh は置き場 6 通りで loop のときだけ ${lines} 行を出し normal では 1 バイトも出さない (要点 4 つ入り・全行 [harness] 始まり) / HC_LOOP_REMINDER=off・大文字 LOOP・壊れた/読めない mode.yml・共通ライブラリ不在でも exit 0 無出力"
+  pass 2 "context-budget.sh は既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% ちょうどで発火 / loop-reminder.sh は置き場 6 通りで loop のときだけ ${lines} 行を出し normal では 1 バイトも出さない (要点 4 つ入り・全行 [harness] 始まり) / HC_LOOP_REMINDER=off・大文字 LOOP・壊れた/読めない mode.yml・共通ライブラリ不在でも exit 0 無出力"
 }
 
 # ---------- case 3: 閾値超過で 1 度だけ発火 ----------
@@ -436,6 +444,30 @@ EOF
           bash "$HOOKS/context-budget.sh" 2>/dev/null \
         | sed -n 's/.*使用率が \([0-9]*\)%.*/\1/p')"
   [ "$nw" = "17" ] || bad3="$bad3 HC_CONTEXT_WINDOW 指定=${nw:-無}(期待 17)"
+
+  # --- 窓推定 (v1.15.0): 控えも env も無く、使用トークンが 200,000 を超えるときは
+  # 窓を 1,000,000 と推定し、表示に「（推定）」を添える。推定してもなお超える (1,000,000 超) ときは
+  # 窓サイズ不明として発火しない (誤発火より沈黙)。HC_CONTEXT_WINDOW の明示は推定より優先する。
+  rm -rf "$ct/claude-harness-lite"
+  local tr_est="$ct/tr-est-300000.jsonl" tr_unk="$ct/tr-est-1200000.jsonl" est
+  printf '{"type":"assistant","message":{"usage":{"input_tokens":300000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"server_tool_use":{"web_search_requests":0},"iterations":[{"input_tokens":999999,"output_tokens":999999}]}}}\n' > "$tr_est"
+  printf '{"type":"assistant","message":{"usage":{"input_tokens":1200000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"server_tool_use":{"web_search_requests":0},"iterations":[{"input_tokens":999999,"output_tokens":999999}]}}}\n' > "$tr_unk"
+
+  est="$(printf '{"session_id":"est-300k","transcript_path":"%s"}' "$tr_est" \
+        | TMPDIR="$ct" HC_CONTEXT_THRESHOLD=0.0001 bash "$HOOKS/context-budget.sh" 2>/dev/null)"
+  printf '%s' "$est" | grep -q '使用率が 30%' || bad3="$bad3 窓推定 (300000/1000000)=${est:-無}(期待 使用率が 30%)"
+  printf '%s' "$est" | grep -q '窓 1000000 tokens（推定）' || bad3="$bad3 窓推定の表示=${est:-無}(期待 窓 1000000 tokens（推定）)"
+
+  est="$(printf '{"session_id":"est-1200k","transcript_path":"%s"}' "$tr_unk" \
+        | TMPDIR="$ct" HC_CONTEXT_THRESHOLD=0.0001 bash "$HOOKS/context-budget.sh" 2>/dev/null)"
+  [ -z "$est" ] || bad3="$bad3 推定してもなお超過 (1200000)=出力あり(期待 無出力): $est"
+
+  est="$(printf '{"session_id":"est-explicit","transcript_path":"%s"}' "$tr_est" \
+        | TMPDIR="$ct" HC_CONTEXT_WINDOW=200000 HC_CONTEXT_THRESHOLD=0.0001 \
+          bash "$HOOKS/context-budget.sh" 2>/dev/null)"
+  printf '%s' "$est" | grep -q '使用率が 150%' || bad3="$bad3 HC_CONTEXT_WINDOW 明示時は推定しない=${est:-無}(期待 使用率が 150%)"
+  printf '%s' "$est" | grep -q '（推定）' && bad3="$bad3 明示指定なのに（推定）が付いた: $est"
+
   # 異常入力 (空 stdin / 壊れた JSON / transcript が無い) でも黙って exit 0
   local src3 rc3 out
   for src3 in '' '{"session_id":' 'zzz' '{"session_id":"x","transcript_path":"/nope/none.jsonl"}'; do
@@ -444,9 +476,9 @@ EOF
     [ -z "$out" ] || bad3="$bad3 [異常入力 ${src3}] 出力あり: ${out}"
   done
   rm -rf "$ct"
-  if [ -n "$bad3" ]; then fail 3 "窓サイズ不明時の既定と異常入力" "$bad3"; return; fi
+  if [ -n "$bad3" ]; then fail 3 "窓サイズ不明時の既定 / 推定 / 異常入力" "$bad3"; return; fi
 
-  pass 3 "context-budget.sh は 0.85 で 1 度発火し 2 度目は沈黙 / 画面下部と自動処理が同じ使用率 (窓 200k・1M × 5 通りで一致) / 窓が分からなければ 200,000 とみなし HC_CONTEXT_WINDOW が優先 / 空 stdin・壊れた JSON・transcript 不在でも無出力 exit 0"
+  pass 3 "context-budget.sh は 0.85 で 1 度発火し 2 度目は沈黙 / 画面下部と自動処理が同じ使用率 (窓 200k・1M × 5 通りで一致) / 窓が分からず 200,000 以下なら 200,000 とみなし HC_CONTEXT_WINDOW が優先 / 200,000 超なら 1,000,000 と推定し（推定）を表示 (v1.15.0) / 推定してもなお超えれば窓サイズ不明として無出力 / 空 stdin・壊れた JSON・transcript 不在でも無出力 exit 0"
 }
 
 # ---------- case 4: T0 予算 (警告 6,000 tokens / 上限 10,000 tokens) ----------
@@ -937,6 +969,15 @@ EOF
     if ! why="$(expect_notice "$(run_statusline "$tmp" "$td" "$j_low")" "")"; then
       fail 8 "どちらでもなければ区切りごと出さない" "$why"; failed=1; break
     fi
+    # 既定の閾値は 50% (v1.15.0、80% → 50% に変更)。HC_CONTEXT_THRESHOLD 未指定のまま境界を見る。
+    local j_49='{"model":{"display_name":"X"},"context_window":{"used_percentage":49}}'
+    local j_50='{"model":{"display_name":"X"},"context_window":{"used_percentage":50}}'
+    if ! why="$(expect_notice "$(run_statusline "$tmp" "$td" "$j_49")" "")"; then
+      fail 8 "既定の閾値 50%: 49% ではお知らせを出さない" "$why"; failed=1; break
+    fi
+    if ! why="$(expect_notice "$(run_statusline "$tmp" "$td" "$j_50")" "$ctxmsg")"; then
+      fail 8 "既定の閾値 50%: 50% ちょうどでお知らせを出す" "$why"; failed=1; break
+    fi
     # 閾値は HC_CONTEXT_THRESHOLD で動く (割合でも百分率でも受ける)
     if ! why="$(expect_notice "$(HC_CONTEXT_THRESHOLD=0.90 run_statusline "$tmp" "$td" "$j_high")" "")"; then
       fail 8 "閾値 0.90 なら 85% では出さない" "$why"; failed=1; break
@@ -952,7 +993,7 @@ EOF
   fi
   rm -rf "$tmp" "$td"
   [ "$failed" -eq 0 ] || return
-  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 と 1.9.0 < 1.10.0 を数値比較 / 画面下部 2 行目は設定リンクを常時出しつつ お知らせは 更新あり > context 高 > 無表示 の順に 1 つだけ (off で停止・閾値可変・通信なし)"
+  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 と 1.9.0 < 1.10.0 を数値比較 / 画面下部 2 行目は設定リンクを常時出しつつ お知らせは 更新あり > context 高 > 無表示 の順に 1 つだけ (off で停止・閾値可変・通信なし) / 既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% でお知らせを出す"
 }
 
 # ---------- case 9: マニフェストが妥当な JSON で、版が VERSION と一致する ----------

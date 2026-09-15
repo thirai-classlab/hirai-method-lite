@@ -62,8 +62,8 @@ if command -v harness_ctx_percent >/dev/null 2>&1; then
   ctx_win_seen="$(harness_ctx_window_from_json "$input" || true)"
   [ -n "$ctx_win_seen" ] && harness_ctx_window_remember "$ctx_session" "$ctx_win_seen"
   ctx_tokens="$(harness_ctx_tokens_from_json "$input" || true)"
-  if [ -n "$ctx_tokens" ]; then
-    ctx_pct="$(harness_ctx_percent "$ctx_tokens" "$(harness_ctx_window "$ctx_session")")"
+  if [ -n "$ctx_tokens" ] && ! harness_ctx_window_unknown "$ctx_tokens" "$ctx_session"; then
+    ctx_pct="$(harness_ctx_percent "$ctx_tokens" "$(harness_ctx_window "$ctx_tokens" "$ctx_session")")"
   fi
 fi
 # トークン数が取れない Claude Code (旧版) では、渡された済みの百分率をそのまま使う。
