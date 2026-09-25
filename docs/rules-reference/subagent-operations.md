@@ -38,6 +38,12 @@
 
 **出典**: 本セッション実測 (2026-08-27) / 旧ハーネス memory `feedback_workflow_9_reviewer_parallel_stall_risk` (2026-07-06, 2026-08-21)。旧ハーネスの `feedback_six_parallel_subagent_batch_safe` (6 並列成功、2026-05-28) と `feedback_parallel_subagent_context_endurance` (最大同時 2、9 件累計、2026-05-23) は、より新しい上記の観測に置き換わっている。
 
+### 同時 2 件はメインの直接起動と Workflow の実行本数にかかる — Workflow 内部の並列には別枠
+
+上記の同時 2 件は 2 つの対象にかかる。**(a) メインが Agent tool で直接起動する subagent**（この節の実測が直接の根拠）と、**(b) メインが Workflow ツールを起動する本数**（同時に走らせる Workflow 自体を 2 本までにする）。
+
+一方、**(c) 1 つの Workflow が内部で `parallel()` / `pipeline()` によって同時に走らせるエージェント数には上限を設けない**（`templates/settings.json` の `workflowSizeGuideline: "unrestricted"` が対応）。(a)/(b) と (c) が別枠なのは、原因が違うため: (a)/(b) はメインが手で tool 呼び出しを並べる形で行われ、tool-call の markup 崩れや API 接続の不安定さがそのまま stall に出る（この節の観測がその実例）。(c) は Claude が書いた script を Workflow ランタイムが実行し、同時実行数やリトライをランタイム自身が管理する。上記の実測はメインが手で並べた場合のものであり、Workflow ランタイムが管理する並列実行の安定性を測ったものではない。
+
 ---
 
 ## 2. 1 ターンに複雑な tool 呼び出しを詰め込むと、呼び出しそのものが壊れる
