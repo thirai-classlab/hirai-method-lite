@@ -58,7 +58,7 @@ has_paths_key() {
 # 画面下部は 2 行構成。1 行目 = いまの状態 / 2 行目 = 次にできる操作 (設定リンクは常時表示)。
 SL_LINK='設定を確認・変更 → /hirai-lite:config'
 
-# update_flag_path <tmpdir> <project_root> -> F80 のフラグのパスを stdout。
+# update_flag_path <tmpdir> <project_root> -> 更新ありのフラグのパスを stdout。
 # scripts/update-check.sh の harness_update_flag_file と同じ式 (cksum の鍵) を、
 # source せずに再現する — case 1/8 はプラグインを source しない生の TMPDIR 操作で
 # フラグを仕込む/読むので、鍵の式がここと 2 か所 (update-check.sh・statusline.sh) の
@@ -129,7 +129,7 @@ case_1() {
     rm -rf "$std"; fail 1 "色を落としても 2 行 + 設定リンク" "exit=${rc} ${why}"; return
   fi
   # 空の控え = 更新なし扱い (中身が消し損ねの空ファイルでも嘘の通知を出さない)
-  # フラグの鍵は CLAUDE_PROJECT_DIR ($std) の cksum (F80)。
+  # フラグの鍵は CLAUDE_PROJECT_DIR ($std) の cksum。
   local flag1; flag1="$(update_flag_path "$std" "$std")"
   mkdir -p "$(dirname "$flag1")" && : > "$flag1"
   sout="$(printf '{"context_window":{"used_percentage":12}}' \
@@ -289,7 +289,7 @@ EOF
   printf '%s' "$iout" | grep -qF '== 以上 ==' || bad4="$bad4 [空] 最後まで進まない: ${iout}"
   if [ -n "$bad4" ]; then fail 1 "第 2 段階は事実を集めてから範囲を区切って伺う" "$bad4"; return; fi
 
-  # --- GHP の形 (F17・F19・F78): やること の 1 行が、台帳の形と GHP の形の 2 つで出る ---
+  # --- GHP の形: やること の 1 行が、台帳の形と GHP の形の 2 つで出る ---
   # gh は本物を一切呼ばない — PATH の先頭に偽の gh を置き、呼ばれた引数を記録して
   # 「呼ばれたこと」自体も検査する (session-start/statusline は控えを読むだけで gh を
   # 呼ばないはずなので、この 2 つを走らせる間は偽の gh が呼ばれてはならない)。
@@ -317,7 +317,7 @@ EOF
   # 2. 控えができた状態で session-start.sh を走らせる。表示は控えを読むだけで作る
   #    (session-start.sh 自身も harness_ghp_refresh_async を毎回 detach して投げるが、
   #    それは次回以降のための背景処理であって、この回の表示はその完了を待たない —
-  #    decision 21「時機は…会話の最初」どおり毎回投げるのが仕様なので、gh が呼ばれる
+  #    「時機は会話の最初」どおり毎回投げるのが仕様なので、gh が呼ばれる
   #    こと自体は禁止しない。禁止するのは statusline 側の通信だけ、のあと 3 で見る)。
   #    [harness] やること の行が Project: 形に変わり、行数は 5 行以内のままであること。
   local gout gout_lines
@@ -346,7 +346,7 @@ EOF
     ". \"$ROOT/scripts/tasks-path.sh\"; harness_ghp_cache_file \"$grepo\"")"
   [ "$gpath1" = "$gpath2" ] || bad5="$bad5 env unset で控えのパスが変わった: $gpath1 != $gpath2"
   # 5. gh が無いリポ (git remote は在るが GHP の控えは無い) では、台帳の形にフォールバック
-  #    し、2 行 + exit 0 のまま (F17 のフォールバック・fail-open)。
+  #    し、2 行 + exit 0 のまま (フォールバックの fail-open)。
   local grepo2 gout2 gout2_lines
   grepo2="$gw/repo-none"; mkdir -p "$grepo2"
   git -C "$grepo2" init -q 2>/dev/null
@@ -359,9 +359,9 @@ EOF
   printf '%s' "$gout2" | grep -qF 'やること一覧はまだありません' \
     || bad5="$bad5 gh 不在は台帳の形にフォールバックしない: $gout2"
   rm -rf "$gw"
-  if [ -n "$bad5" ]; then fail 1 "やること は台帳の形と GHP の形の 2 つで出る (F17・F19・F78)" "$bad5"; return; fi
+  if [ -n "$bad5" ]; then fail 1 "やること は台帳の形と GHP の形の 2 つで出る" "$bad5"; return; fi
 
-  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く / /update 手順 2-2 の移行は中身を保ち同名は上書きせず両方残し、移行後は冒頭と画面下部が docs/ の台帳を読む / /init 第 2 段階は 事実収集 → 範囲提示 → grilling 呼び出し の順で、事実収集の bash は中身ありでも空でも exit 0、grilling へ渡す指示に範囲の制約 (調達・法務へ踏み込まない / 不要な質問は落とす / 事実は自分で調べる) が入っている / GHP の形 (F17・F19・F78): 控えがあれば やること が Project: N（承認・裁定・取り込み）／進行中／依存が解けた の形に変わり (statusline は gh を呼ばず控えを読むだけ。session-start は次回以降のため背景処理を毎回投げるが、この回の表示はその完了を待たない)、控えが無ければ台帳の形へ fail-open し、env を unset しても書く側と読む側が同じ控えを指す"
+  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く / /update 手順 2-2 の移行は中身を保ち同名は上書きせず両方残し、移行後は冒頭と画面下部が docs/ の台帳を読む / /init 第 2 段階は 事実収集 → 範囲提示 → grilling 呼び出し の順で、事実収集の bash は中身ありでも空でも exit 0、grilling へ渡す指示に範囲の制約 (調達・法務へ踏み込まない / 不要な質問は落とす / 事実は自分で調べる) が入っている / GHP の形: 控えがあれば やること が Project: N（承認・裁定・取り込み）／進行中／依存が解けた の形に変わり (statusline は gh を呼ばず控えを読むだけ。session-start は次回以降のため背景処理を毎回投げるが、この回の表示はその完了を待たない)、控えが無ければ台帳の形へ fail-open し、env を unset しても書く側と読む側が同じ控えを指す"
 }
 
 # ---------- case 2: UserPromptSubmit の 2 本は、出してよい時だけ出す ----------
@@ -1074,7 +1074,7 @@ EOF
     break
   done
 
-  # F80 の回帰: 同じ TMPDIR (機械 1 台) を共有する 2 つの案件で、片方にだけ更新ありの控えを
+  # 更新あり控えの鍵分けの回帰: 同じ TMPDIR (機械 1 台) を共有する 2 つの案件で、片方にだけ更新ありの控えを
   # 作っても、もう片方の画面下には出ない (鍵がプロジェクトのパスで分かれているため)。
   # v1.14.2/v1.16.0 のような版違いの併用で「無関係な案件の更新あり」が出た実害の再現形。
   if [ "$failed" -eq 0 ]; then
@@ -1085,12 +1085,12 @@ EOF
     flagA="$(update_flag_path "$td" "$tmp")"
     flagB="$(update_flag_path "$td" "$projB")"
     if [ "$flagA" = "$flagB" ]; then
-      fail 8 "F80: 案件ごとにフラグの鍵が分かれる" "$tmp と $projB が同じパスになった: $flagA"
+      fail 8 "案件ごとにフラグの鍵が分かれる" "$tmp と $projB が同じパスになった: $flagA"
       failed=1
     else
       mkdir -p "$(dirname "$flagB")" && : > "$flagB"   # 別案件 (projB) だけに更新ありを装う
       if printf '%s\n' "$(run_statusline "$tmp" "$td" "$j_low")" | grep -q '更新あり'; then
-        fail 8 "F80: 他案件の控えを自分の更新ありと読まない" "$tmp の画面下に $projB 分の通知が出た"
+        fail 8 "他案件の控えを自分の更新ありと読まない" "$tmp の画面下に $projB 分の通知が出た"
         failed=1
       fi
     fi
@@ -1102,7 +1102,7 @@ EOF
   fi
   rm -rf "$tmp" "$td"
   [ "$failed" -eq 0 ] || return
-  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 と 1.9.0 < 1.10.0 を数値比較 / 画面下部 2 行目は設定リンクを常時出しつつ お知らせは 更新あり > context 高 > 無表示 の順に 1 つだけ (off で停止・閾値可変・通信なし) / 既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% でお知らせを出す / F80: フラグの鍵は案件 (CLAUDE_PROJECT_DIR) ごとに分かれ、他案件の更新ありは漏れない"
+  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 と 1.9.0 < 1.10.0 を数値比較 / 画面下部 2 行目は設定リンクを常時出しつつ お知らせは 更新あり > context 高 > 無表示 の順に 1 つだけ (off で停止・閾値可変・通信なし) / 既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% でお知らせを出す / フラグの鍵は案件 (CLAUDE_PROJECT_DIR) ごとに分かれ、他案件の更新ありは漏れない"
 }
 
 # ---------- case 9: マニフェストが妥当な JSON で、版が VERSION と一致する ----------

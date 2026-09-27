@@ -195,34 +195,36 @@ harness_open_tasks() {
 
 # --- GHP (GitHub Project) の形 -------------------------------------------------
 # 台帳の形 (harness_tasks_file / harness_open_tasks、上) とは別に、リポに紐づいた
-# GitHub Project を使う形を持つ (F17)。**両者は排他ではなく、どちらの形で動くかを
+# GitHub Project を使う形を持つ。**両者は排他ではなく、どちらの形で動くかを
 # リポごとに見分けるだけ** — harness_tasks_file・harness_open_tasks の名前も意味も
-# 変えない (A-3)。台帳の有無では見分けられない (台帳を凍結しつつ Project も持つリポが
+# 変えない。台帳の有無では見分けられない (台帳を凍結しつつ Project も持つリポが
 # ある。台帳を消す判定にすると、1.x 由来の /new-task 等が台帳を再生成して判定が
 # ひっくり返る)。見分ける手がかりは、リポに紐づいた Project が項目「種別」を
-# 持つかどうかだけにする (ファイルで切り替えると「設定のファイルは作らない」に触れる)。
+# 持つかどうかだけにする (プロジェクトごとの設定ファイルは作らない、という既存の
+# 方針に合わせる)。
 #
-# 通信する (gh を叩く) のは、次の 2 か所だけ (F19)。
+# 通信する (gh を叩く) のは、次の 2 か所だけにする。
 #   ・SessionStart の背景処理 (harness_ghp_refresh background。hooks/session-start.sh から
 #     detach して呼ぶ)
-#   ・道具 (gh-task 相当。H-4 で実装) が書き込んだ直後 (harness_ghp_refresh now)
+#   ・書き込み用の道具 (今後 gh-task 相当のコマンドから呼ぶ想定) が書き込んだ直後
+#     (harness_ghp_refresh now)
 # session-start.sh と statusline.sh はここの「読む側」(harness_ghp_line 系) だけを呼び、
 # 控えを読むだけで gh は 1 回も呼ばない。
 #
 # 控えの置き場は $CLAUDE_PLUGIN_DATA (hook・MCP・LSP にしか渡らず、Bash ツールには
 # 渡らない: https://code.claude.com/docs/en/plugins-reference の
 # "Where each variable resolves") を使わず、$HOME/.claude/plugins/data/<id>/ の形を
-# 定数で持つ。<id> は 2.x のマーケットプレイス entry 名 (H-6 で main の marketplace.json
-# に足す) を仮に置いたもの — H-6 で実際の entry 名が決まったら、この 1 行を合わせる
-# (H-6 の完了条件に含める。ズレていても壊れ方は「控えが前回のまま」で fail-open)。
+# 定数で持つ。<id> は将来この GHP の形を持つ配布系列 (エントリ) の名前を仮に置いた
+# もの — 実際のエントリ名が決まったら、この 1 行を合わせる (ズレていても壊れ方は
+# 「控えが前回のまま」で fail-open)。
 HARNESS_GHP_ID="hirai-lite-v2"
 
 # 見分けと件数の取り直しの間隔。件数 (a-d) と依存待ちの件数 (e) は毎回の背景処理で
-# 取り直す (会話の最初ごと・decision 21)。見分け (このリポが GHP の形かどうか自体) は
+# 取り直す (会話の最初ごと)。見分け (このリポが GHP の形かどうか自体) は
 # 変わることが稀なので、間隔を空ける (既定 24h。update-check.sh の間隔と同じ考え方)。
 HARNESS_GHP_PROBE_INTERVAL_DEFAULT=86400
 # 「書いた直後」(now) が e (依存が解けた件数) を取り直すのは、前回の e からこれ以上
-# 空いたときだけ (B-22)。背景処理 (background) は毎回取り直す。
+# 空いたときだけ。背景処理 (background) は毎回取り直す。
 HARNESS_GHP_UNBLOCKED_STALE_DEFAULT=600
 
 # harness_ghp_repo_slug [root] -> "<owner>/<repo>" を stdout、無ければ空 + rc 1。
@@ -264,7 +266,7 @@ harness_ghp_form() {
   harness_ghp_cache_get "$(harness_ghp_cache_file "${1:-}")" form
 }
 
-# harness_ghp_line [root] -> F78/C12 の件数の中身 (見出し語は付けない)。
+# harness_ghp_line [root] -> やること の行に埋め込む件数の中身 (見出し語は付けない)。
 # 形式: "N（承認 a・裁定 b・取り込み c）／進行中 d／依存が解けた e 件（HH:MM 時点）"
 # form が ghp でない・控えが無い・件数が欠けている場合は空 + rc 1 を返す (呼び出し側は
 # 台帳の形にフォールバックする)。gh は呼ばない (控えを読むだけ)。
@@ -386,20 +388,21 @@ harness_ghp_write_raw() (
 #
 #   1. 見分け (form): 前回の probed_epoch から HARNESS_GHP_PROBE_INTERVAL 秒 (既定 24h)
 #      経っていなければ飛ばす。経っていれば、リポに紐づく Project (Repository.projectsV2。
-#      この向き — リポからの紐づけ — は未検証: F18 が別に指摘している) のうち、項目
+#      この向き — リポからの紐づけ — は未検証。owner の型 (organization/user) を
+#      問わない node(id:) 経由で数える側は別に確かめている) のうち、項目
 #      「種別」を持つ最初の 1 件を採用する (無ければ "none"。台帳の形かどうかは呼び出し側
 #      — session-start.sh — が harness_tasks_file の有無で判定するので、ここでは
 #      "none" と書くだけにする)。
 #   2. counts (a-d): form が ghp のときだけ、totalCount を 1 回の GraphQL 呼び出しで
-#      別名で並べて取る (F19)。
+#      別名で並べて取る。
 #   3. unblocked (e): background のときは毎回。now のときは、前回の
 #      unblocked_epoch から HARNESS_GHP_UNBLOCKED_STALE 秒 (既定 10 分) より
-#      古いときだけ取る (B-22)。
-#      **注記 (未検証・簡略化)**: 「依存が解けた」件数の厳密な定義 (decision 21 — 依存待ちの
-#      うち、止めていた依存が閉じたもの) は、各件の blocked-by を突き合わせる専用の
-#      一覧スクリプトの仕事で、それは H-4 (道具) 以降に作る。ここでは同じ枠に載せる
-#      ため、当面 status:依存待ち の totalCount を代用する (上振れの近似)。突き合わせの
-#      道具ができたら、この 1 か所を差し替える。
+#      古いときだけ取る。
+#      **注記 (未検証・簡略化)**: 「依存が解けた」件数の厳密な定義 (依存待ちのうち、
+#      止めていた依存が閉じたもの) は、各件の blocked-by を突き合わせる専用の
+#      一覧スクリプトの仕事で、それは書き込み用の道具ができてから作る。ここでは同じ
+#      枠に載せるため、当面 status:依存待ち の totalCount を代用する (上振れの近似)。
+#      突き合わせの道具ができたら、この 1 か所を差し替える。
 harness_ghp_refresh() (
   set -uo pipefail
   command -v gh >/dev/null 2>&1 || return 0

@@ -142,14 +142,14 @@ harness_update_notice() (
 # 展開されないため、導入先へ複製された .claude/statusline.sh として動く)。VERSION もキャッシュ dir も
 # プラグインのパス起点なので、版の比較はここ (SessionStart 側) で済ませ、結果だけを
 # 導入先ごとに分けた 1 ファイルへ書き写す。statusline はその 1 ファイルの有無を見るだけで、
-# 通信もバージョン比較もしない (F80)。
+# 通信もバージョン比較もしない。
 #
 # **鍵はプロジェクトのパス (CLAUDE_PROJECT_DIR) の cksum にする。** プラグインのパスでは
 # 分けられない — statusline はプラグインの置き場所を知れないため、書く側 (ここ) と読む側
 # (statusline.sh) の双方が資格として持っている値でなければ、同じ鍵を導けない。プロジェクトの
 # パスなら両方が知っている (session-start.sh も statusline.sh も CLAUDE_PROJECT_DIR を読む)。
 # これが無いと、1.x と 2.x を併用する機械で、無関係な案件どうしの「更新あり」表示が
-# 入れ替わる (v1.14.2 の案件を開くと v1.16.0 の案件の画面下にも出る、F80 の実害)。
+# 入れ替わる (v1.14.2 の案件を開くと v1.16.0 の案件の画面下にも出る、という実害があった)。
 HARNESS_UPDATE_FLAG_DIR_NAME="claude-harness-lite"
 
 # harness_update_flag_key [project_root] -> 鍵 (cksum) を stdout。常に rc 0 (空にはしない)。

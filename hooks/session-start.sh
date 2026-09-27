@@ -39,11 +39,11 @@ case "$mode" in
   *)      mode_line="$mode" ;;
 esac
 
-# --- やること: GHP の形 (F17) が控えにあれば置き換え、無ければ台帳の形 (A-3・不変) ---
-# GHP の形の見分け・件数の取り直しは gh を叩く。ここ (前景) では控えを読むだけにし
-# (F19)、取り直しは detach した背景処理に投げる (harness_ghp_refresh_async)。
+# --- やること: GHP の形の控えがあれば置き換え、無ければ台帳の形 (名前も意味も不変) ---
+# GHP の形の見分け・件数の取り直しは gh を叩く。ここ (前景) では控えを読むだけにし、
+# 取り直しは detach した背景処理に投げる (harness_ghp_refresh_async)。
 # 台帳の形かどうかの判定 (harness_tasks_file の有無) は変えない — GHP の控えが無い・
-# 「ghp」でない場合は、必ずこの下の台帳の形にフォールバックする (F17)。
+# 「ghp」でない場合は、必ずこの下の台帳の形にフォールバックする。
 ghp_line=""
 if command -v harness_ghp_line >/dev/null 2>&1; then
   ghp_line="$(harness_ghp_line "$root" 2>/dev/null || true)"
@@ -74,7 +74,7 @@ if [ -f "$plugin_root/scripts/update-check.sh" ]; then
     harness_update_fetch_async "$plugin_root" >/dev/null 2>&1 || true
     update_line="$(harness_update_notice "$plugin_root" 2>/dev/null || true)"
     # 画面下部のお知らせ枠へ結果を渡す (statusline はプラグインのパスを知れないため)。
-    # フラグの鍵はプロジェクト側のパス (root) にする (F80。plugin_root では 1.x/2.x や
+    # フラグの鍵はプロジェクト側のパス (root) にする (plugin_root では 1.x/2.x や
     # 別案件どうしの「更新あり」表示が入れ替わる)。
     harness_update_flag_sync "$plugin_root" "$root" >/dev/null 2>&1 || true
   fi

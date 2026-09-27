@@ -17,7 +17,7 @@
 # **この scripts は通信しない。** 画面下部は何度も描き直されるため、更新の有無は
 # SessionStart 側 (scripts/update-check.sh の harness_update_flag_sync) が置いたフラグ 1 ファイルの
 # 有無を見るだけにする。取得も版の比較もここでは行わない。
-# フラグのパスは CLAUDE_PROJECT_DIR の cksum で鍵を作る (F80)。update-check.sh の
+# フラグのパスは CLAUDE_PROJECT_DIR の cksum で鍵を作る。update-check.sh の
 # harness_update_flag_file と同じ式 — この scripts はプラグインの置き場所を知れず
 # update-check.sh を source できない (導入先に複製されるのは statusline.sh 自身だけで、
 # update-check.sh は複製の対象外) ため、鍵の式だけをここにも書く (2 か所とも変えること)。
@@ -100,7 +100,7 @@ case "$mode" in
   *)      mode_label="$mode";                mode_col="$DIM" ;;
 esac
 
-# 未完了タスク: GHP の形 (F17・C12) の控えがあれば置き換え、無ければ台帳の形 (A-3・不変)。
+# 未完了タスク: GHP の形の控えがあれば置き換え、無ければ台帳の形 (名前も意味も不変)。
 # ここは通信しない (この scripts の既定方針) — 控えを読むだけで、取り直しは
 # session-start.sh の背景処理 (harness_ghp_refresh_async) に任せる。
 todo="—"
