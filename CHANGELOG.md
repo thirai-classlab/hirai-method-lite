@@ -8,7 +8,7 @@
 
 配布元を `main` から `v1` ブランチへ切り離した 1 件。今後 `main` のカタログには 1.x（`v1`）に加えて別系列（2.0.0 以降）の entry も並ぶようになるため、1.x を使う利用者が別系列の変更を巻き込まれないよう、この版で 1.x の内容を `v1` ブランチに固定する。
 
-- **更新検知の URL 3 か所を `main` から `v1` に向け直した。** `scripts/update-check.sh` の既定 URL・`commands/update.md` の手で確かめる手順・`README.md` の同じ手順の 3 か所。今後 1.x への直しは `v1` ブランチにだけ入るため、「更新あり」の比較対象も実際の配布元に合わせた。`main` の `VERSION` はこの版のまま 1.x の最新値として保つ（別系列の版に上書きしない）。
+- **更新検知の URL 3 か所を `main` から `v1` に向け直した。** `scripts/update-check.sh` の既定 URL・`commands/update.md` の手で確かめる手順・`README.md` の同じ手順の 3 か所。今後 1.x の配布元は `v1` ブランチになるため、「更新あり」の比較対象も実際の配布元に合わせた。`main` の `VERSION` はこの版のまま 1.x の最新値として保つ（別系列の版に上書きしない）。
 - **版の 3 か所（`VERSION` / `plugin.json` / `marketplace.json`）を揃えた。** それ以外のコマンド・rules・agents・hooks・skills は 1 バイトも変えていない。
 - **予算・数は据え置き**（hook 3/5・command 12/12・skill 2/3・smoke case 10/10。T0 実測 4,365 tokens で変化なし。`rules/` と `templates/CLAUDE.md` を触っていないため）。
 - **実測。** (1) `bash tests/smoke.sh` 全 10 case PASS / exit 0 (2) `claude plugin validate --strict` PASS (3) `claude --plugin-dir . plugin details hirai-lite` の登録件数（commands 12・skills 2・agents 3・hooks 2 イベント）が変更前と一致（今回の差分はコンポーネントを増減させないため）。
