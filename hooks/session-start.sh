@@ -39,16 +39,29 @@ case "$mode" in
   *)      mode_line="$mode" ;;
 esac
 
-# --- 未完了タスク数: 台帳 (解決順は scripts/tasks-path.sh) の table 行から数える ---
-list=""
-if command -v harness_tasks_file >/dev/null 2>&1; then
-  list="$(harness_tasks_file "$root" 2>/dev/null || true)"
+# --- やること: GHP の形 (F17) が控えにあれば置き換え、無ければ台帳の形 (A-3・不変) ---
+# GHP の形の見分け・件数の取り直しは gh を叩く。ここ (前景) では控えを読むだけにし
+# (F19)、取り直しは detach した背景処理に投げる (harness_ghp_refresh_async)。
+# 台帳の形かどうかの判定 (harness_tasks_file の有無) は変えない — GHP の控えが無い・
+# 「ghp」でない場合は、必ずこの下の台帳の形にフォールバックする (F17)。
+ghp_line=""
+if command -v harness_ghp_line >/dev/null 2>&1; then
+  ghp_line="$(harness_ghp_line "$root" 2>/dev/null || true)"
 fi
-if [ -n "$list" ] && [ -f "$list" ]; then
-  task_line="やること: $(harness_open_tasks "$list") 件 (${list#"$root"/})"
+if [ -n "$ghp_line" ]; then
+  task_line="Project: ${ghp_line}"
 else
-  task_line="やること一覧はまだありません (/new-task で作れます)"
+  list=""
+  if command -v harness_tasks_file >/dev/null 2>&1; then
+    list="$(harness_tasks_file "$root" 2>/dev/null || true)"
+  fi
+  if [ -n "$list" ] && [ -f "$list" ]; then
+    task_line="やること: $(harness_open_tasks "$list") 件 (${list#"$root"/})"
+  else
+    task_line="やること一覧はまだありません (/new-task で作れます)"
+  fi
 fi
+command -v harness_ghp_refresh_async >/dev/null 2>&1 && harness_ghp_refresh_async background "$root" >/dev/null 2>&1
 
 # --- 更新検知: 取得は背景 + 24h に 1 回、表示は前回キャッシュ値 (通信を待たない) ---
 # 版を比べる VERSION はプラグイン側にあるので plugin_root を渡す。

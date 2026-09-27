@@ -100,9 +100,14 @@ case "$mode" in
   *)      mode_label="$mode";                mode_col="$DIM" ;;
 esac
 
-# 未完了タスク: 台帳の解決順は scripts/tasks-path.sh (冒頭で source 済み、台帳なしは "—")
+# 未完了タスク: GHP の形 (F17・C12) の控えがあれば置き換え、無ければ台帳の形 (A-3・不変)。
+# ここは通信しない (この scripts の既定方針) — 控えを読むだけで、取り直しは
+# session-start.sh の背景処理 (harness_ghp_refresh_async) に任せる。
 todo="—"
-if command -v harness_tasks_file >/dev/null 2>&1; then
+if command -v harness_ghp_line >/dev/null 2>&1 && todo_ghp="$(harness_ghp_line "$root" 2>/dev/null)" \
+  && [ -n "$todo_ghp" ]; then
+  todo="$todo_ghp"
+elif command -v harness_tasks_file >/dev/null 2>&1; then
   list="$(harness_tasks_file "$root" 2>/dev/null || true)"
   if [ -n "$list" ] && [ -f "$list" ]; then todo="$(harness_open_tasks "$list")"; fi
 fi

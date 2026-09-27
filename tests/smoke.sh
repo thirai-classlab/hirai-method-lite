@@ -289,7 +289,79 @@ EOF
   printf '%s' "$iout" | grep -qF '== 以上 ==' || bad4="$bad4 [空] 最後まで進まない: ${iout}"
   if [ -n "$bad4" ]; then fail 1 "第 2 段階は事実を集めてから範囲を区切って伺う" "$bad4"; return; fi
 
-  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く / /update 手順 2-2 の移行は中身を保ち同名は上書きせず両方残し、移行後は冒頭と画面下部が docs/ の台帳を読む / /init 第 2 段階は 事実収集 → 範囲提示 → grilling 呼び出し の順で、事実収集の bash は中身ありでも空でも exit 0、grilling へ渡す指示に範囲の制約 (調達・法務へ踏み込まない / 不要な質問は落とす / 事実は自分で調べる) が入っている"
+  # --- GHP の形 (F17・F19・F78): やること の 1 行が、台帳の形と GHP の形の 2 つで出る ---
+  # gh は本物を一切呼ばない — PATH の先頭に偽の gh を置き、呼ばれた引数を記録して
+  # 「呼ばれたこと」自体も検査する (session-start/statusline は控えを読むだけで gh を
+  # 呼ばないはずなので、この 2 つを走らせる間は偽の gh が呼ばれてはならない)。
+  local gw grepo gwbin gwlog gwhome
+  gw="$(mktemp -d)"; grepo="$gw/repo"; gwbin="$gw/bin"; gwlog="$gw/gh.log"; gwhome="$gw/home"
+  mkdir -p "$grepo" "$gwbin" "$gwhome"
+  git -C "$grepo" init -q 2>/dev/null
+  git -C "$grepo" remote add origin https://github.com/acme/widgets.git 2>/dev/null
+  cat > "$gwbin/gh" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$gwlog"
+case "\$*" in
+  *'ProjectV2FieldCommon'*) printf 'PVT_test\t7\n' ;;
+  *'"種別:feature status:承認待ち"'*) printf '3\t1\t2\t5\n' ;;
+  *'依存待ち'*) printf '4\n' ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "$gwbin/gh"
+  local bad5=""
+  # 1. background の取り直し (harness_ghp_refresh) は偽の gh を叩いて控えを作る
+  #    (これは session-start/statusline の役目ではなく、道具側の役目を模した準備)。
+  HOME="$gwhome" PATH="$gwbin:$PATH" bash -c \
+    ". \"$ROOT/scripts/tasks-path.sh\"; harness_ghp_refresh background \"$grepo\"" 2>/dev/null
+  # 2. 控えができた状態で session-start.sh を走らせる。表示は控えを読むだけで作る
+  #    (session-start.sh 自身も harness_ghp_refresh_async を毎回 detach して投げるが、
+  #    それは次回以降のための背景処理であって、この回の表示はその完了を待たない —
+  #    decision 21「時機は…会話の最初」どおり毎回投げるのが仕様なので、gh が呼ばれる
+  #    こと自体は禁止しない。禁止するのは statusline 側の通信だけ、のあと 3 で見る)。
+  #    [harness] やること の行が Project: 形に変わり、行数は 5 行以内のままであること。
+  local gout gout_lines
+  gout="$(HOME="$gwhome" PATH="$gwbin:$PATH" TMPDIR="$gw" CLAUDE_PLUGIN_ROOT="$tmp" \
+        CLAUDE_PROJECT_DIR="$grepo" bash "$HOOKS/session-start.sh" 2>&1)"
+  gout_lines="$(printf '%s\n' "$gout" | grep -c . || true)"
+  printf '%s' "$gout" | grep -qF '[harness] Project: 6（承認 3・裁定 1・取り込み 2）／進行中 5／依存が解けた 4 件' \
+    || bad5="$bad5 session-start の やること が GHP の形に変わっていない: $gout"
+  [ "${gout_lines:-0}" -le 5 ] || bad5="$bad5 session-start が 5 行を超えた: ${gout_lines} 行"
+  # 3. statusline.sh も同じ控えを読み、コンパクトな形を やること の値として出す。gh は
+  #    呼ばれないこと (通信しない、という既定方針を GHP でも保つ)。
+  : > "$gwlog"
+  local sout5
+  sout5="$(printf '{"context_window":{"used_percentage":12}}' \
+        | HOME="$gwhome" PATH="$gwbin:$PATH" TMPDIR="$gw" NO_COLOR=1 CLAUDE_PROJECT_DIR="$grepo" \
+          bash "$ROOT/scripts/statusline.sh" 2>&1)"
+  [ -s "$gwlog" ] && bad5="$bad5 statusline が gh を呼んだ: $(cat "$gwlog")"
+  printf '%s' "$sout5" | grep -qF 'やること 6（承認 3・裁定 1・取り込み 2）／進行中 5／依存が解けた 4 件' \
+    || bad5="$bad5 statusline の やること が GHP の形に変わっていない: $sout5"
+  why="$(sl_shape "$sout5")" || bad5="$bad5 GHP の形でも 2 行 + 設定リンク: $why"
+  # 4. env を unset しても、書く側 (harness_ghp_refresh) と読む側 (harness_ghp_line) が
+  #    同じ控えを指す (定数の置き場 + git remote だけで決まるため)。
+  local gpath1 gpath2
+  gpath1="$(HOME="$gwhome" bash -c ". \"$ROOT/scripts/tasks-path.sh\"; harness_ghp_cache_file \"$grepo\"")"
+  gpath2="$(env -i HOME="$gwhome" PATH="$PATH" bash -c \
+    ". \"$ROOT/scripts/tasks-path.sh\"; harness_ghp_cache_file \"$grepo\"")"
+  [ "$gpath1" = "$gpath2" ] || bad5="$bad5 env unset で控えのパスが変わった: $gpath1 != $gpath2"
+  # 5. gh が無いリポ (git remote は在るが GHP の控えは無い) では、台帳の形にフォールバック
+  #    し、2 行 + exit 0 のまま (F17 のフォールバック・fail-open)。
+  local grepo2 gout2 gout2_lines
+  grepo2="$gw/repo-none"; mkdir -p "$grepo2"
+  git -C "$grepo2" init -q 2>/dev/null
+  git -C "$grepo2" remote add origin https://github.com/acme/none.git 2>/dev/null
+  gout2="$(PATH="/usr/bin:/bin" HOME="$gw/home-none" CLAUDE_PROJECT_DIR="$grepo2" \
+        bash "$HOOKS/session-start.sh" 2>&1)"; irc=$?
+  gout2_lines="$(printf '%s\n' "$gout2" | grep -c . || true)"
+  [ "$irc" -eq 0 ] || bad5="$bad5 gh 不在で exit 0 でない: exit=$irc"
+  [ "${gout2_lines:-0}" -ge 1 ] || bad5="$bad5 gh 不在で無出力"
+  printf '%s' "$gout2" | grep -qF 'やること一覧はまだありません' \
+    || bad5="$bad5 gh 不在は台帳の形にフォールバックしない: $gout2"
+  rm -rf "$gw"
+  if [ -n "$bad5" ]; then fail 1 "やること は台帳の形と GHP の形の 2 つで出る (F17・F19・F78)" "$bad5"; return; fi
+
+  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く / /update 手順 2-2 の移行は中身を保ち同名は上書きせず両方残し、移行後は冒頭と画面下部が docs/ の台帳を読む / /init 第 2 段階は 事実収集 → 範囲提示 → grilling 呼び出し の順で、事実収集の bash は中身ありでも空でも exit 0、grilling へ渡す指示に範囲の制約 (調達・法務へ踏み込まない / 不要な質問は落とす / 事実は自分で調べる) が入っている / GHP の形 (F17・F19・F78): 控えがあれば やること が Project: N（承認・裁定・取り込み）／進行中／依存が解けた の形に変わり (statusline は gh を呼ばず控えを読むだけ。session-start は次回以降のため背景処理を毎回投げるが、この回の表示はその完了を待たない)、控えが無ければ台帳の形へ fail-open し、env を unset しても書く側と読む側が同じ控えを指す"
 }
 
 # ---------- case 2: UserPromptSubmit の 2 本は、出してよい時だけ出す ----------
