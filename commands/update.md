@@ -16,12 +16,12 @@ description: ハーネス (プラグイン hirai-lite) を最新版に更新し�
 
 ## 素材行 — プラグイン本体の場所を解決する 1 行
 
-`$CLAUDE_PLUGIN_ROOT` は**空で渡ることがある**。空のまま `"$CLAUDE_PLUGIN_ROOT/VERSION"` と書くと `/VERSION` を読みに行って失敗し、版の比較・`scripts/` の読み込み・smoke・終了条件が**全部空振りする**（v1.14.0 の `/update` が実環境で動かなかった原因）。解決順は `$CLAUDE_PLUGIN_ROOT` → `~/.claude/plugins/cache/hirai-lite/hirai-lite/<版>/` のうち**版が最新のもの** → `~/.claude/plugins/marketplaces/hirai-lite`。`/init` の手順 0 と**同じ 1 行**を使う。下の 1 行目を**素材行**と呼び、素材を読む bash ブロックの先頭に毎回そのまま置く（ブロックごとに新しいシェルで動くため変数は持ち越されない）。以降は解決済みの `$P` だけを使う。
+`$CLAUDE_PLUGIN_ROOT` は**空で渡ることがある**。空のまま `"$CLAUDE_PLUGIN_ROOT/VERSION"` と書くと `/VERSION` を読みに行って失敗し、版の比較・`scripts/` の読み込み・smoke・終了条件が**全部空振りする**（v1.14.0 の `/update` が実環境で動かなかった原因）。解決順は `$CLAUDE_PLUGIN_ROOT` → `~/.claude/plugins/installed_plugins.json` のうち 2.x の行 (plugin 名が `hirai-lite-v2` の行。H-6 で実際のエントリ名が決まったら合わせる) の**版が最新の installPath** → `~/.claude/plugins/cache/hirai-lite/hirai-lite-v2/<版>/` のうち**版が最新のもの**。`marketplaces/hirai-lite`（main = 1.x）には落とさない。`/init` の手順 0 と**同じ 1 行**を使う。下の 1 行目を**素材行**と呼び、素材を読む bash ブロックの先頭に毎回そのまま置く（ブロックごとに新しいシェルで動くため変数は持ち越されない）。以降は解決済みの `$P` だけを使う。
 
 ## 手順 0: 現在の版と rules の控えを取る
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 echo "更新前の版 $(cat "$P/VERSION" 2>/dev/null || echo 不明)  (素材 $P)"
 B="${TMPDIR:-/tmp}/claude-harness-lite/rules-backup-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$B"
 [ -d .claude/rules ]         && cp -R .claude/rules         "$B/rules.project" && echo "控えを作成 (コピー) .claude/rules → $B/rules.project"
@@ -74,7 +74,7 @@ done
 ### 2-2. 移す
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 moved=""; kept=""
 mv1() {  # mv1 <移動元> <移動先>: 移動先に在れば移さずに控える (上書きしない)
   [ -e "$1" ] || return 0
@@ -114,7 +114,7 @@ bash "$P/scripts/scope-check.sh" .claude "$HOME/.claude" .
 **置いていない場所に新しく作らない。** プロジェクト側とホーム側の両方を見て、**すでに在るものだけ**を入れ替える（片方に決め打ちすると、`/init user` で入れた人はホーム側が古いまま残り、使われないファイルがプロジェクト側に増える）。入れ替えそのものは共通ライブラリの `harness_sync_owned_scripts` 1 本に集約してある（セッション冒頭の自動入れ替えと**同じ関数**を通す。手順書と自動処理で作法が離れないようにするため）。`force` を渡すと、設定に関係なく必ず実行し、1 件ずつ作業ログを出す。
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 . "$P/scripts/update-check.sh"
 harness_sync_owned_scripts "$P" "$PWD" force
 [ -d docs/rules-reference ] && [ ! -e docs/rules-reference/approval-template.md ] && cp "$P/docs/rules-reference/approval-template.md" docs/rules-reference/ && echo "placed docs/rules-reference/approval-template.md"
@@ -130,7 +130,7 @@ done
 ## 手順 5: 版が上がったことを検証する
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 cat "$P/VERSION"
 bash "$P/tests/smoke.sh"
 git status --short
@@ -184,7 +184,7 @@ SessionStart で `[harness] 更新あり vX → vY (/update で適用)` が出�
 **通知が出ないことは「最新である」ことの証明にはならない**（実測で確認済み）。入れた直後の 1 セッション目（表示に使うのは前回の取得結果なので、比べる相手が無い）と、前回の取得から 24 時間の間（その後に新版が出ても次の取得まで気づかない）は必ず沈黙する。いますぐ確かめるには:
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 curl -fsSL https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/v2/VERSION     # 公開されている最新版
 cat "$P/VERSION"                                                                              # いま入っている版
 ```

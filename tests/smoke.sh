@@ -435,7 +435,21 @@ EOF2
   rm -rf "$gw"
   if [ -n "$bad5" ]; then fail 1 "やること は台帳の形と GHP の形の 2 つで出る" "$bad5"; return; fi
 
-  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く / /update 手順 2-2 の移行は中身を保ち同名は上書きせず両方残し、移行後は冒頭と画面下部が docs/ の台帳を読む / /init 第 2 段階は 事実収集 → 範囲提示 → grilling 呼び出し の順で、事実収集の bash は中身ありでも空でも exit 0、grilling へ渡す指示に範囲の制約 (調達・法務へ踏み込まない / 不要な質問は落とす / 事実は自分で調べる) が入っている / GHP の形: 控えがあれば あなたの番 が N（承認・裁定・取り込み）／進行中／待ち解け の形に変わり (statusline は gh を呼ばず控えを読むだけ。session-start は次回以降のため背景処理を毎回投げるが、この回の表示はその完了を待たない。間隔内の 2 回目は gh を呼ばない)、控えが無ければ台帳の形へ fail-open し、env を unset しても書く側と読む側が同じ控えを指し、remote の URL は ssh://・user@・末尾スラッシュも同じ owner/repo に正規化され、紐づく Project が 2 件以上なら GHP を名乗らない"
+  # --- new-task / start-task / finish-task の GHP の形の節。台帳の形と GHP の形は
+  # 排他ではなく、リポごとに見分けて分岐する。GHP の形の節は起票のスキル /
+  # hirai-task を呼ぶだけで、台帳 (list.md) を作らず読まず書かない。
+  local ghpcmd bad6="" sec
+  for ghpcmd in new-task.md start-task.md finish-task.md; do
+    sec="$(awk '/^## GHP の形の場合$/ {f=1; next} f && /^## / {exit} f' "$ROOT/commands/$ghpcmd")"
+    if [ -z "$sec" ]; then bad6="$bad6 ${ghpcmd}:GHP の形の節が無い"; continue; fi
+    printf '%s' "$sec" | grep -qF 'hirai-task' \
+      || bad6="$bad6 ${ghpcmd}:GHP の形の節が GitHub の形の呼び出し (hirai-task) を持たない"
+    printf '%s' "$sec" | grep -qF 'list.md' \
+      && bad6="$bad6 ${ghpcmd}:GHP の形の節が台帳 (list.md) を書く行を持つ"
+  done
+  if [ -n "$bad6" ]; then fail 1 "new-task・start-task・finish-task は GHP の形で hirai-task を呼び、台帳を書かない" "$bad6"; return; fi
+
+  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く / /update 手順 2-2 の移行は中身を保ち同名は上書きせず両方残し、移行後は冒頭と画面下部が docs/ の台帳を読む / /init 第 2 段階は 事実収集 → 範囲提示 → grilling 呼び出し の順で、事実収集の bash は中身ありでも空でも exit 0、grilling へ渡す指示に範囲の制約 (調達・法務へ踏み込まない / 不要な質問は落とす / 事実は自分で調べる) が入っている / GHP の形: 控えがあれば あなたの番 が N（承認・裁定・取り込み）／進行中／待ち解け の形に変わり (statusline は gh を呼ばず控えを読むだけ。session-start は次回以降のため背景処理を毎回投げるが、この回の表示はその完了を待たない。間隔内の 2 回目は gh を呼ばない)、控えが無ければ台帳の形へ fail-open し、env を unset しても書く側と読む側が同じ控えを指し、remote の URL は ssh://・user@・末尾スラッシュも同じ owner/repo に正規化され、紐づく Project が 2 件以上なら GHP を名乗らない / new-task・start-task・finish-task の GHP の形の節は hirai-task を呼び、台帳を書く行を持たない"
 }
 
 # ---------- case 2: UserPromptSubmit の 2 本は、出してよい時だけ出す ----------
@@ -1494,25 +1508,52 @@ print(" ".join(k for k in ("commands", "agents", "hooks") if k in m))
   if [ -z "$boot" ]; then
     fail 10 "/update の素材行" "commands/update.md から取り出せない"; return
   fi
-  # 未設定 + 偽 HOME で逐語実行する。キャッシュに 2 版を置き、**版が新しいほう**を選ぶことも見る
-  # (単純な辞書順だと 1.10.0 < 1.9.0 になり、古い版を素材にしてしまう)。
+  # 未設定 + 偽 HOME で逐語実行する。installed_plugins.json に 2.x の entry (plugin 名
+  # hirai-lite-v2) を 2 版 (2.9.0 / 2.10.0。辞書順だと "2.10.0" < "2.9.0" になるので、
+  # 単純な文字列比較では古い版を選んでしまう) 置き、cache には旧 entry 名 (1.x) と
+  # 新 entry 名 (2.x) を両方置く。installed_plugins.json の 2.x 最大版 (版が新しいほう) が
+  # 勝ち、cache 側 (1.x・2.x のどちらも) には落ちないことを見る。
   pw="$(mktemp -d)"; mkdir -p "$pw/proj" "$pw/td"
-  # 0.9.0 / 1.2.0 / 1.9.0 / 1.10.0 の 4 版。版順で並べれば 1.10.0 が最新だが、辞書順では
-  # 先頭が 0.9.0・末尾が 1.9.0 になる。sort -V を落としても head/tail を取り違えても外れる。
-  local v10
-  for v10 in 0.9.0 1.2.0 1.9.0 1.10.0; do
-    mkdir -p "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite/$v10"
-    printf 'OLD\n' > "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite/$v10/VERSION"
-  done
-  printf 'NEW\n' > "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite/1.10.0/VERSION"
+  local v2a="$pw/home/.claude/plugins/inst2/2.9.0" v2b="$pw/home/.claude/plugins/inst2/2.10.0"
+  mkdir -p "$v2a" "$v2b"
+  printf 'OLD\n' > "$v2a/VERSION"
+  printf 'NEW\n' > "$v2b/VERSION"
+  mkdir -p "$pw/home/.claude/plugins"
+  cat > "$pw/home/.claude/plugins/installed_plugins.json" <<JSONEOF
+{"version":2,"plugins":{
+  "hirai-lite-v2@hirai-lite":[
+    {"scope":"project","projectPath":"/a","installPath":"$v2a","version":"2.9.0"},
+    {"scope":"project","projectPath":"/b","installPath":"$v2b","version":"2.10.0"}
+  ],
+  "hirai-lite@hirai-lite":[
+    {"scope":"project","projectPath":"/c","installPath":"$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite/1.16.0","version":"1.16.0"}
+  ]
+}}
+JSONEOF
+  mkdir -p "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite/1.16.0" \
+           "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite-v2/2.0.0"
+  printf 'OLD\n' > "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite/1.16.0/VERSION"
+  printf 'OLD\n' > "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite-v2/2.0.0/VERSION"
   out_boot="$(cd "$pw/proj" && env -u CLAUDE_PLUGIN_ROOT HOME="$pw/home" TMPDIR="$pw/td" \
               bash -c "$boot"'; cat "$P/VERSION"' 2>&1)"
-  [ "$out_boot" = NEW ] || pr_bad="$pr_bad 未設定時に最新版を解決しない:[${out_boot}]"
+  [ "$out_boot" = NEW ] \
+    || pr_bad="$pr_bad installed_plugins.json の 2.x 最大版 (辞書順では負ける 2.10.0) に解決しない:[${out_boot}]"
   out_boot="$(cd "$pw/proj" && env -u CLAUDE_PLUGIN_ROOT HOME="$pw/home" TMPDIR="$pw/td" \
               bash -c "$boot"'; printf %s "$P"' 2>&1)"
   out_fn="$(cd "$pw/proj" && env -u CLAUDE_PLUGIN_ROOT HOME="$pw/home" TMPDIR="$pw/td" \
             bash -c ". \"$ROOT/scripts/update-check.sh\"; harness_plugin_root" 2>&1)"
   [ "$out_boot" = "$out_fn" ] || pr_bad="$pr_bad 素材行と harness_plugin_root の答えが違う:[${out_boot}] [${out_fn}]"
+  # installed_plugins.json が無い (または 2.x の行が無い) ときは、2.x のキャッシュ
+  # (cache/hirai-lite/hirai-lite-v2/) の最大版へ fallback する (旧 entry 名の cache
+  # である 1.x には落ちない)。この状態を以降の「手順 0」検査にも引き継ぐ
+  # (最終的に有効な版が NEW になる)。
+  rm -f "$pw/home/.claude/plugins/installed_plugins.json"
+  mkdir -p "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite-v2/2.11.0"
+  printf 'NEW\n' > "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite-v2/2.11.0/VERSION"
+  out_boot="$(cd "$pw/proj" && env -u CLAUDE_PLUGIN_ROOT HOME="$pw/home" TMPDIR="$pw/td" \
+              bash -c "$boot"'; cat "$P/VERSION"' 2>&1)"
+  [ "$out_boot" = NEW ] \
+    || pr_bad="$pr_bad installed_plugins.json 無しで 2.x キャッシュの最大版に fallback しない:[${out_boot}]"
   # 手順 0 を逐語実行する。**控えはコピーであって移動ではない** — 元の rules が残ること、控えが
   # /tmp 直下ではなく一時領域の専用フォルダに出来ること、いつ消えるかを画面に出していること、の
   # 3 点を実挙動で見る (v1.14.0 は「退避」と表示し、利用者は自分のルールが /tmp へ移されたと
@@ -1565,7 +1606,7 @@ print(" ".join(k for k in ("commands", "agents", "hooks") if k in m))
     && pr_bad="$pr_bad 控えが /tmp 直下に置かれている (再起動で消えるうえ他の利用者と混ざる)"
   if [ -n "$pr_bad" ]; then fail 10 "commands はプラグイン本体の場所を素材行で解決する" "$pr_bad"; return; fi
 
-  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) に 5 項目 + AskUserQuestion + 記入例 ${n_ex} 件 + 悪い例/良い例 / 承認を求める ${n_site} コマンドすべてが AskUserQuestion と同じ行にポインタを持ち 5 項目を備える / 手順書の逐語実行で /init は承認の型を導入先へ置き 2 回目は上書きせず user では docs/ を作らず、/update は無いときだけ足し在れば触らず docs/ を新設しない / commands の CLAUDE_PLUGIN_ROOT 無防備使用 0 件・素材行 ${n_boot} 本が 1 種類で \$P を使う全ブロックに在り、未設定でも最新版 (4 版から) を解決し harness_plugin_root と一致 / update.md ${n_up} 行 (<=200) / init.md ${n_in} 行 (<=305) / 手順 0 の逐語実行で 控えはコピー (project 側も home 側も元が残る)・置き場は一時領域の rules-backup-*・消えるタイミングを表示 を実挙動で確認"
+  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) に 5 項目 + AskUserQuestion + 記入例 ${n_ex} 件 + 悪い例/良い例 / 承認を求める ${n_site} コマンドすべてが AskUserQuestion と同じ行にポインタを持ち 5 項目を備える / 手順書の逐語実行で /init は承認の型を導入先へ置き 2 回目は上書きせず user では docs/ を作らず、/update は無いときだけ足し在れば触らず docs/ を新設しない / commands の CLAUDE_PLUGIN_ROOT 無防備使用 0 件・素材行 ${n_boot} 本が 1 種類で \$P を使う全ブロックに在り、未設定でも installed_plugins.json の 2.x 最大版 (辞書順では負ける版で確認) → 2.x キャッシュの最大版の順で解決し harness_plugin_root と一致 / update.md ${n_up} 行 (<=200) / init.md ${n_in} 行 (<=305) / 手順 0 の逐語実行で 控えはコピー (project 側も home 側も元が残る)・置き場は一時領域の rules-backup-*・消えるタイミングを表示 を実挙動で確認"
 }
 
 case_1; case_2; case_3; case_4; case_5; case_6; case_7; case_8; case_9; case_10

@@ -14,22 +14,53 @@
 
 HARNESS_UPDATE_URL_DEFAULT="https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/v2/VERSION"
 
+# 2.x の配布系列 (marketplace のエントリ名) を仮に置いたもの。H-6 で main の
+# marketplace.json に実際に足すエントリ名が決まったら、この 1 行と commands/*.md の
+# 素材行の同じ文字列を合わせる (ズレていても壊れ方は fail-open — 解決できずに空を返す
+# だけで、旧い版を掴んだりはしない)。scripts/tasks-path.sh の HARNESS_GHP_ID と同じ
+# 仮置きの考え方 (あちらは控えの置き場、こちらは本体の置き場)。
+HARNESS_V2_ENTRY_NAME="hirai-lite-v2"
+
 # --- プラグイン本体の置き場所 --------------------------------------------------
 # $CLAUDE_PLUGIN_ROOT は**空で渡ることがある**。渡らない実行経路があるため、これを直に
 # パスの前に置いた行は「/VERSION」を読みに行って失敗する (v1.14.0 の /update が実環境で
-# 動かなかった原因)。空・不在なら 3 段で探す — 環境変数 → キャッシュ (版が最新のもの) →
-# マーケットプレイス。commands/*.md 冒頭の「素材行」と同じ 3 段で、
-# tests/smoke.sh case 10 (f) が「素材行の結果」と「この関数の結果」の一致を検査する。
+# 動かなかった原因)。空・不在なら 3 段で探す — 環境変数 → installed_plugins.json の
+# 2.x の行のうち版が最新の installPath → キャッシュ (2.x の entry 名で、版が最新のもの)。
+# 4 段目 (marketplaces/hirai-lite = main = 1.x) には落とさない — 1.x の案件が誤って
+# 2.x のスクリプトを読む向きの事故を、その逆 (2.x の案件が 1.x の置き場へ落ちる)
+# でも起こさないため。commands/*.md 冒頭の「素材行」と同じ 3 段で、tests/smoke.sh
+# case 10 (f) が「素材行の結果」と「この関数の結果」の一致を検査する。
 # シェルから使えるのはこの関数だが、**コマンド手順書は素材行のほうを使う** —
 # 関数を読むには先にこのファイルの場所が要る (それを解決するのが素材行の仕事)。
+#
+# installed_plugins.json は projectPath を見ない (どの checkout から呼ばれても同じ実体を
+# 指す最大版に揃える — 一時的な worktree のような checkout でも解決が外れないようにするため)。
+harness_plugin_root_from_installed() (
+  set -uo pipefail
+  local entry="${1:?}" f="$HOME/.claude/plugins/installed_plugins.json" p
+  [ -f "$f" ] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  p="$(python3 -c 'import json,re,sys
+d = json.load(open(sys.argv[1]))
+rows = [x for k, v in d.get("plugins", {}).items() if k.split("@", 1)[0] == sys.argv[2]
+        for x in v if x.get("installPath")]
+rows.sort(key=lambda x: [int(n) if n.isdigit() else 0
+                          for n in re.split(r"[.]", str(x.get("version", "0")))])
+print(rows[-1]["installPath"] if rows else "")' "$f" "$entry" 2>/dev/null)" || return 1
+  [ -n "$p" ] || return 1
+  printf '%s' "$p"
+)
+
 harness_plugin_root() (
   set -uo pipefail
   local p="${1:-${CLAUDE_PLUGIN_ROOT:-}}"
   if [ ! -d "$p" ]; then
-    p="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"
+    p="$(harness_plugin_root_from_installed "$HARNESS_V2_ENTRY_NAME" 2>/dev/null)"
+  fi
+  if [ ! -d "$p" ]; then
+    p="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/"$HARNESS_V2_ENTRY_NAME"/*/ 2>/dev/null | sort -V | tail -1)"
     p="${p%/}"
   fi
-  [ -d "$p" ] || p="$HOME/.claude/plugins/marketplaces/hirai-lite"
   printf '%s' "$p"
 )
 
