@@ -206,7 +206,7 @@ Claude Code で次の 2 行を順に実行します。
 いますぐ確かめたいときは、`/hirai-lite:update` と入力して「更新があるか調べて」と伝えてください。手で確かめるなら次の 2 つを見比べます（値が違えば更新できます）。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/main/VERSION   # 公開されている最新版
+curl -fsSL https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/v1/VERSION     # 公開されている最新版
 claude plugin list                                                                            # いま入っている版
 ```
 

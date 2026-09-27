@@ -185,7 +185,7 @@ SessionStart で `[harness] 更新あり vX → vY (/update で適用)` が出�
 
 ```bash
 P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
-curl -fsSL https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/main/VERSION   # 公開されている最新版
+curl -fsSL https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/v1/VERSION     # 公開されている最新版
 cat "$P/VERSION"                                                                              # いま入っている版
 ```
 
