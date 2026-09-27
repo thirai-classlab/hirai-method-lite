@@ -17,6 +17,10 @@
 # **この scripts は通信しない。** 画面下部は何度も描き直されるため、更新の有無は
 # SessionStart 側 (scripts/update-check.sh の harness_update_flag_sync) が置いたフラグ 1 ファイルの
 # 有無を見るだけにする。取得も版の比較もここでは行わない。
+# フラグのパスは CLAUDE_PROJECT_DIR の cksum で鍵を作る (F80)。update-check.sh の
+# harness_update_flag_file と同じ式 — この scripts はプラグインの置き場所を知れず
+# update-check.sh を source できない (導入先に複製されるのは statusline.sh 自身だけで、
+# update-check.sh は複製の対象外) ため、鍵の式だけをここにも書く (2 か所とも変えること)。
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || here="."
@@ -108,8 +112,10 @@ fi
 #   2. context 高 … 使用率が HC_CONTEXT_THRESHOLD 以上
 notice=""
 if [ "${HC_STATUSLINE_NOTICE:-on}" != "off" ]; then
+  update_flag_key="$(printf '%s' "$root" | cksum 2>/dev/null | awk '{print $1}')"
+  [ -n "$update_flag_key" ] || update_flag_key="default"
   if [ "${HARNESS_UPDATE_CHECK:-on}" != "off" ] \
-    && [ -s "${TMPDIR:-/tmp}/claude-harness-lite/update-available" ]; then
+    && [ -s "${TMPDIR:-/tmp}/claude-harness-lite/update-available-${update_flag_key}" ]; then
     notice="更新あり → /hirai-lite:update"
   elif command -v harness_ctx_over_threshold >/dev/null 2>&1 \
     && harness_ctx_over_threshold "${ctx_pct%%.*}"; then

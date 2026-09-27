@@ -61,7 +61,9 @@ if [ -f "$plugin_root/scripts/update-check.sh" ]; then
     harness_update_fetch_async "$plugin_root" >/dev/null 2>&1 || true
     update_line="$(harness_update_notice "$plugin_root" 2>/dev/null || true)"
     # 画面下部のお知らせ枠へ結果を渡す (statusline はプラグインのパスを知れないため)。
-    harness_update_flag_sync "$plugin_root" >/dev/null 2>&1 || true
+    # フラグの鍵はプロジェクト側のパス (root) にする (F80。plugin_root では 1.x/2.x や
+    # 別案件どうしの「更新あり」表示が入れ替わる)。
+    harness_update_flag_sync "$plugin_root" "$root" >/dev/null 2>&1 || true
   fi
   # --- 更新後の入れ替え: **既定 off**。/config で on にした人だけ、プラグインが
   # 新しくなった回に限り、複製された 3 ファイル (statusline.sh / tasks-path.sh /

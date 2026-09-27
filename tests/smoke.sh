@@ -58,6 +58,18 @@ has_paths_key() {
 # 画面下部は 2 行構成。1 行目 = いまの状態 / 2 行目 = 次にできる操作 (設定リンクは常時表示)。
 SL_LINK='設定を確認・変更 → /hirai-lite:config'
 
+# update_flag_path <tmpdir> <project_root> -> F80 のフラグのパスを stdout。
+# scripts/update-check.sh の harness_update_flag_file と同じ式 (cksum の鍵) を、
+# source せずに再現する — case 1/8 はプラグインを source しない生の TMPDIR 操作で
+# フラグを仕込む/読むので、鍵の式がここと 2 か所 (update-check.sh・statusline.sh) の
+# 計 3 か所でずれると、この smoke 自体が壊れた式を検出できずに緑になる。
+update_flag_path() {
+  local td="$1" root="$2" key
+  key="$(printf '%s' "$root" | cksum 2>/dev/null | awk '{print $1}')"
+  [ -n "$key" ] || key="default"
+  printf '%s/claude-harness-lite/update-available-%s' "$td" "$key"
+}
+
 # sl_shape <画面下部の出力> -> 2 行かつ 2 行目が設定リンクで始まれば rc 0、違えば理由を stdout
 sl_shape() {
   local out="$1" n l2
@@ -117,14 +129,16 @@ case_1() {
     rm -rf "$std"; fail 1 "色を落としても 2 行 + 設定リンク" "exit=${rc} ${why}"; return
   fi
   # 空の控え = 更新なし扱い (中身が消し損ねの空ファイルでも嘘の通知を出さない)
-  mkdir -p "$std/claude-harness-lite" && : > "$std/claude-harness-lite/update-available"
+  # フラグの鍵は CLAUDE_PROJECT_DIR ($std) の cksum (F80)。
+  local flag1; flag1="$(update_flag_path "$std" "$std")"
+  mkdir -p "$(dirname "$flag1")" && : > "$flag1"
   sout="$(printf '{"context_window":{"used_percentage":12}}' \
         | TMPDIR="$std" NO_COLOR=1 CLAUDE_PROJECT_DIR="$std" HARNESS_UPDATE_CHECK=on bash "$sl" 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ] || printf '%s' "$sout" | grep -q '更新あり'; then
     rm -rf "$std"; fail 1 "空の控えでは更新を知らせない" "exit=${rc}: $sout"; return
   fi
   # 壊れた控え + 壊れた JSON の同時発生でも 2 行 + exit 0
-  printf '\001garbage\002' > "$std/claude-harness-lite/update-available"
+  printf '\001garbage\002' > "$flag1"
   sout="$(printf 'not json' | TMPDIR="$std" NO_COLOR=1 CLAUDE_PROJECT_DIR="$std" bash "$sl" 2>&1)"; rc=$?
   why="$(sl_shape "$sout")" || true
   rm -rf "$std"
@@ -934,7 +948,7 @@ EOF
 
   # 画面下部 2 行目のお知らせ。SessionStart が置いた控えを statusline が読むだけで、通信は起きない。
   # 上から順に 1 つだけ出し (1 更新あり > 2 context 高 > 何も出さない)、設定リンクは常時残る。
-  local flag="$td/claude-harness-lite/update-available" why
+  local flag why; flag="$(update_flag_path "$td" "$tmp")"
   local up='更新あり → /hirai-lite:update' ctxmsg='きりの良いところで /hirai-lite:state save'
   local j_low='{"model":{"display_name":"X"},"context_window":{"used_percentage":12}}'
   local j_high='{"model":{"display_name":"X"},"context_window":{"used_percentage":85}}'
@@ -988,12 +1002,35 @@ EOF
     break
   done
 
+  # F80 の回帰: 同じ TMPDIR (機械 1 台) を共有する 2 つの案件で、片方にだけ更新ありの控えを
+  # 作っても、もう片方の画面下には出ない (鍵がプロジェクトのパスで分かれているため)。
+  # v1.14.2/v1.16.0 のような版違いの併用で「無関係な案件の更新あり」が出た実害の再現形。
+  if [ "$failed" -eq 0 ]; then
+    local projB flagA flagB
+    projB="$(mktemp -d)"
+    printf '%s\n' "0.2.0" > "$tmp/VERSION"; printf '%s' "0.2.0" > "$dir/latest"; date +%s > "$dir/stamp"
+    run_session_start "$tmp" "$td" "on" >/dev/null   # $tmp は最新版 = 控えは作らない
+    flagA="$(update_flag_path "$td" "$tmp")"
+    flagB="$(update_flag_path "$td" "$projB")"
+    if [ "$flagA" = "$flagB" ]; then
+      fail 8 "F80: 案件ごとにフラグの鍵が分かれる" "$tmp と $projB が同じパスになった: $flagA"
+      failed=1
+    else
+      mkdir -p "$(dirname "$flagB")" && : > "$flagB"   # 別案件 (projB) だけに更新ありを装う
+      if printf '%s\n' "$(run_statusline "$tmp" "$td" "$j_low")" | grep -q '更新あり'; then
+        fail 8 "F80: 他案件の控えを自分の更新ありと読まない" "$tmp の画面下に $projB 分の通知が出た"
+        failed=1
+      fi
+    fi
+    rm -rf "$projB"
+  fi
+
   if [ -e "$tmp/curl-called" ]; then
     fail 8 "期限内は通信しない (statusline も含む)" "curl が呼ばれた"; failed=1
   fi
   rm -rf "$tmp" "$td"
   [ "$failed" -eq 0 ] || return
-  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 と 1.9.0 < 1.10.0 を数値比較 / 画面下部 2 行目は設定リンクを常時出しつつ お知らせは 更新あり > context 高 > 無表示 の順に 1 つだけ (off で停止・閾値可変・通信なし) / 既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% でお知らせを出す"
+  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 と 1.9.0 < 1.10.0 を数値比較 / 画面下部 2 行目は設定リンクを常時出しつつ お知らせは 更新あり > context 高 > 無表示 の順に 1 つだけ (off で停止・閾値可変・通信なし) / 既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% でお知らせを出す / F80: フラグの鍵は案件 (CLAUDE_PROJECT_DIR) ごとに分かれ、他案件の更新ありは漏れない"
 }
 
 # ---------- case 9: マニフェストが妥当な JSON で、版が VERSION と一致する ----------

@@ -141,24 +141,47 @@ harness_update_notice() (
 # statusline はプラグインの置き場所を知れない (settings.json では ${CLAUDE_PLUGIN_ROOT} が
 # 展開されないため、導入先へ複製された .claude/statusline.sh として動く)。VERSION もキャッシュ dir も
 # プラグインのパス起点なので、版の比較はここ (SessionStart 側) で済ませ、結果だけを
-# パスに依存しない固定の 1 ファイルへ書き写す。statusline はその 1 ファイルの有無を見るだけで、
-# 通信もバージョン比較もしない。
+# 導入先ごとに分けた 1 ファイルへ書き写す。statusline はその 1 ファイルの有無を見るだけで、
+# 通信もバージョン比較もしない (F80)。
+#
+# **鍵はプロジェクトのパス (CLAUDE_PROJECT_DIR) の cksum にする。** プラグインのパスでは
+# 分けられない — statusline はプラグインの置き場所を知れないため、書く側 (ここ) と読む側
+# (statusline.sh) の双方が資格として持っている値でなければ、同じ鍵を導けない。プロジェクトの
+# パスなら両方が知っている (session-start.sh も statusline.sh も CLAUDE_PROJECT_DIR を読む)。
+# これが無いと、1.x と 2.x を併用する機械で、無関係な案件どうしの「更新あり」表示が
+# 入れ替わる (v1.14.2 の案件を開くと v1.16.0 の案件の画面下にも出る、F80 の実害)。
+HARNESS_UPDATE_FLAG_DIR_NAME="claude-harness-lite"
 
-# harness_update_flag_file -> フラグのパスを stdout (作成はしない)
-harness_update_flag_file() (
+# harness_update_flag_key [project_root] -> 鍵 (cksum) を stdout。常に rc 0 (空にはしない)。
+harness_update_flag_key() (
   set -uo pipefail
-  printf '%s' "${TMPDIR:-/tmp}/claude-harness-lite/update-available"
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" key
+  key="$(printf '%s' "$root" | cksum 2>/dev/null | awk '{print $1}')"
+  [ -n "$key" ] || key="default"
+  printf '%s' "$key"
 )
 
-# harness_update_flag_sync [root] -> 新版があれば "<現版> <新版>" を書き、無ければ消す。常に rc 0。
-# HARNESS_UPDATE_CHECK=off のときも消す (止めた指定が古いフラグで無効化されないようにする)。
+# harness_update_flag_file [project_root] -> フラグのパスを stdout (作成はしない)
+harness_update_flag_file() (
+  set -uo pipefail
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}"
+  printf '%s/%s/update-available-%s' "${TMPDIR:-/tmp}" "$HARNESS_UPDATE_FLAG_DIR_NAME" \
+    "$(harness_update_flag_key "$root")"
+)
+
+# harness_update_flag_sync <plugin_root> [project_root] -> 新版があれば "<現版> <新版>" を書き、
+# 無ければ消す。常に rc 0。HARNESS_UPDATE_CHECK=off のときも消す (止めた指定が古いフラグで
+# 無効化されないようにする)。plugin_root は版の比較に使い、project_root はフラグの鍵に使う
+# (両者は別物 — 1 台の機械で複数案件を開くと project_root は毎回変わるが、plugin_root は
+# 同じキャッシュを指すことがある)。
 harness_update_flag_sync() (
   set -uo pipefail
-  local root="${1:-${CLAUDE_PLUGIN_ROOT:-$PWD}}" flag cur new
-  flag="$(harness_update_flag_file)"
+  local plugin_root="${1:-${CLAUDE_PLUGIN_ROOT:-$PWD}}" \
+        project_root="${2:-${CLAUDE_PROJECT_DIR:-$PWD}}" flag cur new
+  flag="$(harness_update_flag_file "$project_root")"
   if harness_update_enabled \
-    && cur="$(harness_local_version "$root")" \
-    && new="$(harness_cached_version "$root")" \
+    && cur="$(harness_local_version "$plugin_root")" \
+    && new="$(harness_cached_version "$plugin_root")" \
     && harness_semver_gt "$new" "$cur"; then
     mkdir -p "${flag%/*}" 2>/dev/null || return 0
     printf '%s %s' "$cur" "$new" > "$flag.tmp" 2>/dev/null \
