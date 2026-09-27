@@ -304,12 +304,14 @@ echo "\$*" >> "$gwlog"
 case "\$*" in
   *'ProjectV2FieldCommon'*) printf 'PVT_test\t7\n' ;;
   *'"種別:feature status:承認待ち"'*) printf '3\t1\t2\t5\n' ;;
-  *'依存待ち'*) printf '4\n' ;;
   *) exit 1 ;;
 esac
 EOF
   chmod +x "$gwbin/gh"
   local bad5=""
+  # 0. plugin_root ($tmp、更新検知の作業 dir を再利用) と project_root ($grepo) を
+  #    意図的に別のパスにする — 両方を同じ値にすると、控えの鍵をどちらで作っているかの
+  #    退行 (project_root ではなく plugin_root で分けてしまう) を検出できない。
   # 1. background の取り直し (harness_ghp_refresh) は偽の gh を叩いて控えを作る
   #    (これは session-start/statusline の役目ではなく、道具側の役目を模した準備)。
   HOME="$gwhome" PATH="$gwbin:$PATH" bash -c \
@@ -319,24 +321,44 @@ EOF
   #    それは次回以降のための背景処理であって、この回の表示はその完了を待たない —
   #    「時機は会話の最初」どおり毎回投げるのが仕様なので、gh が呼ばれる
   #    こと自体は禁止しない。禁止するのは statusline 側の通信だけ、のあと 3 で見る)。
-  #    [harness] やること の行が Project: 形に変わり、行数は 5 行以内のままであること。
-  local gout gout_lines
+  #    [harness] やること の行が Project: あなたの番 形に変わり、行数は 5 行以内のままであること。
+  #    HH:MM はローカル時刻なので、実行の前後 2 通りのどちらかに一致すれば良いとする
+  #    (分の境界をまたいだ flake を避ける)。
+  local gout gout_lines hm_before hm_after ghp_want_pre ghp_want_post
+  hm_before="$(date +%H:%M)"
   gout="$(HOME="$gwhome" PATH="$gwbin:$PATH" TMPDIR="$gw" CLAUDE_PLUGIN_ROOT="$tmp" \
         CLAUDE_PROJECT_DIR="$grepo" bash "$HOOKS/session-start.sh" 2>&1)"
+  hm_after="$(date +%H:%M)"
   gout_lines="$(printf '%s\n' "$gout" | grep -c . || true)"
-  printf '%s' "$gout" | grep -qF '[harness] Project: 6（承認 3・裁定 1・取り込み 2）／進行中 5／依存が解けた 4 件' \
-    || bad5="$bad5 session-start の やること が GHP の形に変わっていない: $gout"
+  ghp_want_pre="[harness] Project: あなたの番 6（承認 3・裁定 1・取り込み 2）／進行中 5／待ち解け —（${hm_before} 時点）"
+  ghp_want_post="[harness] Project: あなたの番 6（承認 3・裁定 1・取り込み 2）／進行中 5／待ち解け —（${hm_after} 時点）"
+  case "$gout" in
+    *"$ghp_want_pre"*|*"$ghp_want_post"*) ;;
+    *) bad5="$bad5 session-start の やること が GHP の形に変わっていない: $gout" ;;
+  esac
   [ "${gout_lines:-0}" -le 5 ] || bad5="$bad5 session-start が 5 行を超えた: ${gout_lines} 行"
-  # 3. statusline.sh も同じ控えを読み、コンパクトな形を やること の値として出す。gh は
-  #    呼ばれないこと (通信しない、という既定方針を GHP でも保つ)。
+  # 2b. 直後にもう一度 background で取り直しても、見分け (24h 間隔) も件数 (2 分間隔) も
+  #     間隔内なので gh を 1 回も呼ばない (SessionStart のたびに叩かない)。
   : > "$gwlog"
-  local sout5
+  HOME="$gwhome" PATH="$gwbin:$PATH" bash -c \
+    ". \"$ROOT/scripts/tasks-path.sh\"; harness_ghp_refresh background \"$grepo\"" 2>/dev/null
+  [ -s "$gwlog" ] && bad5="$bad5 間隔内の background 取り直しが gh を呼んだ: $(cat "$gwlog")"
+  # 3. statusline.sh も同じ控えを読み、コンパクトな形を あなたの番 の値として出す。gh は
+  #    呼ばれないこと (通信しない、という既定方針を GHP でも保つ)。見出し語も
+  #    「あなたの番」に替わる (「やること 6（承認…」だと Project 番号に見えるため)。
+  : > "$gwlog"
+  local sout5 sl_want_pre sl_want_post
   sout5="$(printf '{"context_window":{"used_percentage":12}}' \
         | HOME="$gwhome" PATH="$gwbin:$PATH" TMPDIR="$gw" NO_COLOR=1 CLAUDE_PROJECT_DIR="$grepo" \
           bash "$ROOT/scripts/statusline.sh" 2>&1)"
   [ -s "$gwlog" ] && bad5="$bad5 statusline が gh を呼んだ: $(cat "$gwlog")"
-  printf '%s' "$sout5" | grep -qF 'やること 6（承認 3・裁定 1・取り込み 2）／進行中 5／依存が解けた 4 件' \
-    || bad5="$bad5 statusline の やること が GHP の形に変わっていない: $sout5"
+  sl_want_pre="あなたの番 6（承認 3・裁定 1・取り込み 2）／進行中 5／待ち解け —（${hm_before} 時点）"
+  sl_want_post="あなたの番 6（承認 3・裁定 1・取り込み 2）／進行中 5／待ち解け —（${hm_after} 時点）"
+  case "$sout5" in
+    *"$sl_want_pre"*|*"$sl_want_post"*) ;;
+    *) bad5="$bad5 statusline の やること が GHP の形に変わっていない: $sout5" ;;
+  esac
+  printf '%s' "$sout5" | grep -q 'やること' && bad5="$bad5 GHP の形なのに旧見出し やること が残っている: $sout5"
   why="$(sl_shape "$sout5")" || bad5="$bad5 GHP の形でも 2 行 + 設定リンク: $why"
   # 4. env を unset しても、書く側 (harness_ghp_refresh) と読む側 (harness_ghp_line) が
   #    同じ控えを指す (定数の置き場 + git remote だけで決まるため)。
@@ -345,6 +367,58 @@ EOF
   gpath2="$(env -i HOME="$gwhome" PATH="$PATH" bash -c \
     ". \"$ROOT/scripts/tasks-path.sh\"; harness_ghp_cache_file \"$grepo\"")"
   [ "$gpath1" = "$gpath2" ] || bad5="$bad5 env unset で控えのパスが変わった: $gpath1 != $gpath2"
+  # 4a. gh が失敗する (オフライン・枠切れ・scope 不足など) 回では、前回の控えを変えない。
+  #     「成功して 0 件」と「失敗」を混同すると、実は健全な GHP が一時的に台帳の形へ
+  #     落ちてしまう (見分けの間隔 24h が過ぎるまで戻らない)。probed_epoch を古くして
+  #     もう一度見分けさせ、gh を毎回失敗させても、控えの中身 (件数) が変わらないことを見る。
+  local gcache_before gcache_after
+  gcache_before="$(cat "$(HOME="$gwhome" bash -c ". \"$ROOT/scripts/tasks-path.sh\"; harness_ghp_cache_file \"$grepo\"")")"
+  cat > "$gwbin/gh" <<'EOF3'
+#!/usr/bin/env bash
+exit 1
+EOF3
+  chmod +x "$gwbin/gh"
+  HOME="$gwhome" PATH="$gwbin:$PATH" HARNESS_GHP_PROBE_INTERVAL=0 bash -c \
+    ". \"$ROOT/scripts/tasks-path.sh\"; harness_ghp_refresh background \"$grepo\"" 2>/dev/null
+  gcache_after="$(cat "$(HOME="$gwhome" bash -c ". \"$ROOT/scripts/tasks-path.sh\"; harness_ghp_cache_file \"$grepo\"")")"
+  [ "$gcache_before" = "$gcache_after" ] \
+    || bad5="$bad5 gh が失敗しても控えを変えない: 前=[$gcache_before] 後=[$gcache_after]"
+  # 4b. remote の URL の形が違っても (ssh:// / user@ / 末尾スラッシュ)、同じ owner/repo に
+  #     正規化される (低危険度の指摘: git@host: 形だけでなく ssh://・user@・末尾 / も見る)。
+  local gslug1 gslug2 gslug3 gslug_want="acme/widgets"
+  gslug1="$(cd "$gw" && mkdir -p r1 && git -C r1 init -q 2>/dev/null \
+    && git -C r1 remote add origin 'ssh://git@github.com/acme/widgets.git' 2>/dev/null \
+    && bash -c ". \"$ROOT/scripts/tasks-path.sh\"; harness_ghp_repo_slug \"$gw/r1\"")"
+  gslug2="$(cd "$gw" && mkdir -p r2 && git -C r2 init -q 2>/dev/null \
+    && git -C r2 remote add origin 'https://user@github.com/acme/widgets/' 2>/dev/null \
+    && bash -c ". \"$ROOT/scripts/tasks-path.sh\"; harness_ghp_repo_slug \"$gw/r2\"")"
+  gslug3="$(cd "$gw" && mkdir -p r3 && git -C r3 init -q 2>/dev/null \
+    && git -C r3 remote add origin 'git@gitlab.com:acme/widgets.git' 2>/dev/null \
+    && bash -c ". \"$ROOT/scripts/tasks-path.sh\"; harness_ghp_repo_slug \"$gw/r3\"" 2>/dev/null)"; local gslug3_rc=$?
+  [ "$gslug1" = "$gslug_want" ] || bad5="$bad5 ssh:// 形の slug が違う: ${gslug1:-空}"
+  [ "$gslug2" = "$gslug_want" ] || bad5="$bad5 user@ + 末尾スラッシュの slug が違う: ${gslug2:-空}"
+  { [ "$gslug3_rc" -ne 0 ] && [ -z "$gslug3" ]; } || bad5="$bad5 github.com 以外の remote が slug を返した: ${gslug3:-空}"
+  # 4c. 紐づく Project が 2 件以上あるときは、どれを使うか決め打ちしない。
+  #     GHP としては扱わず、台帳の形にフォールバックする。
+  local grepo3 gwbin2 gout3
+  grepo3="$gw/repo-amb"; mkdir -p "$grepo3"; gwbin2="$gw/bin-amb"; mkdir -p "$gwbin2"
+  git -C "$grepo3" init -q 2>/dev/null
+  git -C "$grepo3" remote add origin https://github.com/acme/ambiguous.git 2>/dev/null
+  cat > "$gwbin2/gh" <<'EOF2'
+#!/usr/bin/env bash
+case "$*" in
+  *'ProjectV2FieldCommon'*) printf 'PVT_a\t1\nPVT_b\t2\n' ;;
+  *'"種別:feature status:承認待ち"'*) printf '9\t9\t9\t9\n' ;;
+  *) exit 1 ;;
+esac
+EOF2
+  chmod +x "$gwbin2/gh"
+  HOME="$gw/home-amb" PATH="$gwbin2:$PATH" bash -c \
+    ". \"$ROOT/scripts/tasks-path.sh\"; harness_ghp_refresh background \"$grepo3\"" 2>/dev/null
+  gout3="$(HOME="$gw/home-amb" PATH="/usr/bin:/bin" CLAUDE_PROJECT_DIR="$grepo3" \
+        bash "$HOOKS/session-start.sh" 2>&1)"
+  printf '%s' "$gout3" | grep -qF 'Project: あなたの番' \
+    && bad5="$bad5 Project が 2 件以上でも GHP を名乗った: $gout3"
   # 5. gh が無いリポ (git remote は在るが GHP の控えは無い) では、台帳の形にフォールバック
   #    し、2 行 + exit 0 のまま (フォールバックの fail-open)。
   local grepo2 gout2 gout2_lines
@@ -361,7 +435,7 @@ EOF
   rm -rf "$gw"
   if [ -n "$bad5" ]; then fail 1 "やること は台帳の形と GHP の形の 2 つで出る" "$bad5"; return; fi
 
-  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く / /update 手順 2-2 の移行は中身を保ち同名は上書きせず両方残し、移行後は冒頭と画面下部が docs/ の台帳を読む / /init 第 2 段階は 事実収集 → 範囲提示 → grilling 呼び出し の順で、事実収集の bash は中身ありでも空でも exit 0、grilling へ渡す指示に範囲の制約 (調達・法務へ踏み込まない / 不要な質問は落とす / 事実は自分で調べる) が入っている / GHP の形: 控えがあれば やること が Project: N（承認・裁定・取り込み）／進行中／依存が解けた の形に変わり (statusline は gh を呼ばず控えを読むだけ。session-start は次回以降のため背景処理を毎回投げるが、この回の表示はその完了を待たない)、控えが無ければ台帳の形へ fail-open し、env を unset しても書く側と読む側が同じ控えを指す"
+  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く / /update 手順 2-2 の移行は中身を保ち同名は上書きせず両方残し、移行後は冒頭と画面下部が docs/ の台帳を読む / /init 第 2 段階は 事実収集 → 範囲提示 → grilling 呼び出し の順で、事実収集の bash は中身ありでも空でも exit 0、grilling へ渡す指示に範囲の制約 (調達・法務へ踏み込まない / 不要な質問は落とす / 事実は自分で調べる) が入っている / GHP の形: 控えがあれば あなたの番 が N（承認・裁定・取り込み）／進行中／待ち解け の形に変わり (statusline は gh を呼ばず控えを読むだけ。session-start は次回以降のため背景処理を毎回投げるが、この回の表示はその完了を待たない。間隔内の 2 回目は gh を呼ばない)、控えが無ければ台帳の形へ fail-open し、env を unset しても書く側と読む側が同じ控えを指し、remote の URL は ssh://・user@・末尾スラッシュも同じ owner/repo に正規化され、紐づく Project が 2 件以上なら GHP を名乗らない"
 }
 
 # ---------- case 2: UserPromptSubmit の 2 本は、出してよい時だけ出す ----------
@@ -1097,12 +1171,85 @@ EOF
     rm -rf "$projB"
   fi
 
+  # plugin_root と project_root を実際に別のパスにして session-start.sh を走らせる回帰。
+  # run_session_start は両方を同じ $tmp に揃えるため、この 1 回だけは手で分ける —
+  # 揃えたままだと「project_root で鍵を作る」と「plugin_root で鍵を作る」のどちらの実装でも
+  # 同じ結果になり、退行を検出できない。
+  if [ "$failed" -eq 0 ]; then
+    local plugD projD tdD flagD_want flagD_wrong plugDdir
+    plugD="$(mktemp -d)"; projD="$(mktemp -d)"; tdD="$(mktemp -d)"
+    mkdir -p "$plugD/hooks" "$plugD/scripts"
+    cp "$HOOKS/session-start.sh" "$plugD/hooks/" 2>/dev/null
+    cp "$ROOT/scripts/update-check.sh" "$ROOT/scripts/tasks-path.sh" "$plugD/scripts/" 2>/dev/null
+    printf '0.1.0\n' > "$plugD/VERSION"
+    plugDdir="$(TMPDIR="$tdD" bash -c ". \"$ROOT/scripts/update-check.sh\"; harness_update_cache_dir \"$plugD\"")"
+    mkdir -p "$plugDdir"
+    printf '0.2.0' > "$plugDdir/latest"
+    date +%s > "$plugDdir/stamp"
+    PATH="$tmp/bin:$PATH" TMPDIR="$tdD" CLAUDE_PLUGIN_ROOT="$plugD" CLAUDE_PROJECT_DIR="$projD" \
+      HARNESS_UPDATE_CHECK=on HARNESS_UPDATE_URL="http://127.0.0.1:9/VERSION" \
+      bash "$plugD/hooks/session-start.sh" >/dev/null 2>&1
+    flagD_want="$(update_flag_path "$tdD" "$projD")"   # 期待: project_root で鍵を作る
+    flagD_wrong="$(update_flag_path "$tdD" "$plugD")"  # 退行: plugin_root で鍵を作る
+    if [ ! -s "$flagD_want" ]; then
+      fail 8 "更新ありの控えは project_root で鍵を作る (plugin_root != project_root)" \
+        "plugin_root=${plugD} project_root=${projD} で ${flagD_want} が無い"; failed=1
+    elif [ "$flagD_want" != "$flagD_wrong" ] && [ -s "$flagD_wrong" ]; then
+      fail 8 "更新ありの控えは project_root だけに置かれる" \
+        "plugin_root 側の鍵 (${flagD_wrong}) にも控えができた"; failed=1
+    fi
+    rm -rf "$plugD" "$projD" "$tdD"
+  fi
+
   if [ -e "$tmp/curl-called" ]; then
     fail 8 "期限内は通信しない (statusline も含む)" "curl が呼ばれた"; failed=1
   fi
   rm -rf "$tmp" "$td"
   [ "$failed" -eq 0 ] || return
-  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 と 1.9.0 < 1.10.0 を数値比較 / 画面下部 2 行目は設定リンクを常時出しつつ お知らせは 更新あり > context 高 > 無表示 の順に 1 つだけ (off で停止・閾値可変・通信なし) / 既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% でお知らせを出す / フラグの鍵は案件 (CLAUDE_PROJECT_DIR) ごとに分かれ、他案件の更新ありは漏れない"
+
+  # GHP の形と、更新あり・入れ替えの通知が同時に出る最悪の場合でも 5 行以内。
+  # case 1 は GHP 単体、case 7/8 は更新検知単体しか見ていないので、ここで組み合わせる。
+  local wtmp wtd wbin wlog wout wlines badw=""
+  wtmp="$(mktemp -d)"; wtd="$(mktemp -d)"; wbin="$wtmp/bin"; wlog="$wtmp/gh.log"
+  mkdir -p "$wtmp/hooks" "$wtmp/scripts" "$wbin"
+  cp "$HOOKS/session-start.sh" "$wtmp/hooks/" 2>/dev/null
+  cp "$ROOT/scripts/update-check.sh" "$ROOT/scripts/tasks-path.sh" "$wtmp/scripts/" 2>/dev/null
+  git -C "$wtmp" init -q 2>/dev/null
+  git -C "$wtmp" remote add origin https://github.com/acme/worst-case.git 2>/dev/null
+  printf '0.1.0\n' > "$wtmp/VERSION"
+  cat > "$wbin/gh" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$wlog"
+case "\$*" in
+  *'ProjectV2FieldCommon'*) printf 'PVT_w\t1\n' ;;
+  *'"種別:feature status:承認待ち"'*) printf '1\t1\t1\t1\n' ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "$wbin/gh"
+  HOME="$wtmp/home" PATH="$wbin:$PATH" bash -c \
+    ". \"$wtmp/scripts/tasks-path.sh\"; harness_ghp_refresh background \"$wtmp\"" 2>/dev/null
+  local wudir; wudir="$(TMPDIR="$wtd" bash -c ". \"$wtmp/scripts/update-check.sh\"; harness_update_cache_dir \"$wtmp\"")"
+  mkdir -p "$wudir"
+  printf '0.2.0' > "$wudir/latest"
+  date +%s > "$wudir/stamp"
+  # 入れ替え (sync) の行も一緒に出るようにする (auto_sync: on + 導入先の複製が旧いまま) —
+  # これで 3 つの常時行 + 更新あり + 入れ替え = 条件つきの行が全部出る真の最悪 (5 行) になる。
+  mkdir -p "$wtmp/.claude"
+  printf 'mode: normal\nauto_sync: on\n' > "$wtmp/.claude/mode.yml"
+  printf '#!/usr/bin/env bash\necho OLD\n' > "$wtmp/.claude/statusline.sh"
+  printf '# OLD\n' > "$wtmp/.claude/tasks-path.sh"
+  wout="$(HOME="$wtmp/home" PATH="$wbin:$PATH" TMPDIR="$wtd" CLAUDE_PLUGIN_ROOT="$wtmp" \
+        CLAUDE_PROJECT_DIR="$wtmp" HARNESS_UPDATE_CHECK=on bash "$wtmp/hooks/session-start.sh" 2>&1)"
+  wlines="$(printf '%s\n' "$wout" | grep -c . || true)"
+  printf '%s' "$wout" | grep -q '入れ替えました' || badw="$badw 入れ替えの行が出ていない (真の最悪を作れていない): $wout"
+  [ "${wlines:-0}" -le 5 ] || badw="$badw GHP + 更新あり + 入れ替え を同時に出すと 5 行を超えた: ${wlines} 行 -- $wout"
+  printf '%s' "$wout" | grep -qF 'Project: あなたの番' || badw="$badw GHP の行が出ていない: $wout"
+  printf '%s' "$wout" | grep -q '更新あり' || badw="$badw 更新ありの行が出ていない: $wout"
+  rm -rf "$wtmp" "$wtd"
+  if [ -n "$badw" ]; then fail 8 "GHP と更新あり・入れ替えの行が全部出ても 5 行以内" "$badw"; return; fi
+
+  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 と 1.9.0 < 1.10.0 を数値比較 / 画面下部 2 行目は設定リンクを常時出しつつ お知らせは 更新あり > context 高 > 無表示 の順に 1 つだけ (off で停止・閾値可変・通信なし) / 既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% でお知らせを出す / フラグの鍵は案件 (CLAUDE_PROJECT_DIR) ごとに分かれ、plugin_root と project_root が別のパスでも project_root 側だけに置かれ、他案件の更新ありは漏れない / GHP の行と更新あり・入れ替えの行が同時に出ても 5 行以内"
 }
 
 # ---------- case 9: マニフェストが妥当な JSON で、版が VERSION と一致する ----------
@@ -1127,7 +1274,25 @@ case_9() {
   if [ -n "$mver" ] && [ "$mver" != "$ver" ]; then
     fail 9 "marketplace.json の version が VERSION と一致" "VERSION=${ver} marketplace.json=${mver}"; return
   fi
-  pass 9 "マニフェスト 4 件が妥当な JSON / version=${pver} が VERSION と一致"
+
+  # 既定の更新 URL の ref (github.com/thirai-classlab/hirai-method-lite/<ref>/VERSION) は、
+  # このプラグインを配る branch と一致する。ずれると、この branch の VERSION が別の
+  # branch の VERSION と比べ続け、「更新あり」が一生出ない (更新ありの控えを案件ごとに
+  # 分ける直しとは別経路の、同じ「無関係な版と比べる」症状)。
+  # git 管理外 (marketplace への複製など) では branch を確かめられないので飛ばす。
+  local branch uref umd urm
+  branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [ -n "$branch" ] && [ "$branch" != "HEAD" ]; then
+    uref="$(sed -n 's#.*hirai-method-lite/\([^/]*\)/VERSION.*#\1#p' "$ROOT/scripts/update-check.sh" | head -1)"
+    umd="$(sed -n 's#.*hirai-method-lite/\([^/]*\)/VERSION.*#\1#p' "$ROOT/commands/update.md" | head -1)"
+    urm="$(sed -n 's#.*hirai-method-lite/\([^/]*\)/VERSION.*#\1#p' "$ROOT/README.md" | head -1)"
+    if [ "$uref" != "$branch" ] || [ "$umd" != "$branch" ] || [ "$urm" != "$branch" ]; then
+      fail 9 "既定の更新 URL の ref がこの branch と一致する" \
+        "branch=${branch} update-check.sh=${uref:-無} update.md=${umd:-無} README.md=${urm:-無}"; return
+    fi
+  fi
+
+  pass 9 "マニフェスト 4 件が妥当な JSON / version=${pver} が VERSION と一致 / 既定の更新 URL の ref (${branch:-未検証}) がこの branch と一致"
 }
 
 # ---------- case 10: 同梱物 (MCP 定義 / agents) が壊れていない ----------

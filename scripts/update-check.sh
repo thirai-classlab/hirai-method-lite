@@ -12,7 +12,7 @@
 # file-top に set -e / set -o pipefail を書かない。source 元の shell flags を汚染し、
 # パイプ先の早期終了で呼び出し元ごと落ちる事故を防ぐため (関数内で局所化する)。
 
-HARNESS_UPDATE_URL_DEFAULT="https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/v1/VERSION"
+HARNESS_UPDATE_URL_DEFAULT="https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/v2/VERSION"
 
 # --- プラグイン本体の置き場所 --------------------------------------------------
 # $CLAUDE_PLUGIN_ROOT は**空で渡ることがある**。渡らない実行経路があるため、これを直に

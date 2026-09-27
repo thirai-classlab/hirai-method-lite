@@ -103,10 +103,14 @@ esac
 # 未完了タスク: GHP の形の控えがあれば置き換え、無ければ台帳の形 (名前も意味も不変)。
 # ここは通信しない (この scripts の既定方針) — 控えを読むだけで、取り直しは
 # session-start.sh の背景処理 (harness_ghp_refresh_async) に任せる。
+# GHP の形のときは見出し語も「あなたの番」に替える — 「やること 6（承認…」だと
+# 6 を Project 番号のように読めるため。
 todo="—"
+todo_label="やること"
 if command -v harness_ghp_line >/dev/null 2>&1 && todo_ghp="$(harness_ghp_line "$root" 2>/dev/null)" \
   && [ -n "$todo_ghp" ]; then
   todo="$todo_ghp"
+  todo_label="あなたの番"
 elif command -v harness_tasks_file >/dev/null 2>&1; then
   list="$(harness_tasks_file "$root" 2>/dev/null || true)"
   if [ -n "$list" ] && [ -f "$list" ]; then todo="$(harness_open_tasks "$list")"; fi
@@ -132,7 +136,7 @@ fi
 line1="${DIM}${model}${R}${SEP}$(lbl ctx) ${ctx} ${DIM}・${R}$(lbl 5h) ${h5} ${DIM}・${R}$(lbl 7d) ${d7}"
 line1="${line1}${SEP}$(lbl 'mode:') ${mode_col}${mode_label}${R}"
 line1="${line1}${SEP}${DIM}${branch}${R}"
-line1="${line1}${SEP}$(lbl やること) ${DIM}${todo}${R}"
+line1="${line1}${SEP}$(lbl "$todo_label") ${DIM}${todo}${R}"
 
 # 2 行目 = 次にできる操作。設定リンクは常時、お知らせはその後ろに 1 件だけ。
 line2="${LNK}設定を確認・変更 → /hirai-lite:config${R}"

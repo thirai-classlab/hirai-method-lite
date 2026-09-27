@@ -49,7 +49,7 @@ if command -v harness_ghp_line >/dev/null 2>&1; then
   ghp_line="$(harness_ghp_line "$root" 2>/dev/null || true)"
 fi
 if [ -n "$ghp_line" ]; then
-  task_line="Project: ${ghp_line}"
+  task_line="Project: あなたの番 ${ghp_line}"
 else
   list=""
   if command -v harness_tasks_file >/dev/null 2>&1; then
@@ -61,7 +61,14 @@ else
     task_line="やること一覧はまだありません (/new-task で作れます)"
   fi
 fi
-command -v harness_ghp_refresh_async >/dev/null 2>&1 && harness_ghp_refresh_async background "$root" >/dev/null 2>&1
+# **ここに >/dev/null 2>&1 を付けない。** 関数自身が内部で出力を抑えて detach しているため
+# 不要なだけでなく、外側の redirect を bash がこの 1 コマンドの間だけ適用しようとして元の fd 1
+# (hook runner が読むパイプ) を高位 fd に控える。その控えを、内側の background subshell が
+# fork 時にそのまま継承し、gh が終わるまで元のパイプの書き手が居続けることになり、
+# hook runner がパイプを read している環境では 5 秒の timeout の建付けが効かなくなる
+# (bash 3.2 で確認: 2 秒 sleep する偽の子で、外側に redirect が付くと `bash x.sh | cat` が
+# 2 秒かかり、外す と 0 秒になる)。
+command -v harness_ghp_refresh_async >/dev/null 2>&1 && harness_ghp_refresh_async background "$root"
 
 # --- 更新検知: 取得は背景 + 24h に 1 回、表示は前回キャッシュ値 (通信を待たない) ---
 # 版を比べる VERSION はプラグイン側にあるので plugin_root を渡す。
@@ -71,7 +78,8 @@ if [ -f "$plugin_root/scripts/update-check.sh" ]; then
   # shellcheck source=../scripts/update-check.sh
   . "$plugin_root/scripts/update-check.sh" 2>/dev/null || true
   if command -v harness_update_notice >/dev/null 2>&1; then
-    harness_update_fetch_async "$plugin_root" >/dev/null 2>&1 || true
+    # 同じ理由で外側に >/dev/null 2>&1 を付けない (このすぐ上のコメント参照)。
+    harness_update_fetch_async "$plugin_root" || true
     update_line="$(harness_update_notice "$plugin_root" 2>/dev/null || true)"
     # 画面下部のお知らせ枠へ結果を渡す (statusline はプラグインのパスを知れないため)。
     # フラグの鍵はプロジェクト側のパス (root) にする (plugin_root では 1.x/2.x や

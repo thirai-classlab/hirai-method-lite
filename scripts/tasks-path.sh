@@ -201,7 +201,8 @@ harness_open_tasks() {
 # ある。台帳を消す判定にすると、1.x 由来の /new-task 等が台帳を再生成して判定が
 # ひっくり返る)。見分ける手がかりは、リポに紐づいた Project が項目「種別」を
 # 持つかどうかだけにする (プロジェクトごとの設定ファイルは作らない、という既存の
-# 方針に合わせる)。
+# 方針に合わせる)。紐づく Project が 2 件以上あるときは、どれを使うか決め打ちせず
+# "ambiguous" として GHP 扱いにしない (呼び出し側は台帳の形にフォールバックする)。
 #
 # 通信する (gh を叩く) のは、次の 2 か所だけにする。
 #   ・SessionStart の背景処理 (harness_ghp_refresh background。hooks/session-start.sh から
@@ -219,22 +220,32 @@ harness_open_tasks() {
 # 「控えが前回のまま」で fail-open)。
 HARNESS_GHP_ID="hirai-lite-v2"
 
-# 見分けと件数の取り直しの間隔。件数 (a-d) と依存待ちの件数 (e) は毎回の背景処理で
-# 取り直す (会話の最初ごと)。見分け (このリポが GHP の形かどうか自体) は
-# 変わることが稀なので、間隔を空ける (既定 24h。update-check.sh の間隔と同じ考え方)。
+# 見分け (このリポが GHP の形かどうか自体) の取り直しの間隔。変わることが稀なので
+# 間隔を空ける (既定 24h。update-check.sh の間隔と同じ考え方)。
 HARNESS_GHP_PROBE_INTERVAL_DEFAULT=86400
-# 「書いた直後」(now) が e (依存が解けた件数) を取り直すのは、前回の e からこれ以上
-# 空いたときだけ。背景処理 (background) は毎回取り直す。
-HARNESS_GHP_UNBLOCKED_STALE_DEFAULT=600
+# 件数 (a-d) の取り直しの間隔。**background (SessionStart) のときだけ**この間隔を守る —
+# /clear・/compact・並べて開いた会話のたびに毎回 gh を叩くと、共有の GraphQL 枠を
+# 削る (前回の枯渇は 1 時間に 2 回)。書き込み用の道具の直後 (now) は、その場の最新値が
+# 要るので間隔を空けずに毎回取る。
+HARNESS_GHP_COUNTS_STALE_DEFAULT=120
 
 # harness_ghp_repo_slug [root] -> "<owner>/<repo>" を stdout、無ければ空 + rc 1。
 # git remote (origin) から読むだけで、gh は呼ばない (ここは通信しない)。
+# git@host:owner/repo (SCP 形) ・ ssh://[user@]host/owner/repo ・ https://[user@]host/owner/repo
+# のどれでも、"github.com" の直後の区切り (: か /) までを削れば owner/repo だけが残る。
+# github.com 以外のホストや、owner/repo が 1 対に決まらない値は解決できずに rc 1 を返す。
 harness_ghp_repo_slug() (
   set -uo pipefail
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" url
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" url slug
   url="$(git -C "$root" remote get-url origin 2>/dev/null)" || return 1
   [ -n "$url" ] || return 1
-  printf '%s' "$url" | sed -E 's#^git@github\.com:##; s#^https?://github\.com/##; s#\.git$##'
+  case "$url" in *github.com*) ;; *) return 1 ;; esac
+  slug="$(printf '%s' "$url" | sed -E 's#^.*github\.com[:/]##; s#\.git$##; s#/+$##')"
+  case "$slug" in
+    */*) case "${slug#*/}" in */*) return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$slug"
 )
 
 # harness_ghp_cache_file [root] -> 控えのパスを stdout (作成はしない、常に rc 0)。
@@ -266,119 +277,92 @@ harness_ghp_form() {
   harness_ghp_cache_get "$(harness_ghp_cache_file "${1:-}")" form
 }
 
-# harness_ghp_line [root] -> やること の行に埋め込む件数の中身 (見出し語は付けない)。
-# 形式: "N（承認 a・裁定 b・取り込み c）／進行中 d／依存が解けた e 件（HH:MM 時点）"
-# form が ghp でない・控えが無い・件数が欠けている場合は空 + rc 1 を返す (呼び出し側は
-# 台帳の形にフォールバックする)。gh は呼ばない (控えを読むだけ)。
+# harness_ghp_line [root] -> あなたの番 の行に埋め込む件数の中身 (見出し語は付けない)。
+# 形式: "N（承認 a・裁定 b・取り込み c）／進行中 d／待ち解け e（HH:MM 時点）"
+# form が ghp でない・控えが無い・件数 (a-d) が欠けている場合は空 + rc 1 を返す
+# (呼び出し側は台帳の形にフォールバックする)。gh は呼ばない (控えを読むだけ)。
+#
+# **待ち解け (e) は常に「—」**。正しい定義 (依存待ちのうち、止めていた依存が全部
+# 閉じたもの) を、安全な GraphQL 点数・5 秒の hook 枠に収まる形で取れるかがまだ
+# 実測できていないため、harness_ghp_refresh は e を書き込まない (今後の差し替え先は
+# 同関数のコメントを参照)。時刻 (HH:MM) は件数 (a-d) を取得した時点のもので、
+# fetched_hm に書き込み時点の**手元のローカル時刻**をそのまま文字列で持つ
+# (UTC の値を表示直前に切り出すと、日本時間の利用者には 9 時間ずれて見えるため)。
 harness_ghp_line() {
-  local root="${1:-}" f a b c d e t1 t2 t n
+  local root="${1:-}" f a b c d e hm n
   f="$(harness_ghp_cache_file "$root")"
   [ "$(harness_ghp_cache_get "$f" form)" = "ghp" ] || return 1
   a="$(harness_ghp_cache_get "$f" approve)" || return 1
   b="$(harness_ghp_cache_get "$f" arbitrate)" || return 1
   c="$(harness_ghp_cache_get "$f" ingest)" || return 1
   d="$(harness_ghp_cache_get "$f" in_progress)" || return 1
-  e="$(harness_ghp_cache_get "$f" unblocked)" || e="-"
+  e="$(harness_ghp_cache_get "$f" unblocked)" || e="—"
+  hm="$(harness_ghp_cache_get "$f" fetched_hm)" || hm="—"
   n=$(( ${a:-0} + ${b:-0} + ${c:-0} )) 2>/dev/null || n="$a"
-  t1="$(harness_ghp_cache_get "$f" fetched_at)"
-  t2="$(harness_ghp_cache_get "$f" unblocked_fetched_at)"
-  # 表示は 2 つの取得時刻のうち古い方 (この行の内容がその時点までしか保証されないため)。
-  # bash 3.2 (macOS 既定) には文字列の大小比較演算子が [ ] に無いので、sort で決める
-  # (ISO8601 の "YYYY-MM-DDTHH:MM:SSZ" は固定長で、辞書順 = 時刻順になる)。
-  if [ -n "$t1" ] && [ -n "$t2" ]; then
-    t="$(printf '%s\n%s\n' "$t1" "$t2" | sort | head -1)"
-  else
-    t="${t1:-$t2}"
-  fi
-  printf '%s（承認 %s・裁定 %s・取り込み %s）／進行中 %s／依存が解けた %s 件（%s 時点）' \
-    "$n" "$a" "$b" "$c" "$d" "$e" "${t:11:5}"
+  printf '%s（承認 %s・裁定 %s・取り込み %s）／進行中 %s／待ち解け %s（%s 時点）' \
+    "$n" "$a" "$b" "$c" "$d" "$e" "$hm"
 }
 
 # harness_ghp_write_probe <file> <form> [project_id] [project_number] -> 見分けの結果を
-# 書く。counts (a-d・e とその取得時刻) は既存の値をそのまま残す (probe だけでは消さない)。
+# 書く (form は "ghp" / "none" / "ambiguous" のいずれか)。counts (a-d とその取得時刻) は
+# 既存の値をそのまま残す (probe だけでは消さない)。
 # 連想配列 (bash 4+) は使わない — macOS の既定 /bin/bash は 3.2 で使えないため、
 # 個々のフィールドを都度 harness_ghp_cache_get で読み直す (やや冗長だが確実)。
 harness_ghp_write_probe() (
   set -uo pipefail
   local f="${1:?}" form="${2:?}" pid="${3:-}" pn="${4:-}"
-  local o_a o_b o_c o_d o_e o_fa o_ue o_ue_epoch
+  local o_a o_b o_c o_d o_fe o_hm
   mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
   o_a="$(harness_ghp_cache_get "$f" approve 2>/dev/null || true)"
   o_b="$(harness_ghp_cache_get "$f" arbitrate 2>/dev/null || true)"
   o_c="$(harness_ghp_cache_get "$f" ingest 2>/dev/null || true)"
   o_d="$(harness_ghp_cache_get "$f" in_progress 2>/dev/null || true)"
-  o_e="$(harness_ghp_cache_get "$f" unblocked 2>/dev/null || true)"
-  o_fa="$(harness_ghp_cache_get "$f" fetched_at 2>/dev/null || true)"
-  o_ue="$(harness_ghp_cache_get "$f" unblocked_fetched_at 2>/dev/null || true)"
-  o_ue_epoch="$(harness_ghp_cache_get "$f" unblocked_epoch 2>/dev/null || true)"
+  o_fe="$(harness_ghp_cache_get "$f" fetched_epoch 2>/dev/null || true)"
+  o_hm="$(harness_ghp_cache_get "$f" fetched_hm 2>/dev/null || true)"
   [ -n "$pid" ] || pid="$(harness_ghp_cache_get "$f" project_id 2>/dev/null || true)"
   [ -n "$pn" ] || pn="$(harness_ghp_cache_get "$f" project_number 2>/dev/null || true)"
-  harness_ghp_write_raw "$f" "$form" "$pid" "$pn" "$o_fa" "$o_a" "$o_b" "$o_c" "$o_d" "$o_e" \
-    "$o_ue" "$o_ue_epoch" "$(date -u +%s 2>/dev/null || echo 0)"
+  harness_ghp_write_raw "$f" "$form" "$pid" "$pn" "$o_a" "$o_b" "$o_c" "$o_d" "$o_fe" "$o_hm" \
+    "$(date -u +%s 2>/dev/null || echo 0)"
 )
 
-# harness_ghp_write_counts <file> <approve> <arbitrate> <ingest> <in_progress> -> 件数
-# (a-d) と fetched_at を書く。form・project_id・project_number・probed_epoch・
-# unblocked 系は既存の値を残す。
+# harness_ghp_write_counts <file> <approve> <arbitrate> <ingest> <in_progress> [now_epoch] ->
+# 件数 (a-d) と、その取得時刻 (間隔判定用の UNIX epoch + 表示用のローカル HH:MM 文字列) を
+# 書く。form・project_id・project_number・probed_epoch は既存の値を残す。
 harness_ghp_write_counts() (
   set -uo pipefail
-  local f="${1:?}" a="${2:-0}" b="${3:-0}" c="${4:-0}" d="${5:-0}"
-  local form pid pn o_e o_ue o_ue_epoch o_pe
+  local f="${1:?}" a="${2:-0}" b="${3:-0}" c="${4:-0}" d="${5:-0}" now_epoch="${6:-}"
+  local form pid pn o_pe hm
   form="$(harness_ghp_cache_get "$f" form 2>/dev/null || echo ghp)"
   pid="$(harness_ghp_cache_get "$f" project_id 2>/dev/null || true)"
   pn="$(harness_ghp_cache_get "$f" project_number 2>/dev/null || true)"
-  o_e="$(harness_ghp_cache_get "$f" unblocked 2>/dev/null || true)"
-  o_ue="$(harness_ghp_cache_get "$f" unblocked_fetched_at 2>/dev/null || true)"
-  o_ue_epoch="$(harness_ghp_cache_get "$f" unblocked_epoch 2>/dev/null || true)"
   o_pe="$(harness_ghp_cache_get "$f" probed_epoch 2>/dev/null || echo 0)"
+  [ -n "$now_epoch" ] || now_epoch="$(date -u +%s 2>/dev/null || echo 0)"
+  hm="$(date +%H:%M 2>/dev/null)"
   mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
-  harness_ghp_write_raw "$f" "$form" "$pid" "$pn" "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" \
-    "$a" "$b" "$c" "$d" "$o_e" "$o_ue" "$o_ue_epoch" "$o_pe"
+  harness_ghp_write_raw "$f" "$form" "$pid" "$pn" "$a" "$b" "$c" "$d" "$now_epoch" "$hm" "$o_pe"
 )
 
-# harness_ghp_write_unblocked <file> <e> -> 依存が解けた件数と、その取得時刻 (表示用の
-# 文字列と、間隔判定用の epoch の両方) を書く。他は既存の値を残す。
-harness_ghp_write_unblocked() (
-  set -uo pipefail
-  local f="${1:?}" e="${2:-0}"
-  local form pid pn a b c d fa o_pe
-  form="$(harness_ghp_cache_get "$f" form 2>/dev/null || echo ghp)"
-  pid="$(harness_ghp_cache_get "$f" project_id 2>/dev/null || true)"
-  pn="$(harness_ghp_cache_get "$f" project_number 2>/dev/null || true)"
-  a="$(harness_ghp_cache_get "$f" approve 2>/dev/null || true)"
-  b="$(harness_ghp_cache_get "$f" arbitrate 2>/dev/null || true)"
-  c="$(harness_ghp_cache_get "$f" ingest 2>/dev/null || true)"
-  d="$(harness_ghp_cache_get "$f" in_progress 2>/dev/null || true)"
-  fa="$(harness_ghp_cache_get "$f" fetched_at 2>/dev/null || true)"
-  o_pe="$(harness_ghp_cache_get "$f" probed_epoch 2>/dev/null || echo 0)"
-  mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
-  harness_ghp_write_raw "$f" "$form" "$pid" "$pn" "$fa" "$a" "$b" "$c" "$d" "$e" \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" "$(date -u +%s 2>/dev/null || echo 0)" "$o_pe"
-)
-
-# harness_ghp_write_raw <file> <form> <pid> <pn> <fetched_at> <a> <b> <c> <d> <e>
-#   <unblocked_fetched_at> <unblocked_epoch> <probed_epoch> -> 上の 3 つが共有する実際の
-# 書き込み。空の値はその key を書かない (呼び出し側が「まだ無い」と「0」を区別できる
-# ようにする)。*_epoch は UNIX 時刻の整数 (間隔の計算専用。日時の文字列を逆算しない —
-# GNU date の -d と BSD date の -jf は書式が違い、両対応は事故のもとになるため)。
+# harness_ghp_write_raw <file> <form> <pid> <pn> <a> <b> <c> <d> <fetched_epoch> <fetched_hm>
+#   <probed_epoch> -> 上の 2 つが共有する実際の書き込み。空の値はその key を書かない
+# (呼び出し側が「まだ無い」と「0」を区別できるようにする)。*_epoch は UNIX 時刻の整数
+# (間隔の計算専用。日時の文字列を逆算しない — GNU date の -d と BSD date の -jf は書式が
+# 違い、両対応は事故のもとになるため)。fetched_hm は書き込み時点の**手元のローカル時刻**を
+# そのまま文字列で持つ (epoch から表示直前に逆算しない。同じ理由)。
 harness_ghp_write_raw() (
   set -uo pipefail
-  local f="${1:?}" form="${2:?}" pid="${3:-}" pn="${4:-}" fa="${5:-}" \
-        a="${6:-}" b="${7:-}" c="${8:-}" d="${9:-}" e="${10:-}" ue="${11:-}" \
-        ue_epoch="${12:-}" pe="${13:-0}" tmp
+  local f="${1:?}" form="${2:?}" pid="${3:-}" pn="${4:-}" \
+        a="${5:-}" b="${6:-}" c="${7:-}" d="${8:-}" fe="${9:-}" hm="${10:-}" pe="${11:-0}" tmp
   tmp="$f.tmp.$$"
   {
     printf '{\n  "form": "%s",\n' "$form"
     [ -n "$pid" ] && printf '  "project_id": "%s",\n' "$pid"
     [ -n "$pn" ] && printf '  "project_number": %s,\n' "$pn"
-    [ -n "$fa" ] && printf '  "fetched_at": "%s",\n' "$fa"
     [ -n "$a" ] && printf '  "approve": %s,\n' "$a"
     [ -n "$b" ] && printf '  "arbitrate": %s,\n' "$b"
     [ -n "$c" ] && printf '  "ingest": %s,\n' "$c"
     [ -n "$d" ] && printf '  "in_progress": %s,\n' "$d"
-    [ -n "$e" ] && printf '  "unblocked": %s,\n' "$e"
-    [ -n "$ue" ] && printf '  "unblocked_fetched_at": "%s",\n' "$ue"
-    [ -n "$ue_epoch" ] && printf '  "unblocked_epoch": %s,\n' "$ue_epoch"
+    [ -n "$fe" ] && printf '  "fetched_epoch": %s,\n' "$fe"
+    [ -n "$hm" ] && printf '  "fetched_hm": "%s",\n' "$hm"
     printf '  "probed_epoch": %s\n}\n' "${pe:-0}"
   } > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null
 )
@@ -389,20 +373,28 @@ harness_ghp_write_raw() (
 #   1. 見分け (form): 前回の probed_epoch から HARNESS_GHP_PROBE_INTERVAL 秒 (既定 24h)
 #      経っていなければ飛ばす。経っていれば、リポに紐づく Project (Repository.projectsV2。
 #      この向き — リポからの紐づけ — は未検証。owner の型 (organization/user) を
-#      問わない node(id:) 経由で数える側は別に確かめている) のうち、項目
-#      「種別」を持つ最初の 1 件を採用する (無ければ "none"。台帳の形かどうかは呼び出し側
-#      — session-start.sh — が harness_tasks_file の有無で判定するので、ここでは
-#      "none" と書くだけにする)。
+#      問わない node(id:) 経由で数える側は別に確かめている) のうち、項目「種別」を
+#      持つものを数える。0 件なら "none"、1 件なら "ghp"、2 件以上ならどれを使うか
+#      決め打ちせず "ambiguous" にする (台帳の形かどうかは呼び出し側 —
+#      session-start.sh — が harness_tasks_file の有無で判定するので、ここでは
+#      "none"/"ambiguous" と書くだけにする)。
+#      **gh の失敗 (オフライン・枠切れ・scope 不足など) では、前回の見分けを変えない** —
+#      「成功して 0 件」のときだけ none を書く。失敗を「無い」と混同しない
+#      (core.md「否定は肯定を出せると確かめてから報告する」と同じ理由)。
 #   2. counts (a-d): form が ghp のときだけ、totalCount を 1 回の GraphQL 呼び出しで
-#      別名で並べて取る。
-#   3. unblocked (e): background のときは毎回。now のときは、前回の
-#      unblocked_epoch から HARNESS_GHP_UNBLOCKED_STALE 秒 (既定 10 分) より
-#      古いときだけ取る。
-#      **注記 (未検証・簡略化)**: 「依存が解けた」件数の厳密な定義 (依存待ちのうち、
-#      止めていた依存が閉じたもの) は、各件の blocked-by を突き合わせる専用の
-#      一覧スクリプトの仕事で、それは書き込み用の道具ができてから作る。ここでは同じ
-#      枠に載せるため、当面 status:依存待ち の totalCount を代用する (上振れの近似)。
-#      突き合わせの道具ができたら、この 1 か所を差し替える。
+#      別名で並べて取る。mode=background のときは、前回の fetched_epoch から
+#      HARNESS_GHP_COUNTS_STALE 秒 (既定 2 分) 経っていなければ飛ばす (SessionStart の
+#      たびに毎回叩かない)。mode=now は間隔を空けずに毎回取る。ここも gh の失敗や、
+#      応答が数字 4 つの形でなかった場合は、前回の counts をそのまま残す。
+#   3. 待ち解け (e): **書かない。** 正しい定義 (依存待ちのうち、止めていた依存が
+#      全部閉じたもの) を得るには、依存待ちの各行の blocked-by を突き合わせる必要があり、
+#      Project の items(query:) と組み合わせたときの GraphQL 点数が安全な範囲に
+#      収まるかがまだ実測できていない。
+#      以前はここで status:依存待ち の totalCount (= 依存待ちの全件数) を代用していたが、
+#      それは「解けた」件数ではなく「まだ解けていない依存待ち」の件数で、値として
+#      間違っていた (依存が 1 件も解けていなくても大きな数が出る)。間違った数を見せる
+#      より、harness_ghp_line の「—」フォールバックに任せる方が安全と判断した
+#      (要判断。実装するならこの 1 か所に q3 を足す)。
 harness_ghp_refresh() (
   set -uo pipefail
   command -v gh >/dev/null 2>&1 || return 0
@@ -417,56 +409,76 @@ harness_ghp_refresh() (
   [ -n "$probed_epoch" ] 2>/dev/null || probed_epoch=0
   local form proj_id
   if [ "$probed_epoch" -eq 0 ] 2>/dev/null || [ "$(( now - probed_epoch ))" -ge "$interval" ] 2>/dev/null; then
-    local q1 tsv proj_number
-    q1='query($o:String!,$r:String!){repository(owner:$o,name:$r){projectsV2(first:20){nodes{id number fields(first:30){nodes{... on ProjectV2FieldCommon{name}}}}}}}'
-    tsv="$(gh api graphql -f query="$q1" -F o="$owner" -F r="$repo" \
+    local q1 q1_out q1_rc n_match proj_number
+    q1='query($o:String!,$r:String!){repository(owner:$o,name:$r){projectsV2(first:20){nodes{id number fields(first:50){nodes{... on ProjectV2FieldCommon{name}}}}}}}'
+    q1_out="$(gh api graphql -f query="$q1" -f o="$owner" -f r="$repo" \
           --jq '.data.repository.projectsV2.nodes[] | select([.fields.nodes[]?.name] | index("種別")) | [.id,.number] | @tsv' \
-          2>/dev/null | head -1)"
-    if [ -n "$tsv" ]; then
-      IFS=$'\t' read -r proj_id proj_number <<<"$tsv"
-      form="ghp"
-      harness_ghp_write_probe "$f" "$form" "$proj_id" "$proj_number"
-    else
-      form="none"
-      harness_ghp_write_probe "$f" "$form"
+          2>/dev/null)"
+    q1_rc=$?
+    if [ "$q1_rc" -ne 0 ]; then
+      return 0
     fi
+    n_match="$(printf '%s\n' "$q1_out" | grep -c . || true)"
+    case "${n_match:-0}" in
+      0)
+        form="none"
+        harness_ghp_write_probe "$f" "$form"
+        ;;
+      1)
+        IFS=$'\t' read -r proj_id proj_number <<<"$q1_out"
+        case "$proj_id" in ''|*[!A-Za-z0-9_]*) proj_id="" ;; esac
+        case "$proj_number" in ''|*[!0-9]*) proj_number="" ;; esac
+        if [ -n "$proj_id" ] && [ -n "$proj_number" ]; then
+          form="ghp"
+          harness_ghp_write_probe "$f" "$form" "$proj_id" "$proj_number"
+        else
+          return 0
+        fi
+        ;;
+      *)
+        form="ambiguous"
+        harness_ghp_write_probe "$f" "$form"
+        ;;
+    esac
   else
     form="$(harness_ghp_cache_get "$f" form 2>/dev/null || echo none)"
     proj_id="$(harness_ghp_cache_get "$f" project_id 2>/dev/null || true)"
   fi
   [ "$form" = "ghp" ] && [ -n "${proj_id:-}" ] || return 0
 
-  local q2 tsv2 a b c d
-  q2='query($id:ID!){node(id:$id){... on ProjectV2{
-    a: items(first:1, query:"種別:feature status:承認待ち"){totalCount}
-    b: items(first:1, query:"status:判断待ち"){totalCount}
-    c: items(first:1, query:"is:pr is:open"){totalCount}
-    d: items(first:1, query:"status:進行中"){totalCount}
-  }}}'
-  tsv2="$(gh api graphql -f query="$q2" -F id="$proj_id" \
-        --jq '[.data.node.a.totalCount,.data.node.b.totalCount,.data.node.c.totalCount,.data.node.d.totalCount] | @tsv' \
-        2>/dev/null)"
-  if [ -n "$tsv2" ]; then
-    IFS=$'\t' read -r a b c d <<<"$tsv2"
-    harness_ghp_write_counts "$f" "${a:-0}" "${b:-0}" "${c:-0}" "${d:-0}"
-  fi
-
-  local do_e=0
+  local counts_interval="${HARNESS_GHP_COUNTS_STALE:-$HARNESS_GHP_COUNTS_STALE_DEFAULT}"
+  local fetched_epoch=0 skip_counts=0
   if [ "$mode" = "background" ]; then
-    do_e=1
-  else
-    local ue_epoch stale="${HARNESS_GHP_UNBLOCKED_STALE:-$HARNESS_GHP_UNBLOCKED_STALE_DEFAULT}"
-    ue_epoch="$(harness_ghp_cache_get "$f" unblocked_epoch 2>/dev/null || echo 0)"
-    [ -n "$ue_epoch" ] 2>/dev/null || ue_epoch=0
-    if [ "$ue_epoch" -eq 0 ] 2>/dev/null || [ "$(( now - ue_epoch ))" -ge "$stale" ] 2>/dev/null; then
-      do_e=1
+    fetched_epoch="$(harness_ghp_cache_get "$f" fetched_epoch 2>/dev/null || echo 0)"
+    [ -n "$fetched_epoch" ] 2>/dev/null || fetched_epoch=0
+    if [ "$fetched_epoch" -gt 0 ] 2>/dev/null && [ "$(( now - fetched_epoch ))" -lt "$counts_interval" ] 2>/dev/null; then
+      skip_counts=1
     fi
   fi
-  if [ "$do_e" = 1 ]; then
-    local q3 e
-    q3='query($id:ID!){node(id:$id){... on ProjectV2{ e: items(first:1, query:"status:依存待ち"){totalCount} }}}'
-    e="$(gh api graphql -f query="$q3" -F id="$proj_id" --jq '.data.node.e.totalCount' 2>/dev/null)"
-    [ -n "$e" ] && harness_ghp_write_unblocked "$f" "$e"
+  if [ "$skip_counts" != 1 ]; then
+    local q2 q2_out q2_rc a b c d
+    q2='query($id:ID!){node(id:$id){... on ProjectV2{
+      a: items(first:1, query:"種別:feature status:承認待ち"){totalCount}
+      b: items(first:1, query:"status:判断待ち"){totalCount}
+      c: items(first:1, query:"is:pr is:open"){totalCount}
+      d: items(first:1, query:"status:進行中"){totalCount}
+    }}}'
+    q2_out="$(gh api graphql -f query="$q2" -f id="$proj_id" \
+          --jq '[.data.node.a.totalCount,.data.node.b.totalCount,.data.node.c.totalCount,.data.node.d.totalCount] | @tsv' \
+          2>/dev/null)"
+    q2_rc=$?
+    if [ "$q2_rc" -eq 0 ] && [ -n "$q2_out" ]; then
+      IFS=$'\t' read -r a b c d <<<"$q2_out"
+      case "$a" in ''|*[!0-9]*) a="" ;; esac
+      case "$b" in ''|*[!0-9]*) b="" ;; esac
+      case "$c" in ''|*[!0-9]*) c="" ;; esac
+      case "$d" in ''|*[!0-9]*) d="" ;; esac
+      if [ -n "$a" ] && [ -n "$b" ] && [ -n "$c" ] && [ -n "$d" ]; then
+        harness_ghp_write_counts "$f" "$a" "$b" "$c" "$d" "$now"
+      fi
+    fi
+    # 失敗 (gh 非 0 終了・応答が数字 4 つの形でない) はここで既存の counts を書き換えずに
+    # 抜ける (fail-open)。
   fi
   return 0
 )
