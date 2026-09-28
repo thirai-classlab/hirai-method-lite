@@ -14,7 +14,7 @@
 
 HARNESS_UPDATE_URL_DEFAULT="https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/v2/VERSION"
 
-# 2.x の配布系列 (marketplace のエントリ名) を仮に置いたもの。H-6 で main の
+# 2.x の配布系列 (marketplace のエントリ名) を仮に置いたもの。配布先の
 # marketplace.json に実際に足すエントリ名が決まったら、この 1 行と commands/*.md の
 # 素材行の同じ文字列を合わせる (ズレていても壊れ方は fail-open — 解決できずに空を返す
 # だけで、旧い版を掴んだりはしない)。scripts/tasks-path.sh の HARNESS_GHP_ID と同じ

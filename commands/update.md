@@ -16,7 +16,7 @@ description: ハーネス (プラグイン hirai-lite) を最新版に更新し�
 
 ## 素材行 — プラグイン本体の場所を解決する 1 行
 
-`$CLAUDE_PLUGIN_ROOT` は**空で渡ることがある**。空のまま `"$CLAUDE_PLUGIN_ROOT/VERSION"` と書くと `/VERSION` を読みに行って失敗し、版の比較・`scripts/` の読み込み・smoke・終了条件が**全部空振りする**（v1.14.0 の `/update` が実環境で動かなかった原因）。解決順は `$CLAUDE_PLUGIN_ROOT` → `~/.claude/plugins/installed_plugins.json` のうち 2.x の行 (plugin 名が `hirai-lite-v2` の行。H-6 で実際のエントリ名が決まったら合わせる) の**版が最新の installPath** → `~/.claude/plugins/cache/hirai-lite/hirai-lite-v2/<版>/` のうち**版が最新のもの**。`marketplaces/hirai-lite`（main = 1.x）には落とさない。`/init` の手順 0 と**同じ 1 行**を使う。下の 1 行目を**素材行**と呼び、素材を読む bash ブロックの先頭に毎回そのまま置く（ブロックごとに新しいシェルで動くため変数は持ち越されない）。以降は解決済みの `$P` だけを使う。
+`$CLAUDE_PLUGIN_ROOT` は**空で渡ることがある**。空のまま `"$CLAUDE_PLUGIN_ROOT/VERSION"` と書くと `/VERSION` を読みに行って失敗し、版の比較・`scripts/` の読み込み・smoke・終了条件が**全部空振りする**（v1.14.0 の `/update` が実環境で動かなかった原因）。解決順は `$CLAUDE_PLUGIN_ROOT` → `~/.claude/plugins/installed_plugins.json` のうち 2.x の行 (plugin 名が `hirai-lite-v2` の行。実際のエントリ名が変わったら、この行と `scripts/update-check.sh` の `HARNESS_V2_ENTRY_NAME` を合わせる) の**版が最新の installPath** → `~/.claude/plugins/cache/hirai-lite/hirai-lite-v2/<版>/` のうち**版が最新のもの**。`marketplaces/hirai-lite`（main = 1.x）には落とさない。`/init` の手順 0 と**同じ 1 行**を使う。下の 1 行目を**素材行**と呼び、素材を読む bash ブロックの先頭に毎回そのまま置く（ブロックごとに新しいシェルで動くため変数は持ち越されない）。以降は解決済みの `$P` だけを使う。
 
 ## 手順 0: 現在の版と rules の控えを取る
 

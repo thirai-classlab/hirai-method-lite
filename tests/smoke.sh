@@ -437,17 +437,30 @@ EOF2
 
   # --- new-task / start-task / finish-task の GHP の形の節。台帳の形と GHP の形は
   # 排他ではなく、リポごとに見分けて分岐する。GHP の形の節は起票のスキル /
-  # hirai-task を呼ぶだけで、台帳 (list.md) を作らず読まず書かない。
-  local ghpcmd bad6="" sec
+  # hirai-task を呼ぶだけで、台帳 (list.md 系) を作らず読まず書かない。
+  # 禁止語は `list.md` の字面だけでなく `$LIST`・`docs/tasks`・`harness_tasks_file` にも
+  # 広げる (台帳を読み替えた変数名や共通関数経由で書く抜け道も塞ぐ)。さらに
+  # 「## 形の見分け」節が harness_ghp_form を呼んでいること、その呼び出しが
+  # harness_tasks_file の呼び出しより前にあることも見る (見分け自体を削っても
+  # hirai-task の文字列と禁止語 0 件だけでは通ってしまうため)。
+  local ghpcmd bad6="" sec fseesec gline tline
   for ghpcmd in new-task.md start-task.md finish-task.md; do
     sec="$(awk '/^## GHP の形の場合$/ {f=1; next} f && /^## / {exit} f' "$ROOT/commands/$ghpcmd")"
     if [ -z "$sec" ]; then bad6="$bad6 ${ghpcmd}:GHP の形の節が無い"; continue; fi
     printf '%s' "$sec" | grep -qF 'hirai-task' \
       || bad6="$bad6 ${ghpcmd}:GHP の形の節が GitHub の形の呼び出し (hirai-task) を持たない"
-    printf '%s' "$sec" | grep -qF 'list.md' \
-      && bad6="$bad6 ${ghpcmd}:GHP の形の節が台帳 (list.md) を書く行を持つ"
+    printf '%s' "$sec" | grep -qE 'list\.md|\$LIST|docs/tasks|harness_tasks_file' \
+      && bad6="$bad6 ${ghpcmd}:GHP の形の節が台帳 (list.md 系) を参照する行を持つ"
+    fseesec="$(awk '/^## 形の見分け/ {f=1; next} f && /^## / {exit} f' "$ROOT/commands/$ghpcmd")"
+    printf '%s' "$fseesec" | grep -qF 'harness_ghp_form' \
+      || bad6="$bad6 ${ghpcmd}:形の見分けの節が harness_ghp_form を呼ばない"
+    gline="$(grep -n 'harness_ghp_form' "$ROOT/commands/$ghpcmd" | head -1 | cut -d: -f1)"
+    tline="$(grep -n 'harness_tasks_file' "$ROOT/commands/$ghpcmd" | head -1 | cut -d: -f1)"
+    if [ -n "$gline" ] && [ -n "$tline" ] && [ "$gline" -ge "$tline" ]; then
+      bad6="$bad6 ${ghpcmd}:harness_ghp_form の呼び出しが harness_tasks_file より後"
+    fi
   done
-  if [ -n "$bad6" ]; then fail 1 "new-task・start-task・finish-task は GHP の形で hirai-task を呼び、台帳を書かない" "$bad6"; return; fi
+  if [ -n "$bad6" ]; then fail 1 "new-task・start-task・finish-task は形の見分けを先に行い、GHP の形で hirai-task を呼び、台帳を書かない" "$bad6"; return; fi
 
   pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く / /update 手順 2-2 の移行は中身を保ち同名は上書きせず両方残し、移行後は冒頭と画面下部が docs/ の台帳を読む / /init 第 2 段階は 事実収集 → 範囲提示 → grilling 呼び出し の順で、事実収集の bash は中身ありでも空でも exit 0、grilling へ渡す指示に範囲の制約 (調達・法務へ踏み込まない / 不要な質問は落とす / 事実は自分で調べる) が入っている / GHP の形: 控えがあれば あなたの番 が N（承認・裁定・取り込み）／進行中／待ち解け の形に変わり (statusline は gh を呼ばず控えを読むだけ。session-start は次回以降のため背景処理を毎回投げるが、この回の表示はその完了を待たない。間隔内の 2 回目は gh を呼ばない)、控えが無ければ台帳の形へ fail-open し、env を unset しても書く側と読む側が同じ控えを指し、remote の URL は ssh://・user@・末尾スラッシュも同じ owner/repo に正規化され、紐づく Project が 2 件以上なら GHP を名乗らない / new-task・start-task・finish-task の GHP の形の節は hirai-task を呼び、台帳を書く行を持たない"
 }
@@ -1494,8 +1507,11 @@ print(" ".join(k for k in ("commands", "agents", "hooks") if k in m))
   # 書き方が割れると片方だけ直る) (3) 未設定でも実際に最新の版を解決できる (4) 共通ライブラリの
   # harness_plugin_root と同じ答えを返す (解決の作法が離れたらここが落ちる)。
   local pr_bad="" boot n_boot n_uniq unguarded pw out_boot out_fn n_up
+  # 除外は 2.x のキャッシュ fallback (`cache/hirai-lite/hirai-lite-v2/`) だけに絞る。
+  # 旧 entry 名の 1.x 側 (`cache/hirai-lite/hirai-lite/`) はこの文字列に当たらないので、
+  # 1.x だけへ落ちる行が紛れ込んでも「無防備な使用」として引っかかる。
   unguarded="$(grep -n 'CLAUDE_PLUGIN_ROOT' "$ROOT"/commands/*.md \
-               | grep -v 'plugins/cache/hirai-lite' | head -3)"
+               | grep -v 'plugins/cache/hirai-lite/hirai-lite-v2/' | head -3)"
   [ -z "$unguarded" ] || pr_bad="$pr_bad 無防備な使用:[${unguarded}]"
   n_boot="$(grep -h '^P="${CLAUDE_PLUGIN_ROOT' "$ROOT"/commands/*.md | grep -c . | tr -d ' ')"
   n_uniq="$(grep -h '^P="${CLAUDE_PLUGIN_ROOT' "$ROOT"/commands/*.md | sort -u | grep -c . | tr -d ' ')"
@@ -1531,9 +1547,9 @@ print(" ".join(k for k in ("commands", "agents", "hooks") if k in m))
 }}
 JSONEOF
   mkdir -p "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite/1.16.0" \
-           "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite-v2/2.0.0"
+           "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite-v2/2.9.0"
   printf 'OLD\n' > "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite/1.16.0/VERSION"
-  printf 'OLD\n' > "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite-v2/2.0.0/VERSION"
+  printf 'OLD\n' > "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite-v2/2.9.0/VERSION"
   out_boot="$(cd "$pw/proj" && env -u CLAUDE_PLUGIN_ROOT HOME="$pw/home" TMPDIR="$pw/td" \
               bash -c "$boot"'; cat "$P/VERSION"' 2>&1)"
   [ "$out_boot" = NEW ] \
@@ -1545,15 +1561,23 @@ JSONEOF
   [ "$out_boot" = "$out_fn" ] || pr_bad="$pr_bad 素材行と harness_plugin_root の答えが違う:[${out_boot}] [${out_fn}]"
   # installed_plugins.json が無い (または 2.x の行が無い) ときは、2.x のキャッシュ
   # (cache/hirai-lite/hirai-lite-v2/) の最大版へ fallback する (旧 entry 名の cache
-  # である 1.x には落ちない)。この状態を以降の「手順 0」検査にも引き継ぐ
-  # (最終的に有効な版が NEW になる)。
+  # である 1.x には落ちない)。既存の 2.9.0 (OLD) に加えて 2.10.0 (NEW) を置く —
+  # 辞書順では "2.10.0" < "2.9.0" になるため、`sort -V` を落とすと古い方 (2.9.0) を
+  # 拾ってしまう (`tail -1` が入れ替わる)。この状態を以降の「手順 0」検査にも
+  # 引き継ぐ (最終的に有効な版が NEW になる)。
   rm -f "$pw/home/.claude/plugins/installed_plugins.json"
-  mkdir -p "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite-v2/2.11.0"
-  printf 'NEW\n' > "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite-v2/2.11.0/VERSION"
+  mkdir -p "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite-v2/2.10.0"
+  printf 'NEW\n' > "$pw/home/.claude/plugins/cache/hirai-lite/hirai-lite-v2/2.10.0/VERSION"
   out_boot="$(cd "$pw/proj" && env -u CLAUDE_PLUGIN_ROOT HOME="$pw/home" TMPDIR="$pw/td" \
               bash -c "$boot"'; cat "$P/VERSION"' 2>&1)"
   [ "$out_boot" = NEW ] \
     || pr_bad="$pr_bad installed_plugins.json 無しで 2.x キャッシュの最大版に fallback しない:[${out_boot}]"
+  out_boot="$(cd "$pw/proj" && env -u CLAUDE_PLUGIN_ROOT HOME="$pw/home" TMPDIR="$pw/td" \
+              bash -c "$boot"'; printf %s "$P"' 2>&1)"
+  out_fn="$(cd "$pw/proj" && env -u CLAUDE_PLUGIN_ROOT HOME="$pw/home" TMPDIR="$pw/td" \
+            bash -c ". \"$ROOT/scripts/update-check.sh\"; harness_plugin_root" 2>&1)"
+  [ "$out_boot" = "$out_fn" ] \
+    || pr_bad="$pr_bad 素材行と harness_plugin_root の答えが違う (installed_plugins.json 無し):[${out_boot}] [${out_fn}]"
   # 手順 0 を逐語実行する。**控えはコピーであって移動ではない** — 元の rules が残ること、控えが
   # /tmp 直下ではなく一時領域の専用フォルダに出来ること、いつ消えるかを画面に出していること、の
   # 3 点を実挙動で見る (v1.14.0 は「退避」と表示し、利用者は自分のルールが /tmp へ移されたと
