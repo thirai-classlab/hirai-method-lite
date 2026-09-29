@@ -36,6 +36,10 @@ import json
 import os
 import re
 import sys
+
+# 利用者の手元にも、プラグインの置き場所にも .pyc（__pycache__）を作らない。
+# 以降の import（自己検査・bin/hirai-task の読み込み）にも効かせるため import の直後に置く。
+sys.dont_write_bytecode = True
 import tempfile
 import urllib.parse
 from contextlib import redirect_stdout
