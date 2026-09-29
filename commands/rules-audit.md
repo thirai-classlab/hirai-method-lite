@@ -54,7 +54,7 @@ ls "$P"/commands/*.md | wc -l       # command は 12 個まで (プラグイン�
 
 各ルール行の `失効:` を読み、その条件が既に成立しているかを実測で判定する。
 
-- 「list.md を廃止したら」→ `ls docs/tasks/list.md` が exit 1 なら成立。
+- 「正本を GitHub に移したら」（タスクの規範にある失効条件の例）→ `harness_ghp_form "$PWD"` が `ghp` なら成立。**`docs/tasks/list.md` の有無だけでは判定しない** — GitHub の形へ移ったあとも古い台帳ファイルが物理的に残っていることがあるため（台帳と GitHub の形は同じリポに同居しうる）。
 - 「CI で必ず落ちる構成になったら」→ `ls .github/workflows/*.yml` が exit 0 なら成立。
 - `失効:` の記載が無い行は、それ自体を欠陥として一覧に載せる。
 

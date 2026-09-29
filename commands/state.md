@@ -15,7 +15,7 @@ context 使用率 50% 到達時と、作業を中断する時に実行する。
 ## 手順
 
 1. `git rev-parse --abbrev-ref HEAD` / `git log --oneline -5` / `git status --porcelain` を実行し、現在の git 状態を実測する。
-2. 台帳 (`$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > 旧レイアウトの `.claude/tasks/list.md`) を Read し、status が `進行中` の行と `未着手` の行を取り出す。
+2. 進行中で作業している GitHub issue の番号を控える (複数あれば主なもの 1 件)。
 3. `.claude/state/latest.md` を以下の書式で**上書き**保存する。ディレクトリが無ければ `mkdir -p .claude/state` で作る。
 
 ```markdown
@@ -28,12 +28,12 @@ context 使用率 50% 到達時と、作業を中断する時に実行する。
   <ファイル名を最大 10 件列挙。11 件以上は「他 N 件」と書く>
 
 ## 進行中タスク
-- task-<id>: <タイトル> / 残り step: <step 番号と作業概要>
+- issue #<番号>: <タイトル> / 次にやる作業: <概要>
 - 直前に実行して成功したコマンド: <コマンド>
 - 次に実行するコマンド: <コマンド 1 つ>
 
 ## 未着手タスク
-- task-<id>: <タイトル>
+- issue #<番号>: <タイトル>
 
 ## 判明した事実
 - <このセッションで実測して確定した事実。1 行 1 件、推測は書かない>
@@ -94,7 +94,7 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 
 ```
 保存しました → .claude/state/latest.md
-進行中: task-12 レート制限の実装 — 残り step 3
+進行中: issue #12 レート制限の実装 — 次の完了条件: レスポンスヘッダに残数を返す
 
 新しいセッションで続きから始めるには:
 1. /clear と入力します
@@ -119,13 +119,13 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 2. `git rev-parse --abbrev-ref HEAD` を実行し、state に書かれた branch と突き合わせる。不一致なら state の branch 名を提示し「切替えますか?」と聞く。承認されたら `git switch <state の branch>` を実行する。承認が無ければ現 branch のまま 3 へ進む。
 3. `git log --oneline -1` を実行し、HEAD を突き合わせる。state の HEAD と一致しなければ、`git log --oneline <state の hash>..HEAD` で state 保存後に積まれた commit を列挙し、チャットに提示する。
 
-4. 台帳を Read し、state の「進行中タスク」の id が今も `進行中` かを確認する。`完了` になっていれば「state より台帳が新しい」と報告し、台帳側を正とする。
-5. 進行中タスクの `task-<id>-<slug>.md` を Read し、status が `未着手` の最初の step を特定する。
+4. `hirai-task today` を実行し、state の issue 番号が今も進行中の一覧に載っているかを確認する。載っていなければ「state より GitHub 側が新しい」と報告し、GitHub 側を正とする。`command -v hirai-task` が無ければ「hirai-task が見つからない (PATH に入っていない)」と報告して 5 へ進む。
+5. 4 で読んだ issue の本文から、まだ満たしていない完了条件を 1 つ選ぶ。
 6. 再開サマリを次の書式で 1 回だけ出す。
 
 ```
 再開: branch <name> / HEAD <hash>
-進行中: task-<id> <タイトル> — 残り step <番号> <作業概要>
+進行中: issue #<番号> <タイトル> — 次の完了条件: <1 つ>
 詰まり: <state の「詰まっている点」または なし>
 次に実行: <state の「次に実行するコマンド」>
 ```
@@ -134,7 +134,7 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 
 ## loop 引数
 
-`/state resume loop` で呼ばれた場合、6 のサマリ出力後に mode（進め方）を `loop`（自動で進む）へ書き換え（書き込み先は決め打ちせず `tasks-path.sh` の `harness_mode_write_file "$PWD"` が返す**すでに在る側**。`/hirai-lite:config` と同じ経路）、台帳の `進行中` → `未着手` の順に連続で着手する。着手できるのは対応 draft の `approved_at:` が埋まっているタスクのみ。空のタスクに到達したら、その id を報告して停止する。
+`/state resume loop` で呼ばれた場合、6 のサマリ出力後に mode（進め方）を `loop`（自動で進む）へ書き換え（書き込み先は決め打ちせず `tasks-path.sh` の `harness_mode_write_file "$PWD"` が返す**すでに在る側**。`/hirai-lite:config` と同じ経路）、`hirai-task ready` の結果を上から順に着手する。`command -v hirai-task` が無ければ「hirai-task が見つからない (PATH に入っていない)」と報告して終了する。一覧が空になったら、その旨を報告して停止する。
 
 loop 実行を止める条件は 3 つ。
 - user が停止を指示した。

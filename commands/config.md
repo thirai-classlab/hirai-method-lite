@@ -17,7 +17,14 @@ P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&
 R="$(harness_rules_dir "$PWD")"; D="$(dirname "$R")"
 m="$(harness_mode "$PWD")"; case "$m" in normal) m="normal（確認あり）" ;; loop) m="loop（自動で進む）" ;; esac
 echo "mode（進め方）: $m / 設定ファイル: $(harness_mode_write_file "$PWD")"
-echo "設定一式の置き場: $D / やること一覧: $(harness_tasks_file "$PWD" || echo '(まだありません)')"
+gform="$(harness_ghp_form "$PWD" 2>/dev/null || true)"
+if [ "$gform" = "ghp" ]; then
+  gf="$(harness_ghp_cache_file "$PWD")"
+  gn="$(harness_ghp_cache_get "$gf" project_number 2>/dev/null || echo '?')"
+  echo "設定一式の置き場: $D / 紐づく GitHub Project: #$gn"
+else
+  echo "設定一式の置き場: $D / やること一覧: $(harness_tasks_file "$PWD" || echo '(まだありません)')"
+fi
 grep -q '"ultracode"[[:space:]]*:[[:space:]]*true' "$D/settings.json" 2>/dev/null && echo "ultracode: 有効" || echo "ultracode: 無効"
 grep -q '"statusLine"' "$D/settings.json" 2>/dev/null && echo "statusLine（画面下部の情報表示）: 有効" || echo "statusLine（画面下部の情報表示）: 無効"
 for f in CLAUDE.md "$HOME/.claude/CLAUDE.md" "$R"/*.md; do
@@ -67,7 +74,7 @@ echo "更新後の入れ替え: $as / 設定ファイル: $(harness_mode_write_f
 
 - 1 は `loop` なら `loop（自動で進む）— 確認を求めず最後まで進みます`（`normal` / `loop` 以外の値はそのまま出す）。2 は無効なら `無効（利用量は増えません）`
 - 3 は警告を超えていたら 1 行足す: `警告線を超えています。ルールを 1 件減らすことを勧めます`
-- 4 は置き場が `~/.claude` なら `全プロジェクト共通（~/.claude/）`。台帳が無ければ `やること一覧 → まだありません`
+- 4 は置き場が `~/.claude` なら `全プロジェクト共通（~/.claude/）`。台帳が無ければ `やること一覧 → まだありません`。GitHub の形（`harness_ghp_form` が `ghp`）なら 2 行目を `紐づく GitHub Project → #<番号>` に差し替える（番号が控えに無ければ `#?`）
 - 6 は一度も調べていなければ `有効（まだ一度も確認していません）`
 - 7 はどちらか一方でも有効なら、その行を `有効` に差し替えて 2 行目を `プラグイン本体が新しくなると自動で入れ替わります` にする
 
