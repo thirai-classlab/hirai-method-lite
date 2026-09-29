@@ -28,4 +28,4 @@
 | 3 | 進行中 | ログイン失敗回数の上限を追加 | `npm test -- auth` が green | [task-3.md](task-3.md) |
 ```
 
-タスクファイルは [`templates/task.md`](../../templates/task.md) を写して作る。
+タスクファイルは `/new-task` が本文を作る。

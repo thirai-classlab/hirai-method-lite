@@ -1,9 +1,14 @@
+---
+slug: <slug>
+created_at: YYYY-MM-DD
+approved_at:
+---
 # <設計タイトル>
+
+`approved_at:` は、承認されたら `YYYY-MM-DD（チャット）` か `PR #<n> の merge で承認` を書く。未承認なら空欄のまま。
 
 | 項目 | 値 |
 |---|---|
-| 起案日 | YYYY-MM-DD |
-| approved_at | (承認されたら `YYYY-MM-DD（チャット）` か `PR #<n> の merge で承認` を書く。未承認なら空欄) |
 | 起案者 | <名前 or agent> |
 
 ## 1. 解きたい問題

@@ -826,17 +826,25 @@ case_5() {
   elif ! grep -qF "$APPROVAL_TEMPLATE" "$tk"; then
     bad5="$bad5 tasks.md:承認テンプレートへのポインタが無い"
   fi
-  # GitHub の形の立ち上げ手順 (T2): 4 手順・自動化 4 本・ビュー 6 枚・画面でしか付けられない 3 つ
-  local ps="$ROOT/docs/rules-reference/project-setup.md" it
-  if [ ! -f "$ps" ]; then bad5="$bad5 project-setup.md が無い"
+  # GitHub の形の立ち上げ手順 (T2): 4 手順・自動化 4 本 (設定値つき)・ビュー 6 枚・画面でしか付けられない 3 つ
+  local ps="$ROOT/docs/rules-reference/project-setup.md" it badps=""
+  if [ ! -f "$ps" ]; then badps="project-setup.md が無い"
   else
-    for it in 'Item added to project' 'Pull request linked to issue' 'Item closed' 'Auto-add to project' \
-              'is:pr' '階層表示' '並べ替え' 'グループ化' '## 1. 立ち上げの 4 手順' '## 6. ビュー 6 枚'; do
-      grep -qF -- "$it" "$ps" || bad5="$bad5 project-setup.md:[${it}]が無い"
+    for it in 'is:pr' '階層表示' '並べ替え' 'グループ化' '## 1. 立ち上げの 4 手順' '## 6. ビュー 6 枚'; do
+      grep -qF -- "$it" "$ps" || badps="$badps [${it}]が無い"
     done
-    [ "$(awk '/^## 6\./{f=1;next} /^## /{f=0} f&&/^\| /&&!/^\|---/&&!/^\| ビュー/' "$ps" | wc -l | tr -d ' ')" -eq 6 ] || bad5="$bad5 project-setup.md:ビューの表が 6 行でない"
+    # 章ごとに区切って数える (別の章に同じ語があっても通さない)
+    sec() { awk -v h="$1" '$0 ~ "^## "h"\\." {f=1;next} /^## /{f=0} f' "$ps"; }
+    [ "$(sec 1 | grep -cE '^[1-4]\. ')" -eq 4 ] || badps="$badps 1章:番号つきの手順が 4 本でない"
+    [ "$(sec 3 | grep -cE '^\| (Item added to project|Pull request linked to issue|Item closed|Auto-add to project) ')" -eq 4 ] || badps="$badps 3章:自動化の表が 4 本でない"
+    sec 3 | grep -E '^\| Item added to project ' | grep -qF 'Set Status = 承認待ち' && sec 3 | grep -E '^\| Item added to project ' | grep -q 'issue だけ' || badps="$badps 3章:Item added の設定値(issue だけ・承認待ち)が無い"
+    sec 3 | grep -E '^\| Pull request linked to issue ' | grep -qF 'Set Status = レビュー中' || badps="$badps 3章:Pull request linked の設定値(レビュー中)が無い"
+    sec 3 | grep -E '^\| Item closed ' | grep -qF 'Set Status = 完了' && sec 3 | grep -E '^\| Item closed ' | grep -q 'issue だけ' || badps="$badps 3章:Item closed の設定値(issue だけ・完了)が無い"
+    sec 3 | grep -E '^\| Auto-add to project ' | grep -qF 'is:pr' || badps="$badps 3章:Auto-add の設定値(is:pr)が無い"
+    [ "$(sec 6 | grep -E '^\| ' | grep -v '^|---' | grep -vc '^| ビュー')" -eq 6 ] || badps="$badps 6章:ビューの表が 6 行でない"
   fi
   if [ -n "$bad5" ]; then fail 5 "承認は T0 に名前 / T1 からポインタ" "$bad5"; return; fi
+  if [ -n "$badps" ]; then fail 5 "project-setup.md の立ち上げ手順・自動化・ビュー" "$badps"; return; fi
 
   pass 5 "T0 層の rule は許可リストどおり ${n} 本 <= ${T0_MAX} (${names# }) / core.md に承認の 1 行 (5 項目入り・2 行以内) / tasks.md から T2 テンプレートへのポインタ / project-setup.md に 4 手順・自動化 4 本・ビュー 6 枚・画面でしか付けられない 3 つ"
 }
