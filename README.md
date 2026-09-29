@@ -16,7 +16,7 @@ Claude Code で次の 2 行を順に実行します。
 
 ```
 /plugin marketplace add thirai-classlab/hirai-method-lite
-/plugin install hirai-lite@hirai-lite
+/plugin install hirai-lite-v2@hirai-lite
 ```
 
 - **1 行目は配布元の一覧を登録するだけ**です。この時点では何もインストールされません。
@@ -110,7 +110,7 @@ Claude Code で次の 2 行を順に実行します。
 
 | やりたいこと | 入力するもの |
 |---|---|
-| 入れる範囲を変える | いったん消してから入れ直す。ターミナルなら `claude plugin uninstall hirai-lite@hirai-lite --scope local` のあと `claude plugin install hirai-lite@hirai-lite --scope user` |
+| 入れる範囲を変える | いったん消してから入れ直す。ターミナルなら `claude plugin uninstall hirai-lite-v2@hirai-lite --scope local` のあと `claude plugin install hirai-lite-v2@hirai-lite --scope user` |
 | プラグインを止める / 消す | `/plugin` →「Installed」タブ |
 | 外部ツール接続（MCP）を個別に切る | `/mcp` |
 | `.mcp.json` の承認をやり直す | `claude mcp reset-project-choices`（選択が消え、次回また聞かれます） |
@@ -153,7 +153,7 @@ Claude Code で次の 2 行を順に実行します。
 | 順番 | 入力するもの | 何が起きるか |
 |---|---|---|
 | 1 | `/plugin marketplace update hirai-lite` | 配布元の一覧を取り直します。**ここを飛ばすと 2 が「すでに最新です」と答えてしまいます** |
-| 2 | `/plugin update hirai-lite@hirai-lite` | 本体を新しい版に入れ替えます |
+| 2 | `/plugin update hirai-lite-v2@hirai-lite` | 本体を新しい版に入れ替えます |
 | 3 | Claude Code を閉じて開き直す | ここで入れ替えが実際に効きます |
 | 4 | `/hirai-lite:update` | プロジェクト側にコピーされているスクリプトを最新にし、旧版で `.claude/` に作った書類を `docs/` へ移します |
 
@@ -407,7 +407,7 @@ claude plugins install mattpocock-skills
 
    ```
    /plugin marketplace add thirai-classlab/hirai-method-lite
-   /plugin install hirai-lite@hirai-lite
+   /plugin install hirai-lite-v2@hirai-lite
    ```
 
    commands / hooks / agents / MCP サーバー定義はこの時点で有効になる。**rules はまだ配られていない** — プラグインには rules というコンポーネントが無いため。
@@ -420,7 +420,7 @@ claude plugins install mattpocock-skills
 
 4. **ロード検証** — **`/init` の次に開くセッション**で行う（rules は起動時に読まれるため、`/init` を実行したセッション内では確認できない。`/init` の終了条件にも含めていない）。新しいセッションを開き、T0 の 3 ファイルが載っていること、T1 が `paths:` 該当ファイルを開くまで載らないことを確認する。想定と違えば frontmatter を直す。
 
-5. **更新する** — 既定では自動更新しない（本体の自動更新は Claude Code 本体の機能で、第三者マーケットプレイスは既定 off。複製された 3 本の入れ替えは `mode.yml` の `auto_sync`、既定 off。どちらも `/hirai-lite:config` の項目 7）。手順は `/plugin marketplace update hirai-lite` → `/plugin update hirai-lite@hirai-lite` → 再起動 → `/hirai-lite:update`（旧レイアウトの書類を `docs/` へ `mv` で移す → rules を再配置 → プラグイン所有の `statusline.sh` / `tasks-path.sh` / `context-usage.sh` を、配置先 (`.claude/` または `$HOME/.claude/`) のうち**実際に在る側だけ**配布版に入れ替え）。利用者向けの手順は[更新する](#更新する既定では自動で新しくなりません)。
+5. **更新する** — 既定では自動更新しない（本体の自動更新は Claude Code 本体の機能で、第三者マーケットプレイスは既定 off。複製された 3 本の入れ替えは `mode.yml` の `auto_sync`、既定 off。どちらも `/hirai-lite:config` の項目 7）。手順は `/plugin marketplace update hirai-lite` → `/plugin update hirai-lite-v2@hirai-lite` → 再起動 → `/hirai-lite:update`（旧レイアウトの書類を `docs/` へ `mv` で移す → rules を再配置 → プラグイン所有の `statusline.sh` / `tasks-path.sh` / `context-usage.sh` を、配置先 (`.claude/` または `$HOME/.claude/`) のうち**実際に在る側だけ**配布版に入れ替え）。利用者向けの手順は[更新する](#更新する既定では自動で新しくなりません)。
 
 ## このリポジトリの構成
 

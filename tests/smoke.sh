@@ -1374,6 +1374,13 @@ PYEOF
   if [ "$ghp_id" != "$want_id" ]; then
     fail 9 "tasks-path.sh の HARNESS_GHP_ID が <entry 名>-<カタログ名> と一致" "want=${want_id} tasks-path.sh=${ghp_id:-無}"; return
   fi
+  # 手順書と README の install / update / uninstall は、この branch の entry 名を指す。
+  # 1.x の entry 名 (hirai-lite@) が残ると、2.x を更新せず 1.x を更新する (入っていなければ not installed)。
+  local old_ent_hits
+  old_ent_hits="$(grep -nE 'hirai-lite@hirai-lite' "$ROOT/README.md" "$ROOT"/commands/*.md 2>/dev/null | head -3)"
+  if [ -n "$old_ent_hits" ]; then
+    fail 9 "README と commands/ の install・update が entry 名 ${ename}@${mname} を指す (1.x の hirai-lite@hirai-lite が 0 件)" "$old_ent_hits"; return
+  fi
   # CLAUDE_PLUGIN_DATA / CLAUDE_PLUGIN_ROOT が別の値でも、空でも、書く側と読む側は同じ控えを指す。
   local c9tmp c9a c9b c9c
   c9tmp="$(mktemp -d)"; git init -q "$c9tmp/r" 2>/dev/null
