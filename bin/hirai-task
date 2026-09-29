@@ -1,0 +1,2805 @@
+#!/usr/bin/env python3
+"""
+hirai-task — リポに紐づいた GitHub Project のタスクを読み書きする 1 本の道具。
+
+サブコマンド:
+  読む側: ready / pending / blocked / show <issue> / memos / unblocked
+  書く側: new / add / set / start / review / done / reopen（approve は廃止）
+  会話の最初と merge の直後: comments / close-parents / align / today / after-merge
+  ほか: sync（field・option の id の取り直し）/ --selftest（gh を使わない自己検査）
+
+なぜ script にするか:
+  `gh project item-edit` は project id / item id / field id / option id を要求し、
+  名前では指定できない。id の解決をここに閉じ込める。
+
+読む側:
+  一覧は items(first:100) を頁送りし、上限を決め打ちしない。show は
+  `issueOrPullRequest` で引くので、PR の番号でも落ちない。一覧は Issue だけに絞り、
+  種別が wave・feature・設計メモの行を除く（blocked・警告の対象）。
+
+  ready: 種別が task の着手可で、題名に `[User]` が無く、親が着手可の feature で、
+  task と feature に未完了の blocked by が無く、先祖の wave を止める wave が
+  出る条件を満たしているものだけ。並びは先祖の wave の POSITION の順。
+  pending は承認待ちの feature、blocked は判断待ち・依存待ち・保留の task を出す。
+
+  Project の在り処は Repository.projectsV2 から引く。0 件なら「無し」、
+  2 件以上なら候補を出して exit 2、「種別」を持つものを選ぶ。紐づけが 1 つなら
+  それをそのまま使う。`HIRAI_TASK_PROJECT` を明示したときは自動判定をせず、その番号を
+  そのまま使う（試験用の上書き）。owner/repo は `HIRAI_TASK_REPO`（既定は
+  `git remote get-url origin`）から取る。Project の owner を別に持たない。
+
+  一覧の頁ごとの問い合わせ（ITEMS_QUERY）は fieldValues だけを引き、blockedBy と
+  closingIssuesReferences を持たない。この 2 つは点数式（各 connection の要求数は
+  親の first の積）で頁ごとに 100 点分ずつ乗ってしまうため。blockedBy が要るのは
+  着手可の行だけ、PR の有無が要るのはレビュー中の行だけなので、頁送りが終わったあとに、
+  その行の番号だけをまとめて 1 回の追加の問い合わせ（`fetch_extras`。alias で複数の
+  issue を 1 リクエストに束ねる）で引く。PR の有無は
+  Issue.closedByPullRequestsReferences から見る（Project に居ない PR でも拾える）。
+
+書く側:
+  new は、値（種別）と親（実在・親子関係）を確かめたあとで REST でいちから
+  issue を作り、親があれば sub_issues で付け、無ければ Project に REST で入れる
+  （owner が organization か user かは repositoryOwner で見て orgs/・users/ を選ぶ）。
+  Item added の反映を待ってから種別・blocked by を書く（この時点の項目値の書き込みは、
+  Item added を待つ一連の GraphQL の 1 件引きの直後なので GraphQL の item id を
+  そのまま使う）。
+
+  既存の issue を対象にする add（の入れ直したあとの値）/ set / start / review /
+  done / reopen は、まず GraphQL の 1 件引き（fetch_write_item）で今の値と守りの
+  判定材料（Status・種別・親・blocked by など）を読む。書き込みは REST に寄せる:
+  `GET {owner}/projectsV2/{n}/items?q=%23<番号>` で issue 番号から REST の item id を
+  引き（完全一致。呼び出し元は GraphQL で載っていることを確かめた後なので、0 件は
+  反映の遅れとして 2 秒おきに 3 回まで引き直し、それでも 0 件なら exit 1。2 件以上は
+  他リポの同じ番号として `repo:` で絞り直し、それでも複数なら候補を出して exit 2。
+  content の repository が別リポの行は 1 件でも採らない）、`PATCH .../items/{item id}`
+  に `{"fields":[{"id":<field id>,"value":<option id か text>}]}` で書く
+  （rest_item_id・write_single_select_rest・write_text_field_rest）。field の id は
+  REST 独自の整数形（GraphQL の `PVTSSF_...` とは別形式）、option の id も REST の
+  応答のものを使う（GraphQL と共通とは仮定しない）。どちらも
+  `GET .../projectsV2/{n}/fields` から取り、gh-fields-rest.json に控える
+  （rest_field・rest_option_id）。add は入れた直後の行が検索に出ないことがあるので、
+  POST の応答の id をそのまま PATCH に使う。start --approved・reopen は最初の副作用の
+  前に id を引く。align も同じ経路で書く。close-parents は項目の値を書かない
+  （issue の state を REST で閉じるだけ）。new 自身の項目の書き込みは GraphQL のまま
+  （作った直後の行が REST の検索に載る速さは未確認のため）。
+
+  書き込みが 1 件でも成功したあと、控え（画面下の件数）を harness_ghp_refresh now で
+  取り直す（プラグイン本体の scripts/tasks-path.sh が見つかるときだけ。見つからない・
+  失敗しても書き込みの結果は変えない。refresh_board_counts）。
+
+  new の親: 種別 task・feature は親が必須（task は feature、feature は wave）で、
+  無ければ理由を出して exit 2。wave・設計メモは親を持たない。feature は承認待ちで作って
+  1 行で知らせる。wave は、wave の issue の本文の「まだ作っていない wave」の節
+  （UNBUILT_WAVES_HEADING）にあるものだけ作り、節に書いた blocked by を張って
+  「並び順をボードで直してください」と知らせる。節に無い wave は作らず exit 2。
+
+  approve は廃止: 「approve は廃止。feature をボードで着手可に」と出して
+  exit 2。AI は承認待ち→着手可を自分で動かさない（子の承認待ちは align が動かす）。
+
+  set・start・review・done・reopen の守り: 種別=wave・feature は動かさない
+  （align・close-parents か、ボードの役目）。set は Status と種別だけを受け付け、
+  着手可へ書くときは、承認待ちからの遷移と目印つきの task を断り、依存待ち・
+  判断待ち・保留からは、親の feature が着手可のときだけ許す。start は着手可からだけ
+  進行中に進める。`--approved` は `[操作]` の task に限り、着手可・承認待ちからだけ
+  進行中にでき、本文に出どころを 1 行残す。reopen は CLOSED の issue だけを受け付け、
+  Status の書き込みは set と同じ守りを通す（開いた issue や承認待ち→着手可を
+  reopen で回避できない）。start・reopen のどちらも、未完了の blocked by があれば断る。
+
+会話の最初と merge の直後の仕事（comments / close-parents / unblocked / align /
+memos / today / after-merge）:
+  comments: REST の `issues/comments?since=` で、AI_MARKER（`<!-- ai -->`）の無い
+    コメントだけを拾う。since は gh-comments-since.json に持ち、次回はそこから読む
+    （無ければ既定で 24 時間前から）。
+
+  close-parents: 直下の子が 1 件以上あり（REST の sub_issues_summary.total≥1）、
+    全部閉じた種別 feature・wave の issue を閉じる。本文に「- 常設: はい」とある
+    wave は飛ばす（終わりの無い親）。Status は書かない（進み具合は帯で見る）。
+
+  unblocked: 一覧を出すだけで書かない。対象は依存待ちの task のうち、task 自身と
+    親の feature に未完了の blocked by が無く、先祖の wave を止める wave が
+    「出た」（子孫の条件と「出る条件のコマンド」の行）を満たすもの。戻すのは
+    呼び出し側（AI）が `set <n> Status <値>` で行う。
+
+  align: 着手可の feature の、承認待ち（Status=承認待ち）と着手可（Status=着手可）の
+    子を対象にする。未完了の blocked by が子か feature 自身にあるか、先祖の wave を
+    止める wave が「出た」を満たさなければ、承認待ちの子も着手可の子も依存待ちへ動かす。
+    承認待ちの子でどちらも満たさなければ着手可へ。着手可の子はブロックされていなければ
+    何もしない（着手可→着手可は出さない）。判断待ち・依存待ち・保留の子は最初から
+    対象にしない。
+    次の子は動かさず、番号だけを出す（承認待ち・着手可のどちらでも）:
+      ・`[操作]`・`[User]` の目印がある子
+      ・本文に「- 後から追加:」がある子（new が、着手可の feature に足す子に書く）
+      ・feature が初めて着手可になった時点の子の一覧に無い子（gh-align-seen.json に、
+        feature ごとに最初に見た子の一覧を保存する。キーは `<repo>#<project番号>` の
+        下に置き、checkout をまたいで共有する置き場所に置く（_shared_state_dir）。
+        checkout ごとに置くと、新しい worktree で最初に align が動いたとき、その時点の
+        子を全部基準にしてしまい、あとから子になった子を承認なしに着手可へ書く。
+        「子になった時刻」と「feature が着手可になった時刻」を比べる経路は確実に読めない
+        ので、時刻の比較ではなくこの一覧で代える）
+    moves の各要素には、元の Status（"from"。journal にも残す。承認待ちへ戻すときの
+    手がかり）を含む。
+    動かした子があれば、その feature に AI_MARKER 付きで 1 行コメントを残す
+    （API の書き込みは issue 自身の timeline に残らないため、代わりに feature へ書く）。
+
+  today: comments → close-parents → align → 一覧（memos・unblocked）と警告行
+    （orphans・stuck・wave-holds・merged-designs・user-actions）の順に呼ぶ。警告行は
+    書き込まない（単独の一覧スクリプトにもしない）。
+      ・orphans: OPEN の行だけを見る。Project に居ない issue（repo の open issue 一覧
+        との突き合わせ）・種別が空の行・種別が task・feature で親が無い行（wave・
+        設計メモは親なしを数えない）
+      ・stuck: ready_warnings と同じ 3 種 + 「着手可なのに親の feature が承認待ち」
+      ・wave-holds: OPEN の wave だけを見る。子孫が 1 件以上あり、子の条件は満たしたが、
+        本文に「出る条件のコマンド」の行が無い wave（子孫 0 件の新しい wave は
+        「満たした」に数えない）
+      ・merged-designs: main へ merge された、本文に DESIGN_PR_MARKER の印がある PR のうち、
+        gh-merged-designs-since.json の since 以降のもの（簡易版。「起票済みか」までは
+        判定しない。診断のための一覧であり、判断は人が行う）
+      ・user-actions: open の `[User]` の task を番号で出す（ready・align から
+        外した分の見え先）
+
+  after-merge <PR番号>: その PR の closingIssuesReferences にある番号について、
+    close-parents を親→祖父→…と閉じられる分だけ辿ってから（1 回の today で複数段
+    連鎖して閉じる）、unblocked を呼ぶ。
+
+  書き込みの許可: align と close-parents は、MIGRATION_ALIGN_WRITE_ENABLED が True
+    かつ、open の issue の本文のどれにも「- today は書かない: はい」が無いときだけ
+    書く。目印の照合は題名を絞らない。それ以外は一覧だけを出す。
+    **`--json` は常に書かない**（dry-run 専用。この JSON を読む一括処理があるとき、
+    書き込みが起きると事故になる）。実際に書くときは 1 件ずつ gh-task-journal.jsonl
+    （checkout ごと。1 行に repo・project も残す）に残し、8.5 秒
+    （_WRITE_INTERVAL_SECONDS）おきに書く。
+
+  状態の置き場所: gh-fields.json・gh-fields-rest.json・gh-task-journal.jsonl は
+    checkout の git ディレクトリの下の `hirai-task/`、gh-align-seen.json・
+    gh-comments-since.json・gh-merged-designs-since.json は、全 worktree で共有する
+    git の common-dir の下の `hirai-task/`（_shared_state_dir）に置く。作業ツリーの外なので
+    追跡されず、.gitignore も要らない。共有の 3 ファイルは
+    `{"<repo>[#<project番号>]": {...}}` の形で、複数リポ・複数 Project を 1 ファイルで
+    区別する。読めない・壊れているときは警告を出し、その回は「何も基準が無い」側
+    （align は動かさない方へ、comments は既定の遡りへ）に倒す。
+
+  --json の形（align・close-parents）:
+    align   : {"align": [{"feature": <int>, "moves": [{"number": <int>,
+               "to": "着手可"|"依存待ち", "from": "承認待ち"|"着手可"}, ...],
+               "skipped": [<int>, ...]}, ...]}
+    close-parents: {"close_parents": [{"number": <int>, "kind": "feature"|"wave",
+               "children_total": <int>}, ...]}
+    どちらも「今の対象」を表す（dry-run の計算を JSON にしたもの）。`--json` は
+    書き込まないので、実際に書いたかどうかとは無関係（上の「書き込みの許可」）。
+
+落ちる条件:
+  呼び出し方の誤り（引数不正 / 未知のサブコマンド）        → exit 2
+  gh が失敗した / issue が Projects に載っていない          → exit 1
+  Project の紐づけが 2 件以上で 1 つに決まらない             → exit 2
+  それ以外                                                   → exit 0
+
+止めない: commit も push も止めない。人と AI が手で叩くだけ。
+失効: タスクの正本を GitHub Projects 以外へ移したとき。
+"""
+from __future__ import annotations
+
+import datetime
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.parse
+
+
+def _repo_from_git_remote() -> str:
+    """`git remote get-url origin` から owner/repo を取る。取れなければ空文字を返す
+    （main が「リポを決められない」と exit 2 にする。既定のリポは持たない）。"""
+    try:
+        proc = subprocess.run(
+            ['git', 'remote', 'get-url', 'origin'],
+            capture_output=True, text=True, check=True,
+        )
+    except Exception:
+        return ''
+    match = re.search(r'github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$', proc.stdout.strip())
+    return f'{match.group(1)}/{match.group(2)}' if match else ''
+
+
+# リポの owner/name は HIRAI_TASK_REPO（既定は git remote から取る）だけで決める。
+# Project の owner を別に持たない（リポの owner とずれて落ちるのを避ける）。
+# HIRAI_TASK_REPO は試験用の上書きとして残す。
+REPO = os.environ.get('HIRAI_TASK_REPO', '').strip() or _repo_from_git_remote()
+OWNER, _, REPO_NAME = REPO.partition('/')
+PROJECT_NUMBER_OVERRIDE = os.environ.get('HIRAI_TASK_PROJECT', '').strip()
+
+# 種別（kind）の項目名と、一覧から除く種別。空（項目が無い・値が無い）は task とみなす。
+KIND_FIELD = '種別'
+EXCLUDE_KINDS = {'wave', 'feature', '設計メモ'}
+DESIGN_MEMO_KIND = '設計メモ'
+
+PENDING_STATUS = '承認待ち'
+READY_STATUS = '着手可'
+BLOCKED_STATUSES = ('承認待ち', '判断待ち', '依存待ち', '保留')
+REVIEW_STATUS = 'レビュー中'
+DONE_STATUS = '完了'
+JUDGMENT_STATUS = '判断待ち'
+DEP_STATUS = '依存待ち'
+HOLD_STATUS = '保留'
+IN_PROGRESS_STATUS = '進行中'
+ALL_STATUSES = (
+    PENDING_STATUS, JUDGMENT_STATUS, DEP_STATUS, READY_STATUS,
+    IN_PROGRESS_STATUS, REVIEW_STATUS, DONE_STATUS, HOLD_STATUS,
+)
+
+# set が書けるフィールド（依存は blocked by、そのほかは本文に書く）。
+WRITABLE_FIELDS = ('Status', KIND_FIELD)
+
+# 実行の前に 1 件ずつチャットで承認を取る task・あなたの手作業の task の目印
+# （題名の目印）。set ではこれらを着手可に進めない（start --approved だけが進める）。
+OPERATION_MARK = '[操作]'
+USER_MARK = '[User]'
+MARKS = (OPERATION_MARK, USER_MARK)
+
+# ── 会話の最初と merge の直後の仕事（comments 以下）が使う目印・定数 ────────────
+WAVE_KIND = 'wave'
+FEATURE_KIND = 'feature'
+TASK_KIND = 'task'
+AI_MARKER = '<!-- ai -->'  # 印つきのコメントは comments が拾わない。
+PERMANENT_MARK = '- 常設: はい'  # wave の本文。close-parents はこの wave を閉じない。
+LATE_ADD_PREFIX = '- 後から追加:'  # new が、着手可の feature に足す子の本文に書く。
+NO_TODAY_MARK = '- today は書かない: はい'  # `[操作]` の open issue の本文。
+# 「出る条件のコマンド: exit 0（<日付>・<commit>）」の行。
+_EXIT_LINE_RE = re.compile(r'^- 出る条件のコマンド: exit 0', re.MULTILINE)
+DESIGN_PR_MARKER = 'pr-template-design-v1'  # 設計 PR の本文の印（PR の雛形に置く）。
+
+# False にすると align・close-parents は
+# 一覧だけを出す（selftest が「書かない側」を見るために切り替える）。
+MIGRATION_ALIGN_WRITE_ENABLED = True
+
+# 一括の書き換えと同じ間隔（8.5 秒おき・420 件/時）。
+_WRITE_INTERVAL_SECONDS = 8.5
+
+
+class GhError(Exception):
+    def __init__(self, message: str, code: int = 1):
+        super().__init__(message)
+        self.code = code
+
+
+def die(message: str, code: int = 1) -> None:
+    raise GhError(message, code)
+
+
+# 書き込み（REST の GET 以外・GraphQL の mutation）を 1 回でも呼んだか。
+# 呼んだあとで、終了の直前に 1 回だけ件数の控えを取り直す（refresh_board_counts）。
+_state = {'wrote': False}
+
+
+def run_gh(args: list[str], input_text: str | None = None) -> tuple[int, str, str]:
+    proc = subprocess.run(['gh'] + args, capture_output=True, text=True, input=input_text)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def rest(method: str, path: str, body: dict | None = None, *, ok_fail: bool = False) -> dict:
+    """REST（`gh api`）を 1 回叩く。書き込みは REST で行う。
+    body があれば `--input -` で JSON を渡す（シェルのクォート崩れを避ける）。
+    ok_fail=True のときは失敗を die せず `{'_error': message}` で返す
+    （sub_issues の "already a sub-issue" を成功として扱うため）。"""
+    args = ['api', '-X', method, path, '-H', 'X-GitHub-Api-Version: 2022-11-28']
+    input_text = None
+    if body is not None:
+        args += ['--input', '-']
+        input_text = json.dumps(body)
+    rc, out, err = run_gh(args, input_text)
+    if rc == 0 and method != 'GET':
+        _state['wrote'] = True
+    if rc != 0:
+        message = (err or out).strip()
+        if ok_fail:
+            return {'_error': message}
+        die(f'gh api {method} {path} が失敗した: {message}', 1)
+    text = out.strip()
+    if not text:
+        return {}
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        die(f'gh api の応答を JSON として読めなかった: {text[:200]}', 1)
+
+
+def rest_paginated(path: str) -> list:
+    """一覧を返す REST の GET を、頁がある分だけ全部読む（`gh api --paginate` に
+    任せる。応答が配列のエンドポイントでは、gh が頁をまとめて 1 本の配列にする）。
+    comments・orphans の repo 全体の一覧・merged-designs が使う。"""
+    rc, out, err = run_gh([
+        'api', '--paginate', path, '-H', 'X-GitHub-Api-Version: 2022-11-28',
+    ])
+    if rc != 0:
+        die(f'gh api --paginate {path} が失敗した: {(err or out).strip()}', 1)
+    text = out.strip()
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        die(f'gh api --paginate の応答を JSON として読めなかった: {text[:200]}', 1)
+    return data if isinstance(data, list) else [data]
+
+
+def graphql(query: str, variables: dict | None = None) -> dict:
+    args = ['api', 'graphql', '-f', f'query={query}']
+    for key, value in (variables or {}).items():
+        if value is None:
+            continue
+        flag = '-F' if isinstance(value, int) else '-f'
+        args += [flag, f'{key}={value}']
+    rc, out, err = run_gh(args)
+    if rc == 0 and query.lstrip().startswith('mutation'):
+        _state['wrote'] = True
+    if rc != 0:
+        die(f'gh api graphql が失敗した（exit {rc}）: {(err or out).strip()}', 1)
+    text = out.strip()
+    if not text.startswith('{'):
+        die(f'gh api graphql が JSON を返さなかった（レート制限・認証を疑う）: {text or err}', 1)
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        die(f'gh api graphql の応答を JSON として読めなかった（{exc}）: {text}', 1)
+    if payload.get('errors'):
+        die(f'gh api graphql がエラーを返した: {payload["errors"]}', 1)
+    data = payload.get('data')
+    if data is None:
+        die(f'gh api graphql が data を返さなかった: {text}', 1)
+    return data
+
+
+# ── Project の在り処 ──────────────────────────
+PROJECTS_QUERY = '''
+query($owner:String!, $name:String!) {
+  repository(owner:$owner, name:$name) {
+    projectsV2(first: 20) {
+      nodes {
+        number
+        title
+        fields(first: 50) {
+          nodes {
+            ... on ProjectV2FieldCommon { name }
+          }
+        }
+      }
+    }
+  }
+}
+'''
+
+
+def discover_project_number() -> int:
+    if PROJECT_NUMBER_OVERRIDE:
+        return int(PROJECT_NUMBER_OVERRIDE)
+    data = graphql(PROJECTS_QUERY, {'owner': OWNER, 'name': REPO_NAME})
+    repo = data.get('repository')
+    nodes = ((repo or {}).get('projectsV2') or {}).get('nodes') or []
+    if not nodes:
+        die(f'Project: 無し（{OWNER}/{REPO_NAME} に紐づいた Project が無い）', 1)
+    if len(nodes) == 1:
+        return nodes[0]['number']
+    with_kind = [
+        n for n in nodes
+        if any(f.get('name') == KIND_FIELD for f in (n.get('fields') or {}).get('nodes') or [])
+    ]
+    if len(with_kind) == 1:
+        return with_kind[0]['number']
+    candidates = with_kind or nodes
+    listing = '\n'.join(f"  #{n['number']} {n['title']}" for n in candidates)
+    die(
+        f'Project の候補が複数ある。HIRAI_TASK_PROJECT で選ぶこと:\n{listing}',
+        2,
+    )
+
+
+PROJECT_NODE_ID_QUERY = '''
+query($owner:String!, $name:String!, $projectNumber:Int!) {
+  repository(owner:$owner, name:$name) {
+    projectV2(number:$projectNumber) { id }
+  }
+}
+'''
+
+_project_node_id_cache: dict[int, str] = {}
+
+
+def project_node_id(project_number: int) -> str:
+    """updateProjectV2ItemFieldValue に渡す Project の GraphQL id（0〜1 点・軽い）。"""
+    if project_number in _project_node_id_cache:
+        return _project_node_id_cache[project_number]
+    data = graphql(PROJECT_NODE_ID_QUERY, {
+        'owner': OWNER, 'name': REPO_NAME, 'projectNumber': project_number,
+    })
+    node = (data.get('repository') or {}).get('projectV2') or {}
+    pid = node.get('id')
+    if not pid:
+        die(f'Project #{project_number} の id を引けなかった', 1)
+    _project_node_id_cache[project_number] = pid
+    return pid
+
+
+# ── owner の種類（organization か user か。orgs/ に決め打ちすると
+#    user 所有の Project では REST が 404 になる） ────────────────────────
+OWNER_TYPE_QUERY = '''
+query($owner:String!) {
+  repositoryOwner(login:$owner) { __typename }
+}
+'''
+
+_owner_type_cache: str | None = None
+
+
+def owner_type() -> str:
+    global _owner_type_cache
+    if _owner_type_cache is None:
+        data = graphql(OWNER_TYPE_QUERY, {'owner': OWNER})
+        node = data.get('repositoryOwner') or {}
+        _owner_type_cache = node.get('__typename') or 'Organization'
+    return _owner_type_cache
+
+
+def project_items_rest_path(project_number: int) -> str:
+    """`POST/PATCH .../projectsV2/<n>/items` の owner セグメント（orgs/ か users/）。
+    Organization 所有なら `orgs/{o}/projectsV2/<n>/items`、User 所有なら
+    `users/{u}/projectsV2/<n>/items`（orgs/ 決め打ちだと 404）。"""
+    segment = 'orgs' if owner_type() == 'Organization' else 'users'
+    return f'{segment}/{OWNER}/projectsV2/{project_number}/items'
+
+
+def project_fields_rest_path(project_number: int) -> str:
+    """`GET .../projectsV2/<n>/fields` の owner セグメント。project_items_rest_path
+    と同じ考え方（field と option の整数 id は GET .../fields で取る）。"""
+    segment = 'orgs' if owner_type() == 'Organization' else 'users'
+    return f'{segment}/{OWNER}/projectsV2/{project_number}/fields'
+
+
+# ── 一覧（items を頁送り。上限を決め打ちしない） ───────────────────
+# 頁ごとの connection は fieldValues の 1 本だけにする。blockedBy と
+# closingIssuesReferences をここに置くと、公式の点数式（各 connection の要求数は
+# 親の first の積）で 1 頁 3 点になり、C11 の上限（1 頁 2 点の前提）を超える。
+# blockedBy と PR の有無は、頁送りが終わったあとに fetch_extras() で必要な行だけ引く。
+ITEMS_QUERY = '''
+query($owner:String!, $name:String!, $projectNumber:Int!, $after:String) {
+  repository(owner:$owner, name:$name) {
+    projectV2(number:$projectNumber) {
+      items(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          content {
+            __typename
+            ... on Issue {
+              number
+              title
+              state
+              url
+              parent { number }
+            }
+            ... on PullRequest {
+              number
+              title
+              state
+              url
+            }
+          }
+          fieldValues(first: 50) {
+            nodes {
+              __typename
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+                field { ... on ProjectV2FieldCommon { name } }
+              }
+              ... on ProjectV2ItemFieldTextValue {
+                text
+                field { ... on ProjectV2FieldCommon { name } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+'''
+
+
+def _field_values(node: dict) -> dict:
+    fields: dict[str, str] = {}
+    for fv in (node.get('fieldValues') or {}).get('nodes') or []:
+        typename = fv.get('__typename')
+        field = fv.get('field') or {}
+        name = field.get('name')
+        if not name:
+            continue
+        if typename == 'ProjectV2ItemFieldSingleSelectValue':
+            fields[name] = fv.get('name') or ''
+        elif typename == 'ProjectV2ItemFieldTextValue':
+            fields[name] = fv.get('text') or ''
+    return fields
+
+
+def parse_item(node: dict) -> dict:
+    content = node.get('content') or {}
+    fields = _field_values(node)
+    parent = content.get('parent')
+    return {
+        'id': node.get('id'),
+        'type': content.get('__typename'),
+        'number': content.get('number'),
+        'title': content.get('title') or '',
+        'state': content.get('state'),
+        'url': content.get('url'),
+        'parent_number': (parent or {}).get('number'),
+        'status': fields.get('Status', ''),
+        'kind': fields.get(KIND_FIELD, ''),
+    }
+
+
+def fetch_all_items(project_number: int) -> list[dict]:
+    items: list[dict] = []
+    after = None
+    while True:
+        data = graphql(
+            ITEMS_QUERY,
+            {'owner': OWNER, 'name': REPO_NAME, 'projectNumber': project_number, 'after': after},
+        )
+        project = (data.get('repository') or {}).get('projectV2')
+        if project is None:
+            die(f'Project #{project_number} が見つからない（{OWNER}/{REPO_NAME}）', 1)
+        connection = project['items']
+        for node in connection['nodes']:
+            items.append(parse_item(node))
+        page_info = connection['pageInfo']
+        if not page_info.get('hasNextPage'):
+            break
+        after = page_info.get('endCursor')
+    return items
+
+
+def task_items(items: list[dict]) -> list[dict]:
+    """Issue だけに絞り、種別が wave・feature・設計メモの行を除く（空は task）。"""
+    return [
+        i for i in items
+        if i.get('type') == 'Issue' and (i.get('kind') or '') not in EXCLUDE_KINDS
+    ]
+
+
+# ── 書く側の準備（field / option の id） ──────────────────
+# field の id の控え（gh-fields.json）。
+# 失敗しても壊さない（一時ファイルへ書いて検証し、成功したときだけ置き換える）。
+def _root() -> str:
+    """作業しているリポの作業ツリーのルート（プラグインの置き場所ではない）。
+    HIRAI_TASK_ROOT で上書きできる（試験用）。git の外なら今のディレクトリ。"""
+    override = os.environ.get('HIRAI_TASK_ROOT', '').strip()
+    if override:
+        return os.path.abspath(override)
+    try:
+        proc = subprocess.run(
+            ['git', 'rev-parse', '--show-toplevel'],
+            capture_output=True, text=True, check=True,
+        )
+        return proc.stdout.strip() or os.getcwd()
+    except Exception:
+        return os.getcwd()
+
+
+def _git_dir(flag: str) -> str | None:
+    try:
+        proc = subprocess.run(
+            ['git', 'rev-parse', flag],
+            cwd=_root(), capture_output=True, text=True, check=True,
+        )
+        return os.path.abspath(os.path.join(_root(), proc.stdout.strip()))
+    except Exception:
+        return None
+
+
+def _local_state_dir() -> str:
+    """この checkout だけの状態（field の id の控え・journal）の置き場所。
+    git ディレクトリの下の `hirai-task/`（作業ツリーの外なので追跡されず、
+    .gitignore も要らない）。git が使えなければ作業ツリーの `.hirai-task/`。"""
+    git_dir = _git_dir('--git-dir')
+    return os.path.join(git_dir, 'hirai-task') if git_dir else os.path.join(_root(), '.hirai-task')
+
+
+def _shared_state_dir() -> str:
+    """checkout をまたいで共有する状態の置き場所。本体と各 worktree は git の worktree 機構で
+    `.git`（common dir）を共有するので、その下の `hirai-task/` を使い、どの worktree で
+    回しても同じファイルを見る。取れなければ（git が使えない）checkout ごとの置き場所へ
+    フォールバックする。"""
+    common_dir = _git_dir('--git-common-dir')
+    return os.path.join(common_dir, 'hirai-task') if common_dir else _local_state_dir()
+
+
+def _load_shared_json(path: str) -> dict:
+    """複数リポ・複数 checkout で共有する状態ファイルを読む。無ければ {}（初回）。
+    壊れていれば警告を出し、その回は空として扱う（黙って空にはしない）。"""
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        print(
+            f'警告: {path} を読めなかった（{exc}）。この回は空として扱う'
+            '（判定は安全側＝動かさない方へ倒す）', file=sys.stderr,
+        )
+        return {}
+    if not isinstance(data, dict):
+        print(f'警告: {path} の中身が期待した形（object）ではない。空として扱う', file=sys.stderr)
+        return {}
+    return data
+
+
+def _save_shared_json(path: str, data: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f'{path}.new'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def _load_namespaced(path: str, namespace: str) -> dict:
+    ns = _load_shared_json(path).get(namespace)
+    return ns if isinstance(ns, dict) else {}
+
+
+def _save_namespaced(path: str, namespace: str, value: dict) -> None:
+    data = _load_shared_json(path)
+    data[namespace] = value
+    _save_shared_json(path, data)
+
+
+FIELDS_CACHE = os.path.join(_local_state_dir(), 'gh-fields.json')
+
+
+def sync_fields(project_number: int) -> list[dict]:
+    rc, out, err = run_gh([
+        'project', 'field-list', str(project_number), '--owner', OWNER, '--format', 'json',
+    ])
+    if rc != 0:
+        die(f'field-list に失敗した（gh auth と project スコープを確認）: {(err or out).strip()}', 1)
+    try:
+        payload = json.loads(out)
+    except json.JSONDecodeError:
+        die(f'field-list の応答を JSON として読めなかった: {out[:200]}', 1)
+    fields = payload.get('fields') or []
+    if not fields:
+        die(f'field が 0 件。project {project_number} が存在しないか権限が無い', 1)
+    os.makedirs(os.path.dirname(FIELDS_CACHE), exist_ok=True)
+    tmp = f'{FIELDS_CACHE}.new'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False)
+    os.replace(tmp, FIELDS_CACHE)
+    return fields
+
+
+def _load_fields_cache() -> list[dict] | None:
+    try:
+        with open(FIELDS_CACHE, encoding='utf-8') as f:
+            payload = json.load(f)
+    except Exception:
+        return None
+    fields = payload.get('fields') or []
+    return fields if fields else None
+
+
+def ensure_fields(project_number: int) -> list[dict]:
+    fields = _load_fields_cache()
+    return fields if fields is not None else sync_fields(project_number)
+
+
+def field_exists(project_number: int, name: str) -> bool:
+    """項目が見つからなければ 1 回 sync してやり直す（field_id と同じ考え方）。
+    古いキャッシュ（種別を持たない）を持ち越した checkout で `new --kind` を回すと、
+    resync せずに「無い」と誤判定していた。"""
+    try:
+        field_id(project_number, name)
+        return True
+    except GhError as exc:
+        if exc.code == 2:
+            return False
+        raise
+
+
+def field_id(project_number: int, name: str) -> str:
+    """項目が見つからなければ 1 回だけ sync してやり直す（field・option の id の控えが古いときに 1 回で追いつく）。"""
+    fields = ensure_fields(project_number)
+    match = next((f for f in fields if f.get('name') == name), None)
+    if match is None:
+        fields = sync_fields(project_number)
+        match = next((f for f in fields if f.get('name') == name), None)
+    if match is None:
+        die(f'未知のフィールド: {name}', 2)
+    return match['id']
+
+
+def option_id(project_number: int, field_name: str, option_name: str) -> str:
+    def _lookup(fields: list[dict]) -> str | None:
+        match = next((f for f in fields if f.get('name') == field_name), None)
+        if match is None:
+            return None
+        option = next((o for o in (match.get('options') or []) if o.get('name') == option_name), None)
+        return option['id'] if option else None
+
+    oid = _lookup(ensure_fields(project_number))
+    if oid is None:
+        oid = _lookup(sync_fields(project_number))
+    if oid is None:
+        die(f'{field_name} に「{option_name}」という選択肢は無い', 2)
+    return oid
+
+
+UPDATE_SINGLE_SELECT_MUTATION = '''
+mutation($project:ID!, $item:ID!, $field:ID!, $optionId:String!) {
+  updateProjectV2ItemFieldValue(input:{
+    projectId:$project itemId:$item fieldId:$field value:{singleSelectOptionId:$optionId}
+  }) { projectV2Item { id } }
+}
+'''
+
+def write_single_select(project_number: int, item_id: str, field_name: str, option_name: str) -> None:
+    if not item_id:
+        die(
+            f'Projects の item id が無いため {field_name} を書けない'
+            '（projectItems の断片に id が要る。レビュー H1 の再発）', 1,
+        )
+    pid = project_node_id(project_number)
+    fid = field_id(project_number, field_name)
+    oid = option_id(project_number, field_name, option_name)
+    graphql(UPDATE_SINGLE_SELECT_MUTATION, {
+        'project': pid, 'item': item_id, 'field': fid, 'optionId': oid,
+    })
+
+
+CLEAR_FIELD_MUTATION = '''
+mutation($project:ID!, $item:ID!, $field:ID!) {
+  clearProjectV2ItemFieldValue(input:{
+    projectId:$project itemId:$item fieldId:$field
+  }) { projectV2Item { id } }
+}
+'''
+
+
+def clear_field_value(project_number: int, item_id: str, field_name: str) -> None:
+    """項目の値を空に戻す（GraphQL・1 点。REST には空に戻す方法の実測が無い）。
+    new が wave を作るとき、Item added が入れた Status を消すのに使う。"""
+    if not item_id:
+        die(f'Projects の item id が無いため {field_name} を消せない', 1)
+    graphql(CLEAR_FIELD_MUTATION, {
+        'project': project_node_id(project_number),
+        'item': item_id,
+        'field': field_id(project_number, field_name),
+    })
+
+
+# ── 既存の行への書き込みを REST に寄せる ───────
+# 上の write_single_select（GraphQL）は new が作った直後の行だけに
+# 残す（モジュールの docstring を参照）。approve・set・start・review・done・reopen・
+# add（入れ直したあとの値）・align は、ここから下の *_rest を使う。
+#
+# GraphQL の field id（gh-fields.json・PVTSSF_... の形）とは別に、REST 独自の
+# 整数の field id と、single select の option id を、REST の GET .../fields の応答から
+# そのまま控える（name → {id, options: {name: id}}）。GraphQL 側のキャッシュ
+# （option_id()）とは共通だと仮定しない。
+REST_FIELDS_CACHE = os.path.join(_local_state_dir(), 'gh-fields-rest.json')
+
+
+def sync_fields_rest(project_number: int) -> dict:
+    """`GET .../projectsV2/<n>/fields` を頁送りで読み、name → {id（整数）,
+    options: {option 名: option id}} を gh-fields-rest.json に控える。"""
+    fields = rest_paginated(f'{project_fields_rest_path(project_number)}?per_page=100')
+    mapping = {
+        f['name']: {
+            'id': f['id'],
+            'options': {
+                o['name']: o['id'] for o in (f.get('options') or [])
+                if isinstance(o, dict) and isinstance(o.get('name'), str) and 'id' in o
+            },
+        }
+        for f in fields if isinstance(f, dict) and 'name' in f and 'id' in f
+    }
+    if not mapping:
+        die(f'REST の field が 0 件。project {project_number} を確認すること', 1)
+    os.makedirs(os.path.dirname(REST_FIELDS_CACHE), exist_ok=True)
+    tmp = f'{REST_FIELDS_CACHE}.new'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(mapping, f, ensure_ascii=False)
+    os.replace(tmp, REST_FIELDS_CACHE)
+    return mapping
+
+
+def _load_rest_fields_cache() -> dict | None:
+    try:
+        with open(REST_FIELDS_CACHE, encoding='utf-8') as f:
+            mapping = json.load(f)
+    except Exception:
+        return None
+    # 古い形（name → 整数）は読み捨てて引き直す
+    if not mapping or not all(isinstance(v, dict) and 'id' in v for v in mapping.values()):
+        return None
+    return mapping
+
+
+def rest_field(project_number: int, name: str) -> dict:
+    """REST 独自の field（{id, options}）を引く（field_id と同じ「見つからなければ
+    1 回だけ sync し直す」考え方）。"""
+    mapping = _load_rest_fields_cache()
+    if mapping is None:
+        mapping = sync_fields_rest(project_number)
+    if name not in mapping:
+        mapping = sync_fields_rest(project_number)
+    if name not in mapping:
+        die(f'未知のフィールド（REST）: {name}', 2)
+    return mapping[name]
+
+
+def rest_field_id(project_number: int, name: str):
+    return rest_field(project_number, name)['id']
+
+
+def rest_option_id(project_number: int, field_name: str, option_name: str) -> str:
+    options = rest_field(project_number, field_name)['options']
+    if option_name not in options:
+        mapping = sync_fields_rest(project_number)
+        options = (mapping.get(field_name) or {}).get('options') or {}
+    if option_name not in options:
+        die(f'{field_name} に {option_name} という選択肢が無い（REST）。あるのは: {"/".join(options)}', 2)
+    return options[option_name]
+
+
+def find_project_items_by_query(project_number: int, query: str) -> list:
+    """REST の `?q=` で item を絞る（`#<番号>` は issue 番号の
+    完全一致。`repo:<owner>/<name> #<番号>` の組み合わせも同じ形で絞れる）。"""
+    quoted = urllib.parse.quote(query, safe='')
+    path = f'{project_items_rest_path(project_number)}?q={quoted}&per_page=100'
+    data = rest('GET', path)
+    return data if isinstance(data, list) else []
+
+
+_ITEM_LOOKUP_ATTEMPTS = 3
+_ITEM_LOOKUP_DELAY_SECONDS = 2.0
+
+
+def rest_item_id(project_number: int, number: int, *, attempts: int = _ITEM_LOOKUP_ATTEMPTS):
+    """issue 番号から REST の item id を引く。
+    呼び出し元は GraphQL で行が載っていることを確かめてから呼ぶので、0 件は
+    「居ない」より検索への反映の遅れが疑わしい（作った直後は検索に載るまで遅れることがある）。
+    `_ITEM_LOOKUP_DELAY_SECONDS` おきに `attempts` 回まで引き直し、それでも 0 件なら
+    exit 1。2 件以上（他リポの同じ番号）は `repo:` で絞り直し、それでも複数残れば
+    候補を出して exit 2。content の repository が別リポの行は 1 件でも採らない。"""
+    repo_suffix = f'/repos/{REPO}'
+
+    def _matches(query: str) -> list:
+        found = []
+        for it in find_project_items_by_query(project_number, query):
+            content = it.get('content') or {}
+            if content.get('number') != number:
+                continue
+            repo_url = content.get('repository_url')
+            if repo_url and not repo_url.endswith(repo_suffix):
+                continue
+            found.append(it)
+        return found
+
+    items = _matches(f'#{number}')
+    for _ in range(attempts - 1):
+        if items:
+            break
+        sleep_fn(_ITEM_LOOKUP_DELAY_SECONDS)
+        items = _matches(f'#{number}')
+    if len(items) > 1:
+        narrowed = _matches(f'repo:{REPO} #{number}')
+        if narrowed:
+            items = narrowed
+    if not items:
+        die(
+            f'#{number} は Projects #{project_number} の REST の検索に出ない'
+            f'（{attempts} 回引いた。GraphQL では居るなら検索への反映の遅れ。'
+            '少し待ってやり直すこと。Project に入れていなければ add）', 1,
+        )
+    if len(items) > 1:
+        listing = '\n'.join(f"  item {it.get('id')}" for it in items)
+        die(
+            f'#{number} は複数リポに同じ番号があり repo:{REPO} で絞っても複数残る。'
+            f'候補:\n{listing}', 2,
+        )
+    return items[0]['id']
+
+
+def write_project_item_fields_rest(project_number: int, item_id, fields: list) -> None:
+    rest('PATCH', f'{project_items_rest_path(project_number)}/{item_id}', {'fields': fields})
+
+
+def write_single_select_rest(
+    project_number: int, number: int, field_name: str, option_name: str, *, item_id=None,
+) -> None:
+    """既存の行の single select を REST で書く。approve・set・start・
+    review・done・reopen・add（入れ直したあとの値）・align が使う。new は変えていない
+    （モジュールの docstring を参照）。item_id を渡せば ?q= を引かない（add が POST の
+    応答の id で書く・start/reopen が副作用の前に引いた id を使う）。"""
+    if item_id is None:
+        item_id = rest_item_id(project_number, number)
+    fid = rest_field_id(project_number, field_name)
+    oid = rest_option_id(project_number, field_name, option_name)
+    write_project_item_fields_rest(project_number, item_id, [{'id': fid, 'value': oid}])
+
+
+def has_mark(title: str, mark: str | None = None) -> bool:
+    marks = (mark,) if mark else MARKS
+    return any(m in title for m in marks)
+
+
+# ── 追加の問い合わせ（着手可・レビュー中の行だけ） ──────
+# alias で複数の issue を 1 リクエストに束ねる。owner/name は変数を共有し、
+# number だけを各 alias に literal で埋め込む（内部で作る整数なので injection の
+# 心配は無い。int() で確かめてから埋める）。
+def _extras_query(numbers: list[int]) -> str:
+    aliases = [
+        f'''
+  i{i}: repository(owner:$owner, name:$name) {{
+    issue(number: {int(number)}) {{
+      number
+      blockedBy(first: 30) {{
+        totalCount
+        nodes {{ number state }}
+      }}
+      closedByPullRequestsReferences(first: 5, includeClosedPrs: false) {{
+        nodes {{ number state }}
+      }}
+    }}
+  }}'''
+        for i, number in enumerate(numbers)
+    ]
+    return 'query($owner:String!, $name:String!) {' + ''.join(aliases) + '\n}'
+
+
+# 1 回の問い合わせに束ねる alias の数。着手可・レビュー中の行は今 12 件程度だが、
+# 運用が進むと増える。50 件ずつに割っても、alias 1 本の cost 寄与は親の乗数（1）だけなので
+# 点数は増えない（chunk が増えても 1 chunk = 2 点分の要求数、合計しても 100 点=1 点を割る
+# 規模には遠い）。
+_EXTRAS_CHUNK_SIZE = 50
+
+
+def fetch_extras(numbers: list[int]) -> dict[int, dict]:
+    """着手可の行の blockedBy と、レビュー中の行の open な PR の有無を、まとめて引く。
+    blockedBy が 30 件を超える行は truncated として警告に回す（数を切り詰めない）。
+    blocked_by_open_numbers は align 以下が使う（unblocked・align・wave-holds が、どの番号に
+    止められているかを知る必要があるため。ready 側は件数だけ見るので互換のまま）。
+    blocked_by_numbers は open/closed を問わない全番号。"""
+    unique = sorted({int(n) for n in numbers if n is not None})
+    result: dict[int, dict] = {}
+    for start in range(0, len(unique), _EXTRAS_CHUNK_SIZE):
+        chunk = unique[start:start + _EXTRAS_CHUNK_SIZE]
+        data = graphql(_extras_query(chunk), {'owner': OWNER, 'name': REPO_NAME})
+        for i, number in enumerate(chunk):
+            node = ((data.get(f'i{i}') or {}).get('issue')) or {}
+            blocked_by = node.get('blockedBy') or {}
+            blockers = blocked_by.get('nodes') or []
+            open_blockers = [b for b in blockers if b.get('state') != 'CLOSED']
+            total = blocked_by.get('totalCount', 0)
+            closing = node.get('closedByPullRequestsReferences') or {}
+            open_prs = [
+                p.get('number') for p in (closing.get('nodes') or [])
+                if p.get('state') == 'OPEN'
+            ]
+            result[number] = {
+                'blocked_by_total': total,
+                'blocked_by_open': len(open_blockers),
+                'blocked_by_open_numbers': [b.get('number') for b in open_blockers],
+                'blocked_by_numbers': [b.get('number') for b in blockers],
+                'blocked_by_truncated': isinstance(total, int) and total > len(blockers),
+                'open_pr_numbers': open_prs,
+            }
+    return result
+
+
+def fetch_bodies(numbers: list[int]) -> dict[int, str]:
+    """close-parents（「- 常設: はい」）・align（「- 後から追加:」）・wave-holds
+    （「出る条件のコマンド」の行）が使う本文を、まとめて 1 回の GraphQL で引く
+    （fetch_extras と同じ alias の考え方）。"""
+    unique = sorted({int(n) for n in numbers if n is not None})
+    result: dict[int, str] = {}
+    for start in range(0, len(unique), _EXTRAS_CHUNK_SIZE):
+        chunk = unique[start:start + _EXTRAS_CHUNK_SIZE]
+        aliases = [
+            f'''
+  i{i}: repository(owner:$owner, name:$name) {{
+    issue(number: {int(number)}) {{ number body }}
+  }}'''
+            for i, number in enumerate(chunk)
+        ]
+        query = 'query($owner:String!, $name:String!) {' + ''.join(aliases) + '\n}'
+        data = graphql(query, {'owner': OWNER, 'name': REPO_NAME})
+        for i, number in enumerate(chunk):
+            node = (data.get(f'i{i}') or {}).get('issue') or {}
+            result[number] = node.get('body') or ''
+    return result
+
+
+# ── ready ────────────────────────────────────────────────────────────
+# 並びの鍵: task ごとに、先祖の wave の POSITION を使う。
+# items は POSITION の順（GraphQL items() の既定の並び。REST の既定の並びも同じ順）なので、並びの位置は items の中の index で表せる。先祖に wave が無い
+# task は、wave のある task のあとに番号順で並べる。
+#
+# （将来、一覧をサーバ側の `?q=` で絞るとき（search API）は、
+#  否定形 `-種別:wave,feature,設計メモ` を使うこと。`種別:task` のような肯定形は
+#  種別が空の行を落とす。）
+#
+# wave の短い ID（`_wave_code_of`）は、new が「まだ作っていない wave」の節と題名を
+# 突き合わせるのに使う。wave issue の題名の書式（「（P1）」括弧つきか「P1 …」先頭つきか）は
+# リポごとに違うので、両方の形を読む。
+_WAVE_CODE_BRACKET_RE = re.compile(r'[（(]([A-Za-z]+\d+)[）)]')
+_WAVE_CODE_LEADING_RE = re.compile(r'^([A-Za-z]+\d+)\b')
+
+
+def _wave_code_of(title: str) -> str | None:
+    match = _WAVE_CODE_BRACKET_RE.search(title) or _WAVE_CODE_LEADING_RE.match(title.strip())
+    return match.group(1) if match else None
+
+
+def _build_wave_position_index(items: list[dict]) -> dict[int, int]:
+    return {
+        i['number']: idx for idx, i in enumerate(items)
+        if i.get('kind') == 'wave' and i.get('number') is not None
+    }
+
+
+def _wave_ancestor_position(
+    number: int,
+    parent_of: dict[int, int | None],
+    wave_position: dict[int, int],
+    *, max_depth: int = 6,
+) -> int | None:
+    seen: set[int] = set()
+    current = parent_of.get(number)
+    depth = 0
+    while current is not None and current not in seen and depth < max_depth:
+        if current in wave_position:
+            return wave_position[current]
+        seen.add(current)
+        current = parent_of.get(current)
+        depth += 1
+    return None
+
+
+def ready_sort_key(items: list[dict]):
+    wave_position = _build_wave_position_index(items)
+    parent_of = {
+        i['number']: i.get('parent_number') for i in items if i.get('number') is not None
+    }
+
+    def key(i: dict):
+        number = i.get('number') or 0
+        pos = _wave_ancestor_position(number, parent_of, wave_position)
+        if pos is not None:
+            return (0, pos, number)
+        return (1, 0, number)
+
+    return key
+
+
+def ready_rows(
+    items: list[dict], extras: dict[int, dict], bodies: dict[int, str],
+) -> list[dict]:
+    """ready に出す task。次をすべて満たすものだけ。
+    ・種別が task（種別の空の行は出さない。orphans が拾う）で、Status が着手可の open
+    ・題名に `[User]` が無い（あなたの手作業は today に番号で出す）
+    ・親が種別 feature で、その Status が着手可
+    ・task と親の feature に、未完了の blocked by が無い
+    ・先祖の wave を止める wave が、出る条件を満たしている
+    並びは先祖の wave の POSITION の順。"""
+    items_by_number, children_of = _board_index(items)
+    rows = []
+    for i in items:
+        if i.get('type') != 'Issue' or i.get('state') == 'CLOSED':
+            continue
+        if i.get('kind') != TASK_KIND or i.get('status') != READY_STATUS:
+            continue
+        if has_mark(i.get('title') or '', USER_MARK):
+            continue
+        parent_number = i.get('parent_number')
+        parent = items_by_number.get(parent_number)
+        if parent is None or parent.get('kind') != FEATURE_KIND or parent.get('status') != READY_STATUS:
+            continue
+        if (extras.get(i['number']) or {}).get('blocked_by_open', 0) > 0:
+            continue
+        if (extras.get(parent_number) or {}).get('blocked_by_open', 0) > 0:
+            continue
+        wave_ancestor = _ancestor_number_of_kind(parent_number, items_by_number, WAVE_KIND)
+        if wave_ancestor is not None and preceding_wave_unresolved(
+            wave_ancestor, items_by_number, children_of, bodies, extras,
+        ):
+            continue
+        rows.append(i)
+    rows.sort(key=ready_sort_key(items))
+    return rows
+
+
+def ready_warnings(items: list[dict], extras: dict[int, dict] | None = None) -> list[str]:
+    extras = extras or {}
+    warnings: list[str] = []
+    tasks = task_items(items)
+    for i in tasks:
+        number = i.get('number')
+        if i.get('status') == READY_STATUS:
+            extra = extras.get(number) or {}
+            if extra.get('blocked_by_open', 0) > 0:
+                warnings.append(
+                    f"  着手可なのに未完了の blocked by がある: #{number} {i['title'][:60]}"
+                )
+            if extra.get('blocked_by_truncated'):
+                warnings.append(
+                    f"  blocked by を数え切れていない（30 件超）: #{number} {i['title'][:60]}"
+                )
+        if i.get('state') == 'CLOSED' and i.get('status') != DONE_STATUS:
+            warnings.append(
+                f"  閉じたのに完了でない: #{number} {i['title'][:60]}（Status={i.get('status') or '空'}）"
+            )
+    for i in tasks:
+        if i.get('status') == REVIEW_STATUS:
+            extra = extras.get(i.get('number')) or {}
+            if not extra.get('open_pr_numbers'):
+                warnings.append(
+                    f"  レビュー中なのに open の PR が無い: #{i['number']} {i['title'][:60]}"
+                )
+    return warnings
+
+
+def cmd_ready() -> int:
+    project_number = discover_project_number()
+    items = fetch_all_items(project_number)
+    tasks = task_items(items)
+    ready_numbers = [i['number'] for i in tasks if i.get('status') == READY_STATUS]
+    review_numbers = [i['number'] for i in tasks if i.get('status') == REVIEW_STATUS]
+    parent_numbers = [
+        i['parent_number'] for i in tasks
+        if i.get('status') == READY_STATUS and i.get('parent_number') is not None
+    ]
+    wave_numbers = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
+    extras = fetch_extras(ready_numbers + review_numbers + parent_numbers + wave_numbers)
+    bodies = fetch_bodies(wave_numbers)
+    rows = ready_rows(items, extras, bodies)
+    if not rows:
+        print('着手可の issue は 0 件')
+    else:
+        print(f'着手可 {len(rows)} 件')
+        for i in rows:
+            print(f"  #{i['number']:<4} [feature #{i['parent_number']}] {i['title'][:64]}")
+    for line in ready_warnings(items, extras):
+        print(line)
+    return 0
+
+
+# ── pending（承認待ちの feature。ボードで着手可にすると子の task が ready に出る） ──
+def cmd_pending() -> int:
+    project_number = discover_project_number()
+    items = fetch_all_items(project_number)
+    rows = [
+        i for i in items
+        if i.get('type') == 'Issue' and i.get('state') != 'CLOSED'
+        and i.get('kind') == FEATURE_KIND and i.get('status') == PENDING_STATUS
+    ]
+    if not rows:
+        print('承認待ちの feature は 0 件')
+        return 0
+    print(f'承認待ちの feature {len(rows)} 件（ボードで着手可にすると、子の task が ready に出る）')
+    for i in sorted(rows, key=lambda x: x.get('number') or 0):
+        parent = f"（wave #{i['parent_number']}）" if i.get('parent_number') is not None else ''
+        print(f"  #{i['number']:<4} {i['title'][:60]}{parent}")
+    return 0
+
+
+# ── blocked（止まっている task を Status ごとに。止めている blocked by の番号つき） ──
+_BLOCKER_STATUSES = (JUDGMENT_STATUS, DEP_STATUS, HOLD_STATUS)
+
+
+def cmd_blocked() -> int:
+    project_number = discover_project_number()
+    items = fetch_all_items(project_number)
+    rows = [i for i in task_items(items) if i.get('status') in BLOCKED_STATUSES]
+    if not rows:
+        print('止まっている issue は 0 件')
+        return 0
+    extras = fetch_extras([i['number'] for i in rows if i.get('status') in _BLOCKER_STATUSES])
+    groups: dict[str, list[dict]] = {}
+    for i in rows:
+        groups.setdefault(i.get('status') or '', []).append(i)
+    for status, group in sorted(groups.items()):
+        print(f'{status}: {len(group)} 件')
+        for i in group:
+            numbers = (extras.get(i['number']) or {}).get('blocked_by_open_numbers') or []
+            suffix = '  ← blocked by ' + ', '.join(f'#{n}' for n in numbers) if numbers else ''
+            print(f"  #{i['number']:<4} {i['title'][:60]}{suffix}")
+    return 0
+
+
+# ── show（issueOrPullRequest で引く。PR の番号でも落ちない） ──
+# Projects の項目は PR にも付く（PullRequest の行にも Status がある）。Issue と同じく projectItems を引く。
+_PROJECT_ITEM_FRAGMENT = '''
+        projectItems(first: 5) {
+          nodes {
+            id
+            project { number }
+            fieldValues(first: 50) {
+              nodes {
+                __typename
+                ... on ProjectV2ItemFieldSingleSelectValue {
+                  name
+                  field { ... on ProjectV2FieldCommon { name } }
+                }
+                ... on ProjectV2ItemFieldTextValue {
+                  text
+                  field { ... on ProjectV2FieldCommon { name } }
+                }
+              }
+            }
+          }
+        }'''
+
+SHOW_QUERY = f'''
+query($owner:String!, $name:String!, $number:Int!) {{
+  repository(owner:$owner, name:$name) {{
+    issueOrPullRequest(number:$number) {{
+      __typename
+      ... on Issue {{
+        number
+        title
+        state
+        url
+        parent {{ number title }}
+        blockedBy(first: 30) {{ totalCount nodes {{ number title state }} }}
+{_PROJECT_ITEM_FRAGMENT}
+      }}
+      ... on PullRequest {{
+        number
+        title
+        state
+        url
+{_PROJECT_ITEM_FRAGMENT}
+      }}
+    }}
+  }}
+}}
+'''
+
+
+def _project_item(node: dict, project_number: int) -> dict | None:
+    for pi in (node.get('projectItems') or {}).get('nodes') or []:
+        if (pi.get('project') or {}).get('number') == project_number:
+            return pi
+    return None
+
+
+def cmd_show(number: int) -> int:
+    project_number = discover_project_number()
+    data = graphql(SHOW_QUERY, {'owner': OWNER, 'name': REPO_NAME, 'number': number})
+    node = (data.get('repository') or {}).get('issueOrPullRequest')
+    if node is None:
+        die(f'#{number} は見つからない', 1)
+    is_pr = node.get('__typename') == 'PullRequest'
+
+    print(f"#{number} {node.get('title', '')}{'（PR・' + node.get('state', '') + '）' if is_pr else ''}")
+    if is_pr:
+        print(f"  url                    {node.get('url', '')}")
+
+    item = _project_item(node, project_number)
+    if not item:
+        die(f'#{number} は Projects #{project_number} に載っていない', 1)
+    fields = _field_values(item)
+    for key, label in (('Status', 'status'), (KIND_FIELD, '種別')):
+        value = fields.get(key, '')
+        if value:
+            print(f'  {label:<22} {value}')
+    if is_pr:
+        return 0
+
+    parent = node.get('parent')
+    if parent:
+        print(f"  parent                 #{parent['number']} {parent.get('title', '')}")
+    blocked_by = node.get('blockedBy') or {}
+    blockers = blocked_by.get('nodes') or []
+    if blockers:
+        open_ones = [b for b in blockers if b.get('state') != 'CLOSED']
+        print(f"  blocked by             {len(blockers)} 件（未完了 {len(open_ones)} 件）")
+        for b in blockers:
+            mark = '' if b.get('state') == 'CLOSED' else '  ← 未完了'
+            print(f"    #{b['number']:<4} {b.get('title', '')[:60]}{mark}")
+    return 0
+
+
+# ── 既存 issue の 1 件引き（書く側の全サブコマンドが使う。GraphQL 数点で済む） ────────────
+WRITE_ITEM_QUERY = f'''
+query($owner:String!, $name:String!, $number:Int!) {{
+  repository(owner:$owner, name:$name) {{
+    issue(number:$number) {{
+      title
+      body
+      state
+      parent {{ number }}
+      blockedBy(first: 30) {{ totalCount nodes {{ number state }} }}
+{_PROJECT_ITEM_FRAGMENT}
+    }}
+  }}
+}}
+'''
+
+
+def fetch_write_item(project_number: int, number: int) -> dict:
+    data = graphql(WRITE_ITEM_QUERY, {'owner': OWNER, 'name': REPO_NAME, 'number': number})
+    issue = (data.get('repository') or {}).get('issue')
+    if issue is None:
+        return {'found': False}
+    item = _project_item(issue, project_number)
+    if item is None:
+        return {'found': False, 'title': issue.get('title') or ''}
+    parent = issue.get('parent')
+    blocked_by = issue.get('blockedBy') or {}
+    blockers = [(b.get('number'), b.get('state')) for b in (blocked_by.get('nodes') or [])]
+    return {
+        'found': True,
+        'id': item.get('id'),
+        'title': issue.get('title') or '',
+        'body': issue.get('body') or '',
+        'state': issue.get('state'),
+        'parent_number': (parent or {}).get('number'),
+        'blocked_by': blockers,
+        'blocked_by_open': [n for n, s in blockers if s != 'CLOSED'],
+        'blocked_by_total': blocked_by.get('totalCount', 0),
+        'fields': _field_values(item),
+    }
+
+
+def has_mark(title: str, mark: str | None = None) -> bool:
+    marks = (mark,) if mark else MARKS
+    return any(m in title for m in marks)
+
+
+def _require_item(project_number: int, number: int) -> dict:
+    item = fetch_write_item(project_number, number)
+    if not item.get('found'):
+        die(f'#{number} は Projects に載っていない', 1)
+    return item
+
+
+def _write_status(project_number: int, number: int, status: str) -> None:
+    """既存の行の Status を REST で書く（item は呼び出し側の読み取り専用の
+    ガードにだけ使うので、ここでは受け取らない）。"""
+    write_single_select_rest(project_number, number, 'Status', status)
+
+
+# ── approve は廃止。承認はボードで feature を着手可にすること。
+# 着手可になった feature の子の承認待ちは、align が着手可（か依存待ち）へそろえる。
+# AI は承認待ち→着手可を自分で動かさない。
+def cmd_approve(number: int) -> int:
+    die(
+        'approve は廃止。feature をボードで着手可に'
+        '（子の task は today の align が着手可へそろえる）', 2,
+    )
+    return 2
+
+
+# ── wave・feature の Status はスクリプトで動かさない。set・start・review・
+# done・reopen の全部から呼ぶ。
+def _reject_wave_feature(item: dict, number: int, verb: str) -> None:
+    kind = item['fields'].get(KIND_FIELD, '')
+    if kind in ('wave', 'feature'):
+        die(
+            f'#{number}（種別={kind}）は {verb} で動かさない。'
+            'align・close-parents か、ボードで動かすこと', 2,
+        )
+
+
+# ── set（Status と種別だけ） ────────────────
+def _guard_status_write(project_number: int, item: dict, number: int, value: str) -> None:
+    _reject_wave_feature(item, number, 'Status の書き込み')
+    if value != READY_STATUS:
+        return
+    current = item['fields'].get('Status', '')
+    if current == PENDING_STATUS:
+        die(
+            f'#{number} は承認待ちから着手可へ set で進めない'
+            '（feature をボードで着手可にし、align に任せる）', 2,
+        )
+    if has_mark(item['title']):
+        die(f'#{number} は目印つきの task で、set では着手可にしない。start --approved を使うこと', 2)
+    parent_number = item.get('parent_number')
+    if parent_number is None:
+        die(f'#{number} には親の feature が無いため、着手可にしない', 2)
+    parent = _require_item(project_number, parent_number)
+    parent_status = parent['fields'].get('Status', '')
+    if parent_status != READY_STATUS:
+        die(
+            f'#{number} の親 #{parent_number} の feature が着手可（今「{parent_status or "空"}」）'
+            'ではないため、着手可にしない', 2,
+        )
+
+
+def cmd_set(number: int, field: str, value: str) -> int:
+    if field not in WRITABLE_FIELDS:
+        die(
+            f'set が書けるのは {"・".join(WRITABLE_FIELDS)} のみ'
+            '（依存は blocked by、そのほかは本文へ）', 2,
+        )
+    project_number = discover_project_number()
+    item = _require_item(project_number, number)
+    if field == 'Status':
+        _guard_status_write(project_number, item, number, value)
+    write_single_select_rest(project_number, number, field, value)
+    print(f'#{number} {field}={value}')
+    return 0
+
+
+# ── add（既存の issue を Projects に載せる。冪等） ─────────
+def cmd_add(number: int) -> int:
+    project_number = discover_project_number()
+    item = fetch_write_item(project_number, number)
+    status = item['fields'].get('Status', '') if item.get('found') else ''
+    if item.get('found') and status:
+        print(f'#{number} は既に Projects に載っている（Status={status}・何もしない）')
+        return 0
+    if not item.get('found'):
+        created = rest('GET', f'repos/{REPO}/issues/{number}')
+        issue_id = created.get('id')
+        if not issue_id:
+            die(f'#{number} が実在するか見ること', 1)
+        added = add_item_to_project_rest(project_number, issue_id)
+        # 入れた直後の行は ?q= の検索に出ないことがあるので、
+        # POST の応答の id をそのまま PATCH に使う。"Content already exists" の応答には
+        # id が無いので、そのときだけ ?q= で引く（write_single_select_rest が引く）。
+        item_id = added.get('id')
+    else:
+        print(f'#{number} は載っているが Status が空。入れ直す')
+        item_id = None
+    _require_item(project_number, number)  # 入った・載っているかを確かめる（見つからなければ die）
+    write_single_select_rest(project_number, number, 'Status', PENDING_STATUS, item_id=item_id)
+    return 0
+
+
+# ── start（着手可からだけ進める。`[操作]` は --approved で承認待ちからも） ──
+def cmd_start(number: int, approved: str | None) -> int:
+    project_number = discover_project_number()
+    item = _require_item(project_number, number)
+    _reject_wave_feature(item, number, 'start')
+    if item['blocked_by_open']:
+        blockers = ', '.join(f'#{n}' for n in item['blocked_by_open'])
+        die(f'#{number} には未完了の blocked by がある: {blockers}', 2)
+    status = item['fields'].get('Status', '')
+    if approved is not None:
+        if not has_mark(item['title'], OPERATION_MARK):
+            die(
+                f'#{number} は {OPERATION_MARK} の目印が無いので --approved は使えない。'
+                'ボードで着手可にしてから start すること', 2,
+            )
+        if status not in (READY_STATUS, PENDING_STATUS):
+            die(
+                f'#{number} の Status は「{status or "空"}」で、start --approved は'
+                '着手可・承認待ちからしか進められない', 2,
+            )
+        # item id は最初の副作用（本文への追記）の前に引く。0 件・複数で die しても
+        # 出どころの行が二重に付かない。
+        item_id = rest_item_id(project_number, number)
+        append_body_line(number, item, f'- 出どころ: {approved}')
+        write_single_select_rest(project_number, number, 'Status', IN_PROGRESS_STATUS, item_id=item_id)
+        print(f'#{number} Status={IN_PROGRESS_STATUS}（{OPERATION_MARK}・出どころ: {approved}）')
+        return 0
+    if status != READY_STATUS:
+        die(
+            f'#{number} の Status は「{status or "空"}」で、着手可ではない'
+            f'（{OPERATION_MARK} の task はチャットの承認のあと start --approved <出どころ> を使う）', 2,
+        )
+    write_single_select_rest(project_number, number, 'Status', IN_PROGRESS_STATUS)
+    print(f'#{number} Status={IN_PROGRESS_STATUS}')
+    return 0
+
+
+# ── review（予備。今は Status を書くだけ） ───────────────────────────
+def cmd_review(number: int) -> int:
+    project_number = discover_project_number()
+    item = _require_item(project_number, number)
+    _reject_wave_feature(item, number, 'review')
+    write_single_select_rest(project_number, number, 'Status', REVIEW_STATUS)
+    print(f'#{number} Status={REVIEW_STATUS}')
+    return 0
+
+
+# ── done（`--not-planned <理由>` で不採用として閉じる） ──
+def cmd_done(number: int, not_planned_reason: str | None) -> int:
+    project_number = discover_project_number()
+    item = _require_item(project_number, number)
+    _reject_wave_feature(item, number, 'done')
+    write_single_select_rest(project_number, number, 'Status', DONE_STATUS)
+    if not_planned_reason is not None:
+        rest('POST', f'repos/{REPO}/issues/{number}/comments', {
+            # AI_MARKER を付ける（comments は印の無いコメントをユーザー発言として
+            # 拾う。付けないと AI の不採用理由が誤って拾われる）。
+            'body': f'{AI_MARKER}\n不採用: {not_planned_reason}',
+        })
+        rest('PATCH', f'repos/{REPO}/issues/{number}', {
+            'state': 'closed', 'state_reason': 'not_planned',
+        })
+        print(f'#{number} を not planned で close した（理由: {not_planned_reason}）')
+    else:
+        rest('PATCH', f'repos/{REPO}/issues/{number}', {
+            'state': 'closed', 'state_reason': 'completed',
+        })
+        print(f'#{number} を close した')
+    return 0
+
+
+# ── reopen（開き直しと Status の変更を同時に行う） ───────────────
+def cmd_reopen(number: int, status: str) -> int:
+    """reopen は CLOSED の issue だけを受け付け、Status の書き込みは set と同じ
+    _guard_status_write を通す。"""
+    if status not in ALL_STATUSES:
+        die(f'Status は次のいずれか: {"/".join(ALL_STATUSES)}', 2)
+    project_number = discover_project_number()
+    item = _require_item(project_number, number)
+    if item.get('state') != 'CLOSED':
+        die(
+            f'#{number} は既に開いている（state={item.get("state")}）。'
+            'reopen は閉じている issue だけを開き直す', 2,
+        )
+    _guard_status_write(project_number, item, number, status)
+    item_id = rest_item_id(project_number, number)  # state の PATCH の前に引く（半端に書かない）
+    rest('PATCH', f'repos/{REPO}/issues/{number}', {'state': 'open'})
+    write_single_select_rest(project_number, number, 'Status', status, item_id=item_id)
+    print(f'#{number} を開き直し、Status={status} にした')
+    return 0
+
+
+# ── new（REST でいちから作る） ─────────────────────────
+_APPROVED_AT_RE = re.compile(r'^approved_at:\s*(\d{4}-\d{2}-\d{2})', re.MULTILINE)
+# 日付の前に強調（`**`）が付く書き方を許す。
+_APPROVED_TABLE_RE = re.compile(r'^\|\s*approved\s*\|\s*\**\s*(\d{4}-\d{2}-\d{2})', re.MULTILINE)
+
+
+def draft_approved_at(path: str) -> str | None:
+    """draft の承認は、frontmatter の `approved_at:` と、表の `| approved |` の
+    2 つの形で読む。"""
+    try:
+        with open(path, encoding='utf-8') as f:
+            text = f.read()
+    except OSError as exc:
+        die(f'{path} を読めなかった: {exc}', 2)
+    match = _APPROVED_AT_RE.search(text) or _APPROVED_TABLE_RE.search(text)
+    return match.group(1) if match else None
+
+
+def create_issue(title: str, body: str, *, label_bug: bool = False, milestone: int | None = None) -> dict:
+    payload: dict = {'title': title, 'body': body}
+    if label_bug:
+        payload['labels'] = ['bug']
+    if milestone is not None:
+        payload['milestone'] = milestone
+    return rest('POST', f'repos/{REPO}/issues', payload)
+
+
+def attach_sub_issue(parent_number: int, sub_issue_id: int) -> None:
+    """sub_issues への付与が失敗しても、既に同じ親の子であることを示す応答だけは
+    成功として扱う。'already'・'exist' の部分一致だけだと無関係な失敗（例えば
+    「既に閉じていて sub-issue を受け付けない」のような、'already' と 'sub-issue'
+    がどちらも混ざるが意味は違う文言）まで握り潰すので、"already a sub-issue" の
+    連続した句だけを許す。"""
+    result = rest(
+        'POST', f'repos/{REPO}/issues/{parent_number}/sub_issues',
+        {'sub_issue_id': sub_issue_id}, ok_fail=True,
+    )
+    error = result.get('_error')
+    if error and 'already a sub-issue' not in error.lower():
+        die(f'#{parent_number} への sub_issue の付与に失敗した: {error}', 1)
+
+
+def add_item_to_project_rest(project_number: int, issue_id: int) -> dict:
+    """親なしの issue を Project に入れる（REST）。
+    owner の種類（organization/user）で orgs/・users/ を切り替える。"Content already exists"（item-add 自身の応答）は
+    成功として扱う。"""
+    result = rest('POST', project_items_rest_path(project_number), {
+        'type': 'Issue', 'id': issue_id,
+    }, ok_fail=True)
+    error = result.get('_error')
+    if error and 'already exists' not in error.lower():
+        die(f'#{project_number} への Project への追加に失敗した: {error}', 1)
+    return result
+
+
+def add_blocked_by(number: int, blocker_number: int) -> None:
+    blocker = rest('GET', f'repos/{REPO}/issues/{blocker_number}')
+    blocker_id = blocker.get('id')
+    if not blocker_id:
+        die(f'#{blocker_number} の id を引けなかった', 1)
+    rest('POST', f'repos/{REPO}/issues/{number}/dependencies/blocked_by', {
+        'issue_id': blocker_id,
+    })
+
+
+def warn_if_too_many_children(parent_number: int) -> None:
+    """親の子が上限 100 件に届く前（90 件を超えたとき）に警告する。"""
+    parent = rest('GET', f'repos/{REPO}/issues/{parent_number}')
+    total = (parent.get('sub_issues_summary') or {}).get('total')
+    if isinstance(total, int) and total > 90:
+        print(f'  警告: #{parent_number} の子が {total} 件（上限 100 に近い。分けを検討すること）')
+
+
+def maybe_clear_inherited_milestone(number: int, explicit_milestone: int | None) -> None:
+    """親から Milestone を継いでいれば外す（実測では継がないが、入れても害はない）。"""
+    if explicit_milestone is not None:
+        return
+    current = rest('GET', f'repos/{REPO}/issues/{number}')
+    if current.get('milestone'):
+        rest('PATCH', f'repos/{REPO}/issues/{number}', {'milestone': None})
+
+
+def append_body_line(number: int, item: dict, line: str) -> None:
+    body = item.get('body') or ''
+    new_body = (body.rstrip('\n') + '\n' if body else '') + line + '\n'
+    rest('PATCH', f'repos/{REPO}/issues/{number}', {'body': new_body})
+
+
+# selftest から time.sleep を差し替えられるようにする（実の待ち時間を持たせずに
+# ポーリングの経路そのものを検査するため）。
+sleep_fn = time.sleep
+
+
+def wait_for_item_status(project_number: int, number: int, *, attempts: int = 30, delay: float = 2.0) -> dict:
+    """Item added の反映を待つ（足して約 1 秒で走ることがある。既定は 30 回・
+    最大 60 秒）。"""
+    item = fetch_write_item(project_number, number)
+    for _ in range(attempts):
+        if item.get('found') and item['fields'].get('Status'):
+            return item
+        sleep_fn(delay)
+        item = fetch_write_item(project_number, number)
+    return item
+
+
+_NEW_KIND_OPTIONS = ('task', 'feature', 'wave', DESIGN_MEMO_KIND)
+_KINDS_WITH_PARENT = ('task', 'feature')  # 親が必須（task は feature、feature は wave）。
+_KINDS_WITHOUT_PARENT = ('wave', DESIGN_MEMO_KIND)
+
+# wave の issue の本文の節（先頭の wave などに、まだ作っていない wave を書いておく）。
+# new が wave を作れるのは、この節に書いてあるものだけ（一覧はこの道具に埋め込まない）。
+# 書式は次の 1 行 1 件:
+#   ## まだ作っていない wave
+#   - P3 基盤の部品・着手順 4・blocked by P1・目的と条件…
+# 名前は最初の「・」まで。blocked by は `#<番号>` か wave の短い ID（`P1`）を、
+# 「,」「、」で並べる。
+UNBUILT_WAVES_HEADING = 'まだ作っていない wave'
+_HEADING_RE = re.compile(r'^\s{0,3}#{1,6}\s+(.*)$')
+_BLOCKER_TOKEN = r'(?:#\d+|[A-Za-z]+\d+)'
+_BLOCKED_BY_RE = re.compile(
+    rf'blocked by\s*[:：]?\s*({_BLOCKER_TOKEN}(?:\s*[,、，]\s*{_BLOCKER_TOKEN})*)'
+)
+
+
+def parse_unbuilt_waves(body: str) -> list[dict]:
+    """wave の本文の「まだ作っていない wave」の節から、{name, blockers} の一覧を返す
+    （blockers は `#12` か `P1` の文字列のまま。番号への解決は呼び出し側）。"""
+    entries: list[dict] = []
+    in_section = False
+    for line in (body or '').splitlines():
+        heading = _HEADING_RE.match(line)
+        if heading:
+            in_section = UNBUILT_WAVES_HEADING in heading.group(1)
+            continue
+        if not in_section:
+            continue
+        stripped = line.strip()
+        if not stripped.startswith(('- ', '* ')):
+            continue
+        text = stripped[2:].strip()
+        name = text.split('・')[0].strip()
+        if not name:
+            continue
+        match = _BLOCKED_BY_RE.search(text)
+        tokens = re.findall(_BLOCKER_TOKEN, match.group(1)) if match else []
+        entries.append({'name': name, 'blockers': tokens})
+    return entries
+
+
+def _normalize_name(text: str) -> str:
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def find_unbuilt_wave(items: list[dict], bodies: dict[int, str], title: str) -> dict:
+    """title が「まだ作っていない wave」の節にあるものかを引く。無ければ exit 2
+    （wave を勝手に作らない）。blockers は wave issue の番号へ解決して返す。"""
+    waves = [i for i in items if i.get('kind') == WAVE_KIND and i.get('number') is not None]
+    wanted = _normalize_name(title)
+    wanted_code = _wave_code_of(wanted)
+    for existing in waves:
+        existing_title = _normalize_name(existing.get('title') or '')
+        existing_code = _wave_code_of(existing_title)
+        if existing_title == wanted or (wanted_code and existing_code == wanted_code):
+            die(
+                f'wave「{title}」は #{existing["number"]} で作成済み'
+                '（節は作ったあとも元の wave の本文に残る。2 本目は作らない）', 2,
+            )
+    for wave in waves:
+        for entry in parse_unbuilt_waves(bodies.get(wave['number'], '')):
+            name = _normalize_name(entry['name'])
+            code = _wave_code_of(name)
+            if name != wanted and not (code and code == wanted_code):
+                continue
+            numbers: list[int] = []
+            for token in entry['blockers']:
+                if token.startswith('#'):
+                    numbers.append(int(token[1:]))
+                    continue
+                target = next(
+                    (w['number'] for w in waves if _wave_code_of(w.get('title') or '') == token),
+                    None,
+                )
+                if target is None:
+                    die(f'blocked by {token} に当たる wave が見つからない（#{wave["number"]} の節）', 2)
+                numbers.append(target)
+            return {'name': entry['name'], 'blockers': numbers, 'source': wave['number']}
+    die(
+        f'wave「{title}」は、どの wave の本文の「{UNBUILT_WAVES_HEADING}」の節にも無い。'
+        '節に無い wave は作らない', 2,
+    )
+
+
+def _validate_parent(project_number: int, parent_number: int, kind: str) -> dict:
+    """--parent の実在と、種別の親子関係（task の親は feature、feature の親は wave）を、
+    issue を作る前に確かめる（同じ feature の子として task を分ける。task の下には
+    子を作らない）。種別の項目がまだ無いときは親子関係の検査を飛ばす。"""
+    parent = fetch_write_item(project_number, parent_number)
+    if not parent.get('found'):
+        die(f'#{parent_number} は Projects に載っていない（親に指定できない）', 1)
+    if kind in _KINDS_WITH_PARENT and field_exists(project_number, KIND_FIELD):
+        parent_kind = parent['fields'].get(KIND_FIELD, '')
+        expected = 'feature' if kind == 'task' else 'wave'
+        if parent_kind != expected:
+            die(
+                f'#{parent_number} の種別は「{parent_kind or "空"}」で、'
+                f'種別={kind} の親は {expected} に限る'
+                '（同じ feature の子として task を分ける。子 issue には割らない）', 2,
+            )
+    return parent
+
+
+def cmd_new(argv: list[str]) -> int:
+    opts = _parse_new_args(argv)
+    kind = opts.get('kind') or TASK_KIND
+    # 値と親を、issue を作る前に確かめる（途中で止まると半端な issue が残るため。
+    # ここまでは REST の POST を 1 つも呼ばない）。
+    if kind not in _NEW_KIND_OPTIONS:
+        die(f'種別は {"/".join(_NEW_KIND_OPTIONS)} のいずれか（受け取った値: {kind}）', 2)
+    if kind in _KINDS_WITH_PARENT and opts.get('parent') is None:
+        expected = 'feature' if kind == 'task' else 'wave'
+        hint = (
+            '親の feature が無ければ、先に `new <題名> --kind feature --parent <wave>` で作る'
+            if kind == 'task' else '親の wave が無ければ、wave の本文の節にあるものだけ `new --kind wave` で作る'
+        )
+        die(f'種別 {kind} の issue には --parent <{expected} の番号> が要る。{hint}', 2)
+    if kind in _KINDS_WITHOUT_PARENT and opts.get('parent') is not None:
+        die(f'種別 {kind} の issue は親を持たない（--parent は渡せない）', 2)
+    if opts.get('milestone') is not None and kind != 'feature':
+        die('--milestone は種別 feature の issue にだけ渡せる', 2)
+    if opts.get('from_draft'):
+        approved = draft_approved_at(opts['from_draft'])
+        if not approved:
+            die(f"{opts['from_draft']} は未承認（approved_at か表の | approved | に日付が無い）", 2)
+
+    project_number = discover_project_number()
+    if field_exists(project_number, KIND_FIELD):
+        option_id(project_number, KIND_FIELD, kind)  # 値の実在を先に確かめる
+
+    blocked_by = list(opts.get('blocked_by') or [])
+    if kind == WAVE_KIND:
+        # 節に無い wave は作らない。blocked by の解決も、作る前に済ませる。
+        items = fetch_all_items(project_number)
+        wave_numbers = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
+        entry = find_unbuilt_wave(items, fetch_bodies(wave_numbers), opts['title'])
+        blocked_by = blocked_by + [n for n in entry['blockers'] if n not in blocked_by]
+
+    body = opts.get('body') or ''
+    if opts.get('body_file'):
+        with open(opts['body_file'], encoding='utf-8') as f:
+            body = f.read()
+
+    parent_number = opts.get('parent')
+    if parent_number is not None:
+        parent = _validate_parent(project_number, parent_number, kind)
+        if parent['fields'].get('Status') == READY_STATUS:
+            # 親の feature が既に着手可なら、最初の本文に書いておく（作った
+            # あとで PATCH するより、読み直しと書き込みが 1 回分減る）。
+            now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+            body = (body.rstrip('\n') + '\n' if body else '') + f'- 後から追加: {now}\n'
+
+    created = create_issue(
+        opts['title'], body,
+        label_bug=opts.get('label_bug', False),
+        milestone=opts.get('milestone'),
+    )
+    number = created['number']
+    print(f"#{number} {opts['title']}")
+
+    if parent_number is not None:
+        attach_sub_issue(parent_number, created['id'])
+        warn_if_too_many_children(parent_number)
+    else:
+        add_item_to_project_rest(project_number, created['id'])
+
+    item = wait_for_item_status(project_number, number)
+    if not item.get('found'):
+        die(f'#{number} を作ったが Projects に見つからない', 1)
+    if kind == WAVE_KIND:
+        # wave は Status を使わない。Item added が入れた値を消す。
+        if item['fields'].get('Status'):
+            clear_field_value(project_number, item['id'], 'Status')
+            item['fields']['Status'] = ''
+    elif not item['fields'].get('Status'):
+        write_single_select(project_number, item['id'], 'Status', PENDING_STATUS)
+        print('  Item added の反映が無いため、承認待ちを自分で書いた')
+        item['fields']['Status'] = PENDING_STATUS
+
+    if kind == DESIGN_MEMO_KIND and item['fields'].get('Status') != HOLD_STATUS:
+        # 設計メモは Status：保留 で持つ。
+        # Item added が付ける値（承認待ち相当）を、待って確定させたあとで上書きする。
+        write_single_select(project_number, item['id'], 'Status', HOLD_STATUS)
+        item['fields']['Status'] = HOLD_STATUS
+
+    if field_exists(project_number, KIND_FIELD):
+        write_single_select(project_number, item['id'], KIND_FIELD, kind)
+    else:
+        print(f'  項目「{KIND_FIELD}」が無いため種別を書かなかった（orphans に出る）')
+
+    for blocker in blocked_by:
+        add_blocked_by(number, blocker)
+
+    maybe_clear_inherited_milestone(number, opts.get('milestone'))
+
+    if kind == 'feature':
+        print(f'  feature #{number} を承認待ちで作った。ボードで着手可にすると、子の task が動く')
+    elif kind == WAVE_KIND:
+        print(f'  wave #{number} を作った。並び順をボードで直してください')
+    return 0
+
+
+def _parse_new_args(argv: list[str]) -> dict:
+    if not argv:
+        die('使い方: hirai-task new <title> --parent N [--kind task|feature|wave|設計メモ] '
+            '[--body テキスト] [--body-file パス] [--blocked-by N,N,...] '
+            '[--label-bug] [--from-draft パス] [--milestone N]', 2)
+    opts: dict = {'title': argv[0]}
+    rest_args = argv[1:]
+    i = 0
+    while i < len(rest_args):
+        a = rest_args[i]
+
+        def _next() -> str:
+            nonlocal i
+            i += 1
+            if i >= len(rest_args):
+                die(f'{a} には値が要る', 2)
+            return rest_args[i]
+
+        if a == '--parent':
+            opts['parent'] = _int_arg(_next())
+        elif a == '--kind':
+            opts['kind'] = _next()
+        elif a == '--body':
+            opts['body'] = _next()
+        elif a == '--body-file':
+            opts['body_file'] = _next()
+        elif a == '--blocked-by':
+            opts['blocked_by'] = [_int_arg(x) for x in _next().split(',') if x]
+        elif a == '--label-bug':
+            opts['label_bug'] = True
+        elif a == '--from-draft':
+            opts['from_draft'] = _next()
+        elif a == '--milestone':
+            opts['milestone'] = _int_arg(_next())
+        elif a == '--gate':
+            die('--gate は無い（着手の前に済ませる番号は本文と blocked by へ）', 2)
+        else:
+            die(f'未知の引数: {a}', 2)
+        i += 1
+    return opts
+
+
+def _int_arg(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        die(f'数字で書くこと（受け取った値: {value}）', 2)
+
+
+# ═══ 会話の最初と merge の直後の仕事 ═══════════════════════════
+# comments / close-parents / unblocked / align / today / after-merge
+# （--json の形と書き込みの許可はモジュール docstring を見ること）。
+
+def _board_index(items: list[dict]) -> tuple[dict[int, dict], dict[int, list[int]]]:
+    """number→item と、number→直下の子の番号一覧、の 2 つの索引を作る（align・
+    close-parents・unblocked・wave-holds が共通で使う）。"""
+    items_by_number = {i['number']: i for i in items if i.get('number') is not None}
+    children_of: dict[int, list[int]] = {}
+    for i in items:
+        parent = i.get('parent_number')
+        if parent is not None:
+            children_of.setdefault(parent, []).append(i['number'])
+    return items_by_number, children_of
+
+
+def _ancestor_number_of_kind(
+    number: int, items_by_number: dict[int, dict], kind: str, *, max_depth: int = 6,
+) -> int | None:
+    """number から親をたどり、種別が kind の祖先の番号を返す（無ければ None）。
+    ready_sort_key の _wave_ancestor_position と同じ考え方だが、並びの位置でなく
+    番号そのものを返す（align・unblocked が「先祖の wave」を特定するため）。"""
+    seen: set[int] = set()
+    current = (items_by_number.get(number) or {}).get('parent_number')
+    depth = 0
+    while current is not None and current not in seen and depth < max_depth:
+        item = items_by_number.get(current)
+        if item is None:
+            return None
+        if item.get('kind') == kind:
+            return current
+        seen.add(current)
+        current = item.get('parent_number')
+        depth += 1
+    return None
+
+
+def _descendants(
+    number: int, children_of: dict[int, list[int]], items_by_number: dict[int, dict],
+) -> list[dict]:
+    """number の子孫（子・孫・…）を全部集める（完了・保留以外の子孫）。"""
+    result: list[dict] = []
+    stack = list(children_of.get(number, []))
+    seen: set[int] = set()
+    while stack:
+        n = stack.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        item = items_by_number.get(n)
+        if item is None:
+            continue
+        result.append(item)
+        stack.extend(children_of.get(n, []))
+    return result
+
+
+def wave_has_exited(
+    wave_number: int, items_by_number: dict[int, dict], children_of: dict[int, list[int]],
+    bodies: dict[int, str],
+) -> tuple[bool, bool]:
+    """(子の条件を満たすか, 出る条件のコマンドの行があるか) を返す。両方 True の
+    ときだけ、この wave は「出た」（後続の wave・feature・task が進んでよい）。子の条件
+    だけ満たしたものは today の wave-holds に出す（1 つ目だけ True・2 つ目 False）。
+    子孫が 0 件（子がまだ 1 件も居ない新しい wave）は、子の条件を満たしたとは数えない。"""
+    descendants = _descendants(wave_number, children_of, items_by_number)
+    non_done = [
+        d for d in descendants if (d.get('status') or '') not in (DONE_STATUS, HOLD_STATUS)
+    ]
+    children_condition_met = len(descendants) > 0 and len(non_done) == 0
+    has_command_line = bool(_EXIT_LINE_RE.search(bodies.get(wave_number, '') or ''))
+    return children_condition_met, has_command_line
+
+
+def _blocking_wave_numbers(
+    wave_number: int, items_by_number: dict[int, dict], extras: dict[int, dict],
+) -> list[int]:
+    """wave_number を止めている（種別が wave の）番号だけを返す（wave 同士の止める依存）。
+    open/closed を問わない blocked_by_numbers を使う。"""
+    extra = extras.get(wave_number) or {}
+    blockers = extra.get('blocked_by_numbers')
+    if blockers is None:
+        blockers = extra.get('blocked_by_open_numbers') or []
+    return [n for n in blockers if (items_by_number.get(n) or {}).get('kind') == WAVE_KIND]
+
+
+def preceding_wave_unresolved(
+    wave_number: int, items_by_number: dict[int, dict], children_of: dict[int, list[int]],
+    bodies: dict[int, str], extras: dict[int, dict],
+) -> bool:
+    """「先の wave が未了」。wave_number を止めている wave が 1 つでも「出た」を満たさなければ
+    True（閉じた wave でも、行が無ければ「出た」を満たさない）。
+    止める wave が無ければ False。"""
+    for blocker in _blocking_wave_numbers(wave_number, items_by_number, extras):
+        met, has_line = wave_has_exited(blocker, items_by_number, children_of, bodies)
+        if not (met and has_line):
+            return True
+    return False
+
+
+# ── align の「初めて着手可と見た子の一覧」（時刻の比較は使わない。比べる相手の
+#    「feature が着手可になった時刻」を確実に読む経路が無いため） ────────────
+ALIGN_SEEN_CACHE = os.path.join(_shared_state_dir(), 'gh-align-seen.json')
+
+
+def _align_seen_namespace(project_number: int) -> str:
+    return f'{REPO}#{project_number}'
+
+
+def align_plan(
+    items: list[dict], extras: dict[int, dict], bodies: dict[int, str],
+    *, seen_store: dict[str, list[int]] | None = None, project_number: int | None = None,
+) -> dict:
+    """着手可の feature ごとに、承認待ち・着手可の子の移動先を計算する（書き込みはしない）。
+    戻り値は --json と同じ形（モジュール docstring）。seen_store を渡さなければ
+    ALIGN_SEEN_CACHE の `<repo>#<project番号>` の名前空間を読み書きする（project_number
+    が要る）。selftest は空の辞書を渡し、実ファイルに触れずに「初めて見た時点の子」を
+    検査する（渡した辞書はその場で更新される）。
+
+    着手可の子は、ブロックされて
+    いなければ何もしない（着手可→着手可は出さない）。目印・後から追加・baseline 外の
+    子は、着手可の子でも動かさず skipped へ回す。feature 自身の未完了の blocked by
+    も、子を依存待ちへ動かす条件に含める。"""
+    items_by_number, children_of = _board_index(items)
+    persist = seen_store is None
+    namespace = _align_seen_namespace(project_number) if persist and project_number is not None else None
+    if persist and namespace is None:
+        die('align_plan: 控えを保存するには project_number が要る', 1)
+    seen = _load_namespaced(ALIGN_SEEN_CACHE, namespace) if persist else seen_store
+    dirty = False
+    plans = []
+    for feature in items:
+        if feature.get('kind') != FEATURE_KIND or feature.get('status') != READY_STATUS:
+            continue
+        fnum = feature['number']
+        key = str(fnum)
+        if key not in seen:
+            seen[key] = list(children_of.get(fnum, []))
+            dirty = True
+        baseline = set(seen.get(key) or [])
+        feature_extra = extras.get(fnum) or {}
+        feature_blocked = feature_extra.get('blocked_by_open', 0) > 0
+        wave_ancestor = _ancestor_number_of_kind(fnum, items_by_number, WAVE_KIND)
+        wave_unresolved = wave_ancestor is not None and preceding_wave_unresolved(
+            wave_ancestor, items_by_number, children_of, bodies, extras,
+        )
+        moves: list[dict] = []
+        skipped: list[int] = []
+        for cnum in children_of.get(fnum, []):
+            child = items_by_number.get(cnum)
+            if child is None:
+                continue
+            status = child.get('status')
+            if status not in (PENDING_STATUS, READY_STATUS):
+                continue
+            if has_mark(child.get('title') or ''):
+                skipped.append(cnum)
+                continue
+            if LATE_ADD_PREFIX in (bodies.get(cnum) or ''):
+                skipped.append(cnum)
+                continue
+            if cnum not in baseline:
+                skipped.append(cnum)
+                continue
+            child_extra = extras.get(cnum) or {}
+            blocked = feature_blocked or child_extra.get('blocked_by_open', 0) > 0 or wave_unresolved
+            if status == READY_STATUS:
+                if blocked:
+                    moves.append({'number': cnum, 'to': DEP_STATUS, 'from': READY_STATUS})
+                continue
+            target = DEP_STATUS if blocked else READY_STATUS
+            moves.append({'number': cnum, 'to': target, 'from': PENDING_STATUS})
+        if moves or skipped:
+            plans.append({'feature': fnum, 'moves': moves, 'skipped': skipped})
+    if dirty and persist:
+        _save_namespaced(ALIGN_SEEN_CACHE, namespace, seen)
+    return {'align': plans}
+
+
+def fetch_sub_issues_summaries(numbers: list[int]) -> dict[int, dict]:
+    """close-parents の「直下の子が 1 件以上・全部閉じた」を見るための sub_issues_summary
+    を、REST で 1 件ずつ引く（対象は open の feature・wave だけなので、通常は数十件以下）。"""
+    return {n: rest('GET', f'repos/{REPO}/issues/{n}').get('sub_issues_summary') or {} for n in numbers}
+
+
+def close_parents_plan(
+    items: list[dict], bodies: dict[int, str], summaries: dict[int, dict],
+) -> dict:
+    """閉じる候補の feature・wave を計算する（書き込みはしない・純粋関数）。子の数は
+    summaries（呼び出し側が fetch_sub_issues_summaries で先に引く）で見る
+    （直下の子が 1 件以上・全部閉じた）。wave は、さらに「出る
+    条件のコマンド」の行が本文に無ければ閉じない。"""
+    candidates = []
+    for i in items:
+        kind = i.get('kind')
+        if kind not in (WAVE_KIND, FEATURE_KIND) or i.get('state') != 'OPEN':
+            continue
+        body = bodies.get(i['number']) or ''
+        if kind == WAVE_KIND:
+            if PERMANENT_MARK in body:
+                continue
+            if not _EXIT_LINE_RE.search(body):
+                continue
+        summary = summaries.get(i['number']) or {}
+        total = summary.get('total', 0)
+        completed = summary.get('completed', 0)
+        if isinstance(total, int) and total >= 1 and completed == total:
+            candidates.append({'number': i['number'], 'kind': kind, 'children_total': total})
+    return {'close_parents': candidates}
+
+
+def unblocked_rows(items: list[dict], extras: dict[int, dict], bodies: dict[int, str]) -> list[dict]:
+    """依存待ちの task のうち、依存が解けたものを一覧にする。
+    一覧を出すだけで、ここでは書かない。目印つき（`[操作]`・`[User]`）の task は
+    set では戻せない（set が承認待ち→着手可の目印つきを断る）ので、set_status
+    の代わりに注記を出す。親の種別が feature でない（wave 直下・親なしなど）ときも、
+    どの Status に戻すべきかを機械的に決めないで注記する。"""
+    items_by_number, children_of = _board_index(items)
+    rows = []
+    for i in task_items(items):
+        if i.get('status') != DEP_STATUS:
+            continue
+        number = i['number']
+        extra = extras.get(number) or {}
+        if extra.get('blocked_by_open', 0) > 0:
+            continue
+        parent_number = i.get('parent_number')
+        target_status = READY_STATUS
+        parent_is_feature = True
+        wave_ancestor = None
+        if parent_number is not None:
+            parent = items_by_number.get(parent_number)
+            if parent is None:
+                continue
+            parent_extra = extras.get(parent_number) or {}
+            if parent_extra.get('blocked_by_open', 0) > 0:
+                continue
+            parent_is_feature = parent.get('kind') == FEATURE_KIND
+            if parent_is_feature:
+                target_status = parent.get('status') or READY_STATUS
+            wave_ancestor = _ancestor_number_of_kind(parent_number, items_by_number, WAVE_KIND)
+        else:
+            wave_ancestor = _ancestor_number_of_kind(number, items_by_number, WAVE_KIND)
+        if wave_ancestor is not None and preceding_wave_unresolved(
+            wave_ancestor, items_by_number, children_of, bodies, extras,
+        ):
+            continue
+        title = i.get('title', '')
+        if has_mark(title):
+            rows.append({
+                'number': number, 'title': title, 'set_status': None,
+                'note': 'start --approved が要る（目印つきの task は set で着手可にしない）',
+            })
+        elif not parent_is_feature:
+            rows.append({
+                'number': number, 'title': title, 'set_status': None,
+                'note': '親が feature ではないため、戻す Status は人が判断する',
+            })
+        else:
+            rows.append({'number': number, 'title': title, 'set_status': target_status})
+    return rows
+
+
+# ── 書き込みの許可（「today は書かない」の目印が open の間だけは一覧だけ） ──────
+def _open_issue_numbers(items: list[dict]) -> list[int]:
+    return [
+        i['number'] for i in items
+        if i.get('type') == 'Issue' and i.get('state') == 'OPEN' and i.get('number') is not None
+    ]
+
+
+def no_today_marker_open(items: list[dict]) -> bool:
+    """open の issue の本文のどれかに「- today は書かない: はい」があるあいだ、
+    align・close-parents は一覧だけにする。題名で絞らず
+    open の issue 全体を見る。"""
+    numbers = _open_issue_numbers(items)
+    if not numbers:
+        return False
+    bodies = fetch_bodies(numbers)
+    return any(NO_TODAY_MARK in (body or '') for body in bodies.values())
+
+
+def align_write_allowed(items: list[dict]) -> bool:
+    return MIGRATION_ALIGN_WRITE_ENABLED and not no_today_marker_open(items)
+
+
+# ── 書き込みの実行（journal に 1 件ずつ残し、8.5 秒おき） ─────────
+JOURNAL_PATH = os.path.join(_local_state_dir(), 'gh-task-journal.jsonl')
+
+
+def _append_journal(entry: dict) -> None:
+    os.makedirs(os.path.dirname(JOURNAL_PATH), exist_ok=True)
+    record = dict(entry)
+    record['at'] = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    with open(JOURNAL_PATH, 'a', encoding='utf-8') as f:
+        f.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+
+def _apply_align_plan(project_number: int, plan: dict) -> None:
+    """計画を書く。書く直前に今の Status を読み、計画を作った時点の from と一致する
+    ときだけ書く。一致しない分は飛ばして知らせる。"""
+    for feature_plan in plan.get('align') or []:
+        moves = feature_plan.get('moves') or []
+        if not moves:
+            continue
+        lines = []
+        for move in moves:
+            number, to, frm = move['number'], move['to'], move.get('from')
+            item = _require_item(project_number, number)
+            current = item['fields'].get('Status', '')
+            if frm is not None and current != frm:
+                lines.append(f'- #{number} は今 {current or "空"} で、想定（{frm}）と違うため飛ばした')
+                continue
+            write_single_select_rest(project_number, number, 'Status', to)
+            _append_journal({
+                'op': 'align', 'number': number, 'to': to, 'from': frm,
+                'repo': REPO, 'project': project_number,
+            })
+            lines.append(f'- #{number} を {to} にした')
+            sleep_fn(_WRITE_INTERVAL_SECONDS)
+        rest('POST', f"repos/{REPO}/issues/{feature_plan['feature']}/comments", {
+            # API の書き込みは issue 自身の timeline に残らないため、代わりに
+            # feature へ 1 行コメントを残す（そろえた子の一覧）。
+            'body': AI_MARKER + '\nalign:\n' + '\n'.join(lines),
+        })
+
+
+def _apply_close_parents_plan(plan: dict, project_number: int) -> None:
+    for c in plan.get('close_parents') or []:
+        rest('PATCH', f"repos/{REPO}/issues/{c['number']}", {
+            'state': 'closed', 'state_reason': 'completed',
+        })
+        _append_journal({
+            'op': 'close-parents', 'number': c['number'], 'repo': REPO, 'project': project_number,
+        })
+        sleep_fn(_WRITE_INTERVAL_SECONDS)
+
+
+# ── today の警告行（書き込まない・単独の一覧スクリプトにしない） ────
+def orphan_rows(items: list[dict]) -> list[dict]:
+    """orphans: OPEN の行だけを見る。種別が空の行・種別が task・feature
+    で親なしの行（wave・設計メモの親なしは数えない）。"Project に居ない" 分は
+    repo_only_issue_numbers() で見る。"""
+    rows = []
+    for i in items:
+        if i.get('type') != 'Issue' or i.get('state') != 'OPEN':
+            continue
+        kind = i.get('kind') or ''
+        if not kind:
+            rows.append({'number': i['number'], 'title': i.get('title', ''), 'why': '種別なし'})
+            continue
+        if kind in ('task', FEATURE_KIND) and i.get('parent_number') is None:
+            rows.append({'number': i['number'], 'title': i.get('title', ''), 'why': '親なし'})
+    return rows
+
+
+def repo_only_issue_numbers(items: list[dict]) -> list[int]:
+    """repo には open で居るが Project の items に無い issue（orphans の「Project に
+    居ない」分）。CLOSED は比べない。REST の open issue
+    一覧を頁送りで全部読み、Project の open の番号と比べる。"""
+    project_open_numbers = {
+        i['number'] for i in items
+        if i.get('type') == 'Issue' and i.get('state') == 'OPEN' and i.get('number') is not None
+    }
+    open_numbers = set()
+    for issue in rest_paginated(f'repos/{REPO}/issues?state=open&per_page=100'):
+        if 'pull_request' in issue:
+            continue
+        number = issue.get('number')
+        if number is not None:
+            open_numbers.add(number)
+    return sorted(open_numbers - project_open_numbers)
+
+
+def stuck_rows(items: list[dict], extras: dict[int, dict]) -> list[str]:
+    """stuck（ready_warnings の 3 種 ＋「着手可なのに親の feature が承認待ち」）。"""
+    lines = list(ready_warnings(items, extras))
+    items_by_number, _children_of = _board_index(items)
+    for i in task_items(items):
+        if i.get('status') != READY_STATUS:
+            continue
+        parent_number = i.get('parent_number')
+        if parent_number is None:
+            continue
+        parent = items_by_number.get(parent_number)
+        if parent and parent.get('status') == PENDING_STATUS:
+            lines.append(
+                f"  着手可なのに親の feature が承認待ち: #{i['number']} "
+                f"{(i.get('title') or '')[:50]}（親 #{parent_number}）"
+            )
+    return lines
+
+
+def wave_hold_rows(items: list[dict], bodies: dict[int, str]) -> list[str]:
+    """wave-holds: OPEN の wave だけを見る（閉じた wave・子が 0 件の新しい
+    wave は対象にしない）。子の条件は満たしたが、出る条件のコマンドの
+    行が無い wave。"""
+    items_by_number, children_of = _board_index(items)
+    lines = []
+    for i in items:
+        if i.get('kind') != WAVE_KIND or i.get('state') != 'OPEN':
+            continue
+        met, has_line = wave_has_exited(i['number'], items_by_number, children_of, bodies)
+        if met and not has_line:
+            lines.append(
+                f"  出る条件のコマンドの行が無い: #{i['number']} {(i.get('title') or '')[:50]}"
+                '（子の条件は満たしている。コマンドを回して本文に行を書くこと）'
+            )
+    return lines
+
+
+def user_action_rows(items: list[dict]) -> list[dict]:
+    """open の `[User]` の task を番号で出す（ready・align から外した分の見え先。
+    着手可の feature の子に限らず、open の全域を対象にする）。"""
+    return [
+        {'number': i['number'], 'title': i.get('title', '')}
+        for i in items
+        if i.get('type') == 'Issue' and i.get('state') == 'OPEN' and has_mark(i.get('title') or '', USER_MARK)
+    ]
+
+
+_MERGED_DESIGNS_LOOKBACK_DAYS = 7
+# checkout をまたいで共有する置き場所。キーは REPO で分ける。
+MERGED_DESIGNS_SINCE_CACHE = os.path.join(_shared_state_dir(), 'gh-merged-designs-since.json')
+COMMENTS_SINCE_CACHE = os.path.join(_shared_state_dir(), 'gh-comments-since.json')
+# since の控えが無いとき（初回・checkout を初めて使うとき）に遡る既定の長さ。
+# 会話の間が空いても取りこぼさないよう、24 時間ではなく 7 日遡る。
+_COMMENTS_FALLBACK_LOOKBACK_DAYS = 7
+
+
+def _load_since_cache(path: str, namespace: str) -> str | None:
+    return _load_namespaced(path, namespace).get('since')
+
+
+def _save_since_cache(path: str, namespace: str, value: str) -> None:
+    _save_namespaced(path, namespace, {'since': value})
+
+
+def merged_design_rows(since: str | None) -> tuple[list[dict], str]:
+    """merged-designs: main へ merge された、本文に DESIGN_PR_MARKER の印が
+    ある PR のうち since 以降のもの。簡易版（直近の closed PR 100 件までを見る。
+    「起票済みか」までは判定しない。診断のための一覧で、判断は人が行う）。"""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    query_since = since or (
+        now - datetime.timedelta(days=_MERGED_DESIGNS_LOOKBACK_DAYS)
+    ).strftime('%Y-%m-%dT%H:%M:%SZ')
+    rows = []
+    prs = rest('GET', f'repos/{REPO}/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100')
+    for pr in (prs if isinstance(prs, list) else []):
+        merged_at = pr.get('merged_at')
+        if not merged_at or merged_at < query_since:
+            continue
+        if DESIGN_PR_MARKER in (pr.get('body') or ''):
+            rows.append({'number': pr['number'], 'title': pr.get('title', '')})
+    return rows, now.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+# ── comments（REST の since と AI_MARKER で、あなたのコメントだけを拾う） ──
+def _issue_number_from_url(url: str) -> int | None:
+    match = re.search(r'/issues/(\d+)$', url or '')
+    return int(match.group(1)) if match else None
+
+
+def fetch_user_comments(since: str | None) -> tuple[list[dict], str]:
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if since is None:
+        print(
+            f'警告: comments の since の控えが無いので、既定で '
+            f'{_COMMENTS_FALLBACK_LOOKBACK_DAYS} 日前から見る（取りこぼしがありうる）',
+            file=sys.stderr,
+        )
+    query_since = since or (
+        now - datetime.timedelta(days=_COMMENTS_FALLBACK_LOOKBACK_DAYS)
+    ).strftime('%Y-%m-%dT%H:%M:%SZ')
+    comments = rest_paginated(
+        f'repos/{REPO}/issues/comments?since={query_since}&sort=created&direction=asc&per_page=100'
+    )
+    picked = [c for c in comments if AI_MARKER not in (c.get('body') or '')]
+    return picked, now.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+# ── PR の closingIssuesReferences（after-merge が使う。REST に無い GraphQL 専用の
+#    フィールドなので、この読みだけ GraphQL を使う） ──
+CLOSING_REFS_QUERY = '''
+query($owner:String!, $name:String!, $number:Int!) {
+  repository(owner:$owner, name:$name) {
+    pullRequest(number:$number) {
+      closingIssuesReferences(first: 20) { nodes { number } }
+    }
+  }
+}
+'''
+
+
+def fetch_closing_issue_numbers(pr_number: int) -> list[int]:
+    data = graphql(CLOSING_REFS_QUERY, {'owner': OWNER, 'name': REPO_NAME, 'number': pr_number})
+    pr = (data.get('repository') or {}).get('pullRequest')
+    if pr is None:
+        die(f'PR #{pr_number} は見つからない', 1)
+    nodes = (pr.get('closingIssuesReferences') or {}).get('nodes') or []
+    return [n['number'] for n in nodes if n.get('number') is not None]
+
+
+# ── コマンド ─────────────────────────────────────────────────────────
+def cmd_comments() -> int:
+    since = _load_since_cache(COMMENTS_SINCE_CACHE, REPO)
+    picked, new_since = fetch_user_comments(since)
+    _save_since_cache(COMMENTS_SINCE_CACHE, REPO, new_since)
+    if not picked:
+        print('新しいコメントは 0 件')
+        return 0
+    print(f'新しいコメント {len(picked)} 件')
+    for c in picked:
+        number = _issue_number_from_url(c.get('issue_url') or '')
+        author = (c.get('user') or {}).get('login') or '?'
+        first_line = (c.get('body') or '').splitlines()[0] if c.get('body') else ''
+        print(f"  #{number} {author}: {first_line[:80]}")
+    return 0
+
+
+def _print_align_plan(plan: dict) -> None:
+    entries = plan.get('align') or []
+    if not entries:
+        print('そろえる子は 0 件')
+        return
+    for entry in entries:
+        moves = entry.get('moves') or []
+        skipped = entry.get('skipped') or []
+        print(f"feature #{entry['feature']}: 移す {len(moves)} 件・そろえない {len(skipped)} 件")
+        for m in moves:
+            print(f"  #{m['number']:<4} → {m['to']}")
+        for n in skipped:
+            print(f"  #{n:<4}（そろえない）")
+
+
+def _open_parent_candidate_numbers(items: list[dict]) -> list[int]:
+    return [
+        i['number'] for i in items
+        if i.get('kind') in (WAVE_KIND, FEATURE_KIND) and i.get('state') == 'OPEN'
+    ]
+
+
+def cmd_close_parents(as_json: bool = False, *, items: list[dict] | None = None) -> int:
+    project_number = discover_project_number()
+    if items is None:
+        items = fetch_all_items(project_number)
+    wave_numbers = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
+    bodies = fetch_bodies(wave_numbers)
+    summaries = fetch_sub_issues_summaries(_open_parent_candidate_numbers(items))
+    plan = close_parents_plan(items, bodies, summaries)
+    candidates = plan.get('close_parents') or []
+    if as_json:
+        print(json.dumps(plan, ensure_ascii=False))
+    elif not candidates:
+        print('閉じる親は 0 件')
+    else:
+        print(f'閉じる親 {len(candidates)} 件')
+        for c in candidates:
+            print(f"  #{c['number']:<4}（{c['kind']}・子 {c['children_total']} 件）")
+    # --json は dry-run 専用（この JSON を読む一括処理があるとき、書き込みが起きると
+    # 事故になる）。
+    if not as_json and candidates and align_write_allowed(items):
+        _apply_close_parents_plan(plan, project_number)
+    return 0
+
+
+def cmd_align(as_json: bool = False, *, items: list[dict] | None = None) -> int:
+    project_number = discover_project_number()
+    if items is None:
+        items = fetch_all_items(project_number)
+    items_by_number, children_of = _board_index(items)
+    ready_features = {
+        i['number'] for i in items
+        if i.get('kind') == FEATURE_KIND and i.get('status') == READY_STATUS
+    }
+    # 対象は承認待ちだけでなく着手可の子も含む（「着手可の子も同じ」）。
+    # feature 自身の blocked by も見る必要があるので、extras には ready_features も渡す。
+    feature_children = [
+        n for f in ready_features for n in children_of.get(f, [])
+        if (items_by_number.get(n) or {}).get('status') in (PENDING_STATUS, READY_STATUS)
+    ]
+    wave_numbers = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
+    extras = fetch_extras(feature_children + wave_numbers + list(ready_features))
+    bodies = fetch_bodies(feature_children + wave_numbers)
+    plan = align_plan(items, extras, bodies, project_number=project_number)
+    if as_json:
+        print(json.dumps(plan, ensure_ascii=False))
+    else:
+        _print_align_plan(plan)
+    # --json は dry-run 専用（cmd_close_parents と同じ理由）。
+    if not as_json and align_write_allowed(items):
+        _apply_align_plan(project_number, plan)
+    return 0
+
+
+def cmd_unblocked(*, items: list[dict] | None = None) -> int:
+    project_number = discover_project_number()
+    if items is None:
+        items = fetch_all_items(project_number)
+    dep_numbers = [i['number'] for i in task_items(items) if i.get('status') == DEP_STATUS]
+    parent_numbers = [i.get('parent_number') for i in items if i.get('parent_number') is not None]
+    wave_numbers = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
+    extras = fetch_extras(dep_numbers + parent_numbers + wave_numbers)
+    bodies = fetch_bodies(wave_numbers)
+    rows = unblocked_rows(items, extras, bodies)
+    if not rows:
+        print('依存が解けた task は 0 件')
+        return 0
+    print(f'依存が解けた task {len(rows)} 件（戻すのは set <n> Status <値>。目印つき・親が feature でない分は注記だけ）')
+    for r in rows:
+        target = r.get('set_status') or r.get('note', '')
+        print(f"  #{r['number']:<4} {r['title'][:60]} → {target}")
+    return 0
+
+
+def _print_memos(items: list[dict]) -> None:
+    memos = [
+        i for i in items
+        if i.get('kind') == DESIGN_MEMO_KIND and i.get('status') == HOLD_STATUS
+    ]
+    if not memos:
+        print('保留の設計メモは 0 件')
+        return
+    print(f'保留の設計メモ {len(memos)} 件')
+    for i in memos:
+        print(f"  #{i['number']:<4} {(i.get('title') or '')[:60]}")
+
+
+def cmd_memos() -> int:
+    """一覧 2 本（unblocked・memos）は today の内側だけでなく単独でも叩ける
+    ようにする。"""
+    project_number = discover_project_number()
+    items = fetch_all_items(project_number)
+    _print_memos(items)
+    return 0
+
+
+def cmd_today() -> int:
+    cmd_comments()
+    project_number = discover_project_number()
+    items = fetch_all_items(project_number)
+    cmd_close_parents(items=items)
+    # close-parents が実際に書いたかもしれない（1 回の today で親が閉じることがある）
+    # ときだけ取り直す。全件の頁送りは約 14 秒かかるので、書けない間（
+    # 目印つき open issue があるあいだ）は 1 回で済ませる。
+    if align_write_allowed(items):
+        items = fetch_all_items(project_number)
+    cmd_align(items=items)
+    if align_write_allowed(items):
+        items = fetch_all_items(project_number)
+    _print_memos(items)
+    cmd_unblocked(items=items)
+
+    dep_numbers = [i['number'] for i in task_items(items) if i.get('status') == DEP_STATUS]
+    review_numbers = [i['number'] for i in task_items(items) if i.get('status') == REVIEW_STATUS]
+    ready_numbers = [i['number'] for i in task_items(items) if i.get('status') == READY_STATUS]
+    parent_numbers = [i.get('parent_number') for i in items if i.get('parent_number') is not None]
+    wave_numbers = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
+    extras = fetch_extras(
+        ready_numbers + review_numbers + dep_numbers + parent_numbers + wave_numbers
+    )
+    bodies = fetch_bodies(wave_numbers)
+
+    orphans = orphan_rows(items)
+    try:
+        orphans_missing = repo_only_issue_numbers(items)
+    except GhError as exc:
+        orphans_missing = []
+        # 握りつぶさず、標準エラーへ出す。
+        print(f'orphans（Project に居ない）を確かめられなかった: {exc}', file=sys.stderr)
+    stuck = stuck_rows(items, extras)
+    holds = wave_hold_rows(items, bodies)
+    since = _load_since_cache(MERGED_DESIGNS_SINCE_CACHE, REPO)
+    merged, new_since = merged_design_rows(since)
+    _save_since_cache(MERGED_DESIGNS_SINCE_CACHE, REPO, new_since)
+    user_actions = user_action_rows(items)
+
+    if orphans or orphans_missing:
+        print(f'orphans {len(orphans) + len(orphans_missing)} 件')
+        for o in orphans:
+            print(f"  #{o['number']:<4} {o['title'][:50]}（{o['why']}）")
+        for n in orphans_missing:
+            print(f"  #{n:<4}（Project に居ない）")
+    if stuck:
+        print(f'stuck {len(stuck)} 件')
+        for line in stuck:
+            print(line)
+    if holds:
+        print(f'wave-holds {len(holds)} 件')
+        for line in holds:
+            print(line)
+    if merged:
+        print(f'merged-designs {len(merged)} 件')
+        for m in merged:
+            print(f"  PR #{m['number']:<4} {m['title'][:60]}")
+    if user_actions:
+        print(f'[User] {len(user_actions)} 件（ready・align の対象外。あなたの操作）')
+        for u in user_actions:
+            print(f"  #{u['number']:<4} {u['title'][:60]}")
+    return 0
+
+
+def cmd_after_merge(pr_number: int) -> int:
+    """その PR が閉じた task について、close-parents を親→祖父→…と、閉じられる分だけ
+    連鎖して辿ってから unblocked を呼ぶ。"""
+    closing_numbers = fetch_closing_issue_numbers(pr_number)
+    if not closing_numbers:
+        print(f'PR #{pr_number} には閉じた issue が無い（closingIssuesReferences が空）')
+        return 0
+    project_number = discover_project_number()
+    items = fetch_all_items(project_number)
+    items_by_number, _children_of = _board_index(items)
+    wave_numbers = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
+    bodies = fetch_bodies(wave_numbers)
+    write_allowed = align_write_allowed(items)
+    all_candidates: list[dict] = []
+    frontier = set(closing_numbers)
+    visited_parents: set[int] = set()
+    while True:
+        parents = {(items_by_number.get(n) or {}).get('parent_number') for n in frontier}
+        parents.discard(None)
+        parents -= visited_parents
+        if not parents:
+            break
+        visited_parents |= parents
+        parent_items = [i for i in items if i.get('number') in parents]
+        summaries = fetch_sub_issues_summaries(_open_parent_candidate_numbers(parent_items))
+        plan = close_parents_plan(parent_items, bodies, summaries)
+        candidates = plan.get('close_parents') or []
+        if not candidates:
+            break
+        all_candidates.extend(candidates)
+        if write_allowed:
+            _apply_close_parents_plan(plan, project_number)
+        frontier = {c['number'] for c in candidates}
+    if not all_candidates:
+        print('閉じる親は 0 件')
+    else:
+        print(f'閉じる親 {len(all_candidates)} 件')
+        for c in all_candidates:
+            print(f"  #{c['number']:<4}（{c['kind']}・子 {c['children_total']} 件）")
+    cmd_unblocked(items=items)
+    return 0
+
+
+# ── 入口 ────────────────────────────────────────────────────────────
+def _parse_issue_number(text: str) -> int:
+    try:
+        return int(text)
+    except ValueError:
+        die(f'issue 番号は数字で書く（受け取った値: {text}）', 2)
+
+
+def _plugin_root() -> str:
+    """この道具（<プラグイン>/bin/hirai-task）を置いたプラグイン本体のルート。
+    HIRAI_TASK_PLUGIN_ROOT で上書きできる（試験用）。"""
+    override = os.environ.get('HIRAI_TASK_PLUGIN_ROOT', '').strip()
+    if override:
+        return override
+    return os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+
+
+def refresh_board_counts() -> None:
+    """画面下の「やること」の件数の控えを、書き込みの直後に取り直す。
+    プラグイン本体の scripts/tasks-path.sh の harness_ghp_refresh now を呼ぶ
+    （シェルの関数なので bash を 1 回起こす）。本体が見つからない・bash や gh が無い・
+    失敗した、のどれでも書き込みの結果は変えない（何も出さずに戻る）。"""
+    library = os.path.join(_plugin_root(), 'scripts', 'tasks-path.sh')
+    if not os.path.isfile(library):
+        return
+    try:
+        subprocess.run(
+            ['bash', '-c', '. "$1" && harness_ghp_refresh now "$2"', 'hirai-task', library, _root()],
+            capture_output=True, text=True, timeout=60,
+        )
+    except Exception:
+        return
+
+
+def _run_selftest() -> int:
+    """gh を使わない自己検査（scripts/hirai_task_selftest.py）を走らせる。"""
+    scripts_dir = os.path.join(_plugin_root(), 'scripts')
+    if not os.path.isfile(os.path.join(scripts_dir, 'hirai_task_selftest.py')):
+        die(f'自己検査が見つからない: {scripts_dir}/hirai_task_selftest.py', 2)
+    sys.dont_write_bytecode = True  # プラグインの置き場所に __pycache__ を作らない
+    sys.path.insert(0, scripts_dir)
+    import hirai_task_selftest
+    return hirai_task_selftest.main()
+
+
+def main(argv: list[str]) -> int:
+    usage = (
+        'hirai-task ready|pending|blocked|show <issue>\n'
+        '           new <title> --parent N [--kind ...] ...\n'
+        '           add <issue> | approve <issue> | start <issue> [--approved <出どころ>]\n'
+        '           review <issue> | done <issue> [--not-planned <理由>] | reopen <issue> <status>\n'
+        '           set <issue> <field> <value> | sync\n'
+        '           comments | close-parents [--json] | align [--json] | unblocked | memos\n'
+        '           today | after-merge <PR番号>'
+    )
+    if not argv:
+        die(usage, 2)
+    sub, tail = argv[0], argv[1:]
+    if sub == '--selftest':
+        return _run_selftest()
+    if not REPO:
+        die(
+            'リポを決められない（git remote の origin が github.com を指していない）。'
+            'HIRAI_TASK_REPO=<owner>/<repo> で指定できる', 2,
+        )
+    if sub == 'ready':
+        return cmd_ready()
+    if sub == 'pending':
+        return cmd_pending()
+    if sub == 'blocked':
+        return cmd_blocked()
+    if sub == 'show':
+        if len(tail) != 1:
+            die('使い方: hirai-task show <issue 番号>', 2)
+        return cmd_show(_parse_issue_number(tail[0]))
+    if sub == 'new':
+        return cmd_new(tail)
+    if sub == 'add':
+        if len(tail) != 1:
+            die('使い方: hirai-task add <issue 番号>', 2)
+        return cmd_add(_parse_issue_number(tail[0]))
+    if sub == 'approve':
+        if len(tail) != 1:
+            die('使い方: hirai-task approve <issue 番号>', 2)
+        return cmd_approve(_parse_issue_number(tail[0]))
+    if sub == 'set':
+        if len(tail) != 3:
+            die('使い方: hirai-task set <issue> <field> <value>', 2)
+        return cmd_set(_parse_issue_number(tail[0]), tail[1], tail[2])
+    if sub == 'start':
+        if len(tail) not in (1, 3) or (len(tail) == 3 and tail[1] != '--approved'):
+            die('使い方: hirai-task start <issue> [--approved <出どころ>]', 2)
+        approved = tail[2] if len(tail) == 3 else None
+        return cmd_start(_parse_issue_number(tail[0]), approved)
+    if sub == 'review':
+        if len(tail) != 1:
+            die('使い方: hirai-task review <issue 番号>', 2)
+        return cmd_review(_parse_issue_number(tail[0]))
+    if sub == 'done':
+        if len(tail) not in (1, 3) or (len(tail) == 3 and tail[1] != '--not-planned'):
+            die('使い方: hirai-task done <issue> [--not-planned <理由>]', 2)
+        reason = tail[2] if len(tail) == 3 else None
+        return cmd_done(_parse_issue_number(tail[0]), reason)
+    if sub == 'reopen':
+        if len(tail) != 2:
+            die('使い方: hirai-task reopen <issue> <status>', 2)
+        return cmd_reopen(_parse_issue_number(tail[0]), tail[1])
+    if sub == 'sync':
+        project_number = discover_project_number()
+        fields = sync_fields(project_number)
+        print(f'{len(fields)} フィールドを {FIELDS_CACHE} へ')
+        return 0
+    if sub == 'comments':
+        return cmd_comments()
+    if sub == 'close-parents':
+        if tail not in ([], ['--json']):
+            die('使い方: hirai-task close-parents [--json]', 2)
+        return cmd_close_parents(as_json=tail == ['--json'])
+    if sub == 'align':
+        if tail not in ([], ['--json']):
+            die('使い方: hirai-task align [--json]', 2)
+        return cmd_align(as_json=tail == ['--json'])
+    if sub == 'unblocked':
+        return cmd_unblocked()
+    if sub == 'memos':
+        return cmd_memos()
+    if sub == 'today':
+        return cmd_today()
+    if sub == 'after-merge':
+        if len(tail) != 1:
+            die('使い方: hirai-task after-merge <PR 番号>', 2)
+        return cmd_after_merge(_parse_issue_number(tail[0]))
+    die(f'未知のサブコマンド: {sub}', 2)
+
+
+def _entry(argv: list[str]) -> int:
+    try:
+        code = main(argv)
+    except GhError as exc:
+        print(str(exc), file=sys.stderr)
+        code = exc.code
+    finally:
+        if _state['wrote']:
+            refresh_board_counts()
+    return code
+
+
+if __name__ == '__main__':
+    sys.exit(_entry(sys.argv[1:]))

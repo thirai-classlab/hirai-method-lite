@@ -28,7 +28,7 @@
 
 ## 3. 完了の印は PR に同乗させる
 
-merge 後に統合先ブランチ上で完了の印だけを直すことはできない (承認が要る操作のため)。GitHub の形では、PR の本文に `Closes #<番号>` を書いておけば merge で issue が閉じ、Status が 完了 になる。積み上げ PR（base が main 以外）は自動では閉じない。`hirai-task review <番号>` は PR を出したときに Status を レビュー中 にするだけで、issue は閉じない。積み上げの PR を閉じる手順は未確定（H-4 の実装と突き合わせて決める）。ファイルに一覧表を持つ形（台帳の形）で追加の PR が必要になった記録は [`task-ledger.md`](task-ledger.md) の項目 4 を参照。
+merge 後に統合先ブランチ上で完了の印だけを直すことはできない (承認が要る操作のため)。GitHub の形では、PR の本文に `Closes #<番号>` を書いておけば merge で issue が閉じ、Status が 完了 になる。積み上げ PR（base が main 以外）は自動では閉じない。`hirai-task review <番号>` は PR を出したときに Status を レビュー中 にするだけで、issue は閉じない。積み上げの PR は、merge のあと `hirai-task done <番号>` で issue を閉じる。ファイルに一覧表を持つ形（台帳の形）で追加の PR が必要になった記録は [`task-ledger.md`](task-ledger.md) の項目 4 を参照。
 
 ---
 

@@ -207,7 +207,7 @@ harness_open_tasks() {
 # 通信する (gh を叩く) のは、次の 2 か所だけにする。
 #   ・SessionStart の背景処理 (harness_ghp_refresh background。hooks/session-start.sh から
 #     detach して呼ぶ)
-#   ・書き込み用の道具 (今後 gh-task 相当のコマンドから呼ぶ想定) が書き込んだ直後
+#   ・書き込み用の道具 (bin/hirai-task。refresh_board_counts) が書き込んだ直後
 #     (harness_ghp_refresh now)
 # session-start.sh と statusline.sh はここの「読む側」(harness_ghp_line 系) だけを呼び、
 # 控えを読むだけで gh は 1 回も呼ばない。

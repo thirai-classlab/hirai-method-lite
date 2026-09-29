@@ -1642,6 +1642,34 @@ JSONEOF
   ' "$ROOT"/commands/*.md)"
   [ -z "$blk_bad" ] || pr_bad="$pr_bad 素材行なしで \$P を使うブロック:[${blk_bad}]"
 
+  # hirai-task (bin/): 実行でき、偽の HOME・gh 無しで --selftest が exit 0、引数なしは exit 2、
+  # git の外 (リポを決められない) では読む側も exit 2 で gh を呼ばない、公開リポなので
+  # 導入先の内部の名前を持ち込まない (R12 の語)。
+  local ht_home ht_rc ht_out
+  ht_home="$(mktemp -d)"; mkdir -p "$ht_home/nogh"
+  printf '#!/bin/sh\necho "$*" >> "%s/gh.log"\nexit 1\n' "$ht_home" > "$ht_home/nogh/gh"; chmod +x "$ht_home/nogh/gh"
+  [ -x "$ROOT/bin/hirai-task" ] || pr_bad="$pr_bad bin/hirai-task が実行できない"
+  ht_out="$(cd "$ht_home" && env HOME="$ht_home" PATH="$ht_home/nogh:$PATH" python3 "$ROOT/bin/hirai-task" --selftest 2>&1)"; ht_rc=$?
+  [ "$ht_rc" -eq 0 ] || pr_bad="$pr_bad hirai-task --selftest が exit ${ht_rc}: $(printf '%s' "$ht_out" | grep FAIL | head -3)"
+  (cd "$ht_home" && env HOME="$ht_home" PATH="$ht_home/nogh:$PATH" python3 "$ROOT/bin/hirai-task" >/dev/null 2>&1); ht_rc=$?
+  [ "$ht_rc" -eq 2 ] || pr_bad="$pr_bad hirai-task を引数なしで呼んだ exit が 2 でない: ${ht_rc}"
+  ht_out="$(cd "$ht_home" && env HOME="$ht_home" PATH="$ht_home/nogh:$PATH" python3 "$ROOT/bin/hirai-task" ready 2>&1)"; ht_rc=$?
+  { [ "$ht_rc" -eq 2 ] && printf '%s' "$ht_out" | grep -q 'リポを決められない'; } \
+    || pr_bad="$pr_bad git の外の hirai-task ready が exit 2 と理由を出さない: exit ${ht_rc} [${ht_out}]"
+  [ ! -e "$ht_home/gh.log" ] || pr_bad="$pr_bad hirai-task の selftest・リポ未解決で gh が呼ばれた: $(cat "$ht_home/gh.log")"
+  find "$ROOT/scripts" "$ROOT/bin" -name __pycache__ 2>/dev/null | grep -q . \
+    && pr_bad="$pr_bad hirai-task --selftest がプラグインの置き場所に __pycache__ を作った"
+  rm -rf "$ht_home"
+  # 導入先の内部の名前の一覧は公開リポに置かない。手元の一覧を HIRAI_INTERNAL_WORDS
+  # (grep -E の式) で渡したときだけ検査する。渡さなければ一般の検査 (利用者の home 以下の絶対パス) だけを見る。
+  # issue 番号の例は、push 前の目視の grep ('#[0-9]+' を commands/ で) に任せる。
+  if [ -n "${HIRAI_INTERNAL_WORDS:-}" ]; then
+    grep -nE "$HIRAI_INTERNAL_WORDS" "$ROOT/bin/hirai-task" "$ROOT/scripts/hirai_task_selftest.py" "$ROOT"/commands/*.md >/dev/null 2>&1 \
+      && pr_bad="$pr_bad bin・selftest・commands に導入先の内部の名前が入っている"
+  fi
+  grep -nE '/Use''rs/' "$ROOT/bin/hirai-task" "$ROOT/scripts/hirai_task_selftest.py" >/dev/null 2>&1 \
+    && pr_bad="$pr_bad bin/hirai-task か selftest に絶対パスが入っている"
+
   # /update の分量と、控え (コピー) の作法。「退避」はコピーを移動と誤解させるので使わない。
   n_up="$(grep -c '' "$ROOT/commands/update.md" | tr -d ' ')"
   [ "${n_up:-0}" -le 200 ] || pr_bad="$pr_bad update.md ${n_up} 行 (<=200)"
@@ -1655,7 +1683,7 @@ JSONEOF
     && pr_bad="$pr_bad 控えが /tmp 直下に置かれている (再起動で消えるうえ他の利用者と混ざる)"
   if [ -n "$pr_bad" ]; then fail 10 "commands はプラグイン本体の場所を素材行で解決する" "$pr_bad"; return; fi
 
-  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) に 5 項目 + AskUserQuestion + 記入例 ${n_ex} 件 + 悪い例/良い例 / 承認を求める ${n_site} コマンドすべてが AskUserQuestion と同じ行にポインタを持ち 5 項目を備える / 手順書の逐語実行で /init は承認の型を導入先へ置き 2 回目は上書きせず user では docs/ を作らず、/update は無いときだけ足し在れば触らず docs/ を新設しない / commands の CLAUDE_PLUGIN_ROOT 無防備使用 0 件・素材行 ${n_boot} 本が 1 種類で \$P を使う全ブロックに在り、未設定でも installed_plugins.json の 2.x 最大版 (辞書順では負ける版で確認) → 2.x キャッシュの最大版の順で解決し harness_plugin_root と一致 / update.md ${n_up} 行 (<=200) / init.md ${n_in} 行 (<=305) / 手順 0 の逐語実行で 控えはコピー (project 側も home 側も元が残る)・置き場は一時領域の rules-backup-*・消えるタイミングを表示 を実挙動で確認"
+  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) に 5 項目 + AskUserQuestion + 記入例 ${n_ex} 件 + 悪い例/良い例 / 承認を求める ${n_site} コマンドすべてが AskUserQuestion と同じ行にポインタを持ち 5 項目を備える / 手順書の逐語実行で /init は承認の型を導入先へ置き 2 回目は上書きせず user では docs/ を作らず、/update は無いときだけ足し在れば触らず docs/ を新設しない / commands の CLAUDE_PLUGIN_ROOT 無防備使用 0 件・素材行 ${n_boot} 本が 1 種類で \$P を使う全ブロックに在り、未設定でも installed_plugins.json の 2.x 最大版 (辞書順では負ける版で確認) → 2.x キャッシュの最大版の順で解決し harness_plugin_root と一致 / update.md ${n_up} 行 (<=200) / init.md ${n_in} 行 (<=305) / 手順 0 の逐語実行で 控えはコピー (project 側も home 側も元が残る)・置き場は一時領域の rules-backup-*・消えるタイミングを表示 を実挙動で確認 / hirai-task は偽の HOME・gh 無しで --selftest が通り、引数なしと git の外では exit 2、gh を呼ばず、絶対パスを持たない (内部の名前は HIRAI_INTERNAL_WORDS を渡したときだけ見る)"
 }
 
 case_1; case_2; case_3; case_4; case_5; case_6; case_7; case_8; case_9; case_10

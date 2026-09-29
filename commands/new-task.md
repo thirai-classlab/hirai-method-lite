@@ -1,10 +1,10 @@
 ---
-description: 承認済 draft から docs/tasks/task-<id>-<slug>.md を作り、docs/tasks/list.md に 1 行追加する。GitHub Project の形では起票のスキルに委ねる。
+description: 承認済 draft から docs/tasks/task-<id>-<slug>.md を作り、docs/tasks/list.md に 1 行追加する。GitHub Project の形では、親と依存と目印を決めて hirai-task new で issue を起票する。
 ---
 
-# /new-task <id> <slug>
+# /new-task <id> <slug>（GitHub Project の形では /new-task <題名>）
 
-引数が 2 つ揃っていない場合は `id` と `slug` を聞き返して停止する。
+引数の読み方は形で変わる。台帳の形は `id` と `slug` の 2 つ、GitHub Project の形は題名 1 つ。「形の見分け」のあとで、揃っていなければ聞き返して停止する。
 
 ## 形の見分け (最初に 1 回)
 
@@ -20,9 +20,44 @@ exit code が 2 (プラグイン本体が見つからない) なら、その場�
 
 ## GHP の形の場合
 
-起票は起票のスキル（`hirai-task new <id> <slug>`）に任せる。`command -v hirai-task` が無ければ「hirai-task が見つからない（PATH に入っていない）」と報告して終了する。台帳は読まない・作らない・書かない。
+台帳は読まない・作らない・書かない。`command -v hirai-task` が無ければ「hirai-task が見つからない（PATH に入っていない）」と報告して終了する。題名が無ければ聞き返して停止する。
 
-判定できる終了条件: `hirai-task new <id> <slug>` が exit 0 で、作った issue 番号を報告できたこと。成立しなければ原因を 1 行で報告して停止する。
+`hirai-task new` は issue を作るだけで、親の決め方や依存の張り方は決めない。決めてから `new` を呼ぶ。判定はここで、書き込みは `hirai-task` で行う。
+
+### 書式
+
+- **1 issue = ゴール 1 文 + 手順 + 完了条件**: 本文にこの 3 つを書く。draft から起こすなら `--from-draft <パス>` で渡す（承認済み、つまり `approved_at:` のある draft だけ通る）
+- **1 issue = 1 セッション**: 変更ファイルが 10 を超えるか、完了条件が 7 コマンドを超えるか、参照点が 8 箇所を超えるときは、同じ feature の子として task を分ける（task の下にはさらに子を作らない。親子は wave → feature → task の 3 段まで）
+- **完了条件はコマンドで書く**: 「`<テストコマンド>` が exit 0」のように、実行できるコマンドと期待する結果で書く
+- **参照は path:line で書く**: 本文に正本の `path:line` と、元 draft の相対 path・節を書き、会話の文脈に依存させない
+- **やらないことを名指しする**: 隣の issue の範囲を issue 番号で名指しする（例: 「認証の実装は #12 の範囲」）
+
+### 親の決め方
+
+task と feature は親が必須。親は feature（task の場合）か wave（feature の場合）で、`new` はこの組み合わせを確かめ、親が無い・違えば理由を出して exit 2 にする（REST は 1 回も呼ばない）。`hirai-task show <n>` で対象の feature・wave の番号を見てから `--parent <n>` で渡す（`hirai-task ready` の行の `[feature #<番号>]` が親の feature。承認待ちの feature は `hirai-task pending` が出す）。wave・設計メモは親を持たない（`--parent` を渡すと exit 2）。
+
+親が無いときは、`new` で作る（1 件ずつ・作った直後に承認待ちで出る）。
+
+- **feature が無い**: `hirai-task new <題名> --kind feature --parent <wave の番号>`。承認待ちで作られ、「ボードで着手可にする」と 1 行で知らされる。着手可にするのは人（AI は動かさない）
+- **wave が無い**: `hirai-task new <題名> --kind wave`。wave の issue の本文の「まだ作っていない wave」の節にあるものだけ作れる。節の書式は 1 行 1 件で、`- P3 基盤の部品・着手順 4・blocked by P1・目的と条件`（名前は最初の「・」まで。blocked by は `#番号` か短い ID）。作ったあと、節の blocked by が張られ、「並び順をボードで直してください」と知らされる。節に無い wave は作らず exit 2
+
+### 止める依存と緩い依存
+
+- **止める依存**（着手を実際に止めるもの）は `--blocked-by <n1,n2,...>` で GitHub の issue dependencies（blocked by）に張る。task 同士・裁定の issue への依存はここに入れる
+- **緩い依存**（並行してよい・順序の目印）は blocked by にせず、本文に文章で書く（例: 「#15 の完了を待たずに書ける」）
+
+### 目印
+
+題名の先頭に付ける。
+
+- `[操作]`: 実行の前にチャットで 1 件ずつ承認を取る task。`hirai-task start <n> --approved <出どころ>` でだけ承認待ちから進行中に進められる
+- `[User]`: 人が手を動かす task。`hirai-task ready` にも align にも出ない。`hirai-task today` が番号で出す
+
+### bug の親
+
+ラベル bug を付ける task（`--label-bug`）は、不具合の出た機能の、いま進んでいる wave の feature に付ける。親は bug でも必須。決められなければ作らず、候補を添えて人に聞く。親を無理にこじつけない。
+
+判定できる終了条件: `hirai-task new` が exit 0 で、作った issue 番号を報告できたこと。成立しなければ原因を 1 行で報告して停止する。
 
 ## 台帳の解決 (最初に 1 回)
 
