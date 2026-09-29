@@ -845,8 +845,15 @@ case_5() {
   fi
   if [ -n "$bad5" ]; then fail 5 "承認は T0 に名前 / T1 からポインタ" "$bad5"; return; fi
   if [ -n "$badps" ]; then fail 5 "project-setup.md の立ち上げ手順・自動化・ビュー" "$badps"; return; fi
+  # T2 は GitHub の形が主: 承認の型の記入例は台帳 (list.md) を指さず、task-ledger.md は 2 つの形の区別を冒頭に持つ
+  local rr="$ROOT/docs/rules-reference" badt2=""
+  grep -qF 'list.md' "$rr/approval-template.md" && badt2="$badt2 approval-template.md が list.md を指す"
+  grep -qF 'list.md' "$rr/git-and-pr.md" && badt2="$badt2 git-and-pr.md が list.md を指す"
+  grep -qF 'list.md' "$ROOT/docs/draft/README.md" && ! grep -qF '台帳の形' "$ROOT/docs/draft/README.md" && badt2="$badt2 docs/draft/README.md が形の区別なく list.md を指す"
+  grep -qF '2 つの形の区別' "$rr/task-ledger.md" || badt2="$badt2 task-ledger.md に 2 つの形の区別が無い"
+  if [ -n "$badt2" ]; then fail 5 "T2 は GitHub の形が主で、台帳の形は区別して書く" "$badt2"; return; fi
 
-  pass 5 "T0 層の rule は許可リストどおり ${n} 本 <= ${T0_MAX} (${names# }) / core.md に承認の 1 行 (5 項目入り・2 行以内) / tasks.md から T2 テンプレートへのポインタ / project-setup.md に 4 手順・自動化 4 本・ビュー 6 枚・画面でしか付けられない 3 つ"
+  pass 5 "T0 層の rule は許可リストどおり ${n} 本 <= ${T0_MAX} (${names# }) / core.md に承認の 1 行 (5 項目入り・2 行以内) / tasks.md から T2 テンプレートへのポインタ / project-setup.md に 4 手順・自動化 4 本・ビュー 6 枚・画面でしか付けられない 3 つ / T2 は GitHub の形が主で台帳の形は区別つき"
 }
 
 # ---------- case 6: 数の予算 (hook<=5 / command<=12 / skill<=3 / smoke case<=10) ----------

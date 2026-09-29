@@ -80,7 +80,7 @@ Claude Code で次の 2 行を順に実行します。
 - `.claude/settings.json` — 安全設定と画面下部の表示
 - `.claude/mode.yml` — mode（進め方）（→ [mode（進め方）とは](#mode進め方とは)）。**すでにホーム側（`~/.claude/mode.yml`）に持っている人には、プロジェクト側に新しく作りません**（そちらを黙って覆い隠さないため）
 - `CLAUDE.md` — このプロジェクトの説明（概要 / 使っている技術 / よく使うコマンド）の下書き。中身は**次の `/hirai-lite:init` で伺って埋めます**。すでにある場合は触りません
-- `docs/` — 書類の置き場。**無ければ作ります**（`docs/tasks/` やることの一覧表 / `docs/draft/` 設計メモ / `docs/rules-reference/` 困ったことの記録帳と承認の型）。**プロジェクトの書類は常にここです。** 旧版（v1.8.0 以前）で `.claude/tasks/` などに作った環境は、`/hirai-lite:update` が `docs/` へ移します（中身はそのまま移動します）
+- `docs/` — 書類の置き場。**無ければ作ります**（`docs/draft/` 設計メモ / `docs/rules-reference/` 困ったことの記録帳と承認の型）。**プロジェクトの書類は常にここです。** 旧版（v1.8.0 以前）で `.claude/tasks/` などに作った環境は、`/hirai-lite:update` が `docs/` へ移します（中身はそのまま移動します）
 
 **このとき、ファイルを作るためのシェルコマンド（`cp` `mkdir` `python3` など）を実行してよいか、そのつど聞かれます。**
 
@@ -98,7 +98,7 @@ Claude Code で次の 2 行を順に実行します。
 
 決まりごとはセッションを始めるときに読み込まれるため、`/hirai-lite:init` を実行したセッションにはまだ反映されていません。閉じて開き直すと有効になります。
 
-**開き直したら、もう一度 `/hirai-lite:init` と入力してください。今度は案件のことを伺います。** 質問より先に、**AI がリポジトリを調べて「ここまでは調べました」と見せます**（README / `package.json` などの設定ファイル / フォルダ構成 / `git log` / 既存の `docs/`）。そのうえで同梱の `grilling`（[同梱している skill](#同梱している-skillスキル)）が、ゴール → 背景 → スコープ → 体制 → 技術構成 → やること の順に、**前提が決まった質問だけをまとめて出し、それぞれに推奨回答を添えて**聞いてきます。ファイルの中身や依存関係のような「調べれば分かること」は聞かれません（AI が自分で読みます）。**伺うのはこのリポジトリの開発について決めていただくことだけ**で、調達・法務・人事・営業といった、こちらから挙げていない領域には踏み込みません（v1.12.0）。**範囲外だと思ったら「その質問は不要」と答えてください。その枝はその場で取り下げられ、聞き直されません。** 伺った内容は `CLAUDE.md` と `docs/`（`overview.md` / `requirements.md` / `architecture.md` / `tasks/list.md`）に書き込まれます。**伺えなかった章のファイルは作られません**（見出しだけの空ファイルを置かないため）。
+**開き直したら、もう一度 `/hirai-lite:init` と入力してください。今度は案件のことを伺います。** 質問より先に、**AI がリポジトリを調べて「ここまでは調べました」と見せます**（README / `package.json` などの設定ファイル / フォルダ構成 / `git log` / 既存の `docs/`）。そのうえで同梱の `grilling`（[同梱している skill](#同梱している-skillスキル)）が、ゴール → 背景 → スコープ → 体制 → 技術構成 → やること の順に、**前提が決まった質問だけをまとめて出し、それぞれに推奨回答を添えて**聞いてきます。ファイルの中身や依存関係のような「調べれば分かること」は聞かれません（AI が自分で読みます）。**伺うのはこのリポジトリの開発について決めていただくことだけ**で、調達・法務・人事・営業といった、こちらから挙げていない領域には踏み込みません（v1.12.0）。**範囲外だと思ったら「その質問は不要」と答えてください。その枝はその場で取り下げられ、聞き直されません。** 伺った内容は `CLAUDE.md` と `docs/`（`overview.md` / `requirements.md` / `architecture.md`）。やることは台帳のファイルに書かず、GitHub の issue と Project に載せます（立ち上げの手順は同梱の `project-setup.md`）に書き込まれます。**伺えなかった章のファイルは作られません**（見出しだけの空ファイルを置かないため）。
 
 これで準備完了です。2 回目の `/init` を済ませたあとは、`/init` は「すべてそのまま」と報告するだけになります。
 
@@ -305,7 +305,7 @@ Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: normal（確認あり） | f
 
 全プロジェクト共通（`/hirai-lite:init user`）に入れた場合だけは、`statusLine.command` を `$HOME` を展開した絶対パス（例: `bash "/home/you/.claude/statusline.sh"`）に書き換える。`${CLAUDE_PROJECT_DIR}` は開いているプロジェクトごとに変わるため、全プロジェクト共通の設定からは使えないため。進め方（`mode.yml`）はプロジェクト側を先に見て、無ければホーム側を見る。
 
-`.claude/statusline.sh` と `.claude/tasks-path.sh` と `.claude/context-usage.sh` の 3 本は**プラグイン所有**であり、`/update` で配布版に置き換わる（中身を変えていた場合は `.bak` に控えを取ってから置き換える。コピーなので元の内容は残る）。`.claude/rules/` `settings.json` `mode.yml` `CLAUDE.md` 台帳は利用者所有で、更新では触らない。入れ替えの実装は `scripts/update-check.sh` の `harness_sync_owned_scripts` 1 本に集約してあり、`/update` の手順 4（`force` 付き = 必ず実行 + 1 件ずつ作業ログ）と SessionStart の自動入れ替え（opt-in + 版が変わった回だけ + 1 行報告）が**同じ関数**を通る。
+`.claude/statusline.sh` と `.claude/tasks-path.sh` と `.claude/context-usage.sh` の 3 本は**プラグイン所有**であり、`/update` で配布版に置き換わる（中身を変えていた場合は `.bak` に控えを取ってから置き換える。コピーなので元の内容は残る）。`.claude/rules/` `settings.json` `mode.yml` `CLAUDE.md`（と、台帳の形のリポなら `docs/tasks/list.md`）は利用者所有で、更新では触らない。入れ替えの実装は `scripts/update-check.sh` の `harness_sync_owned_scripts` 1 本に集約してあり、`/update` の手順 4（`force` 付き = 必ず実行 + 1 件ずつ作業ログ）と SessionStart の自動入れ替え（opt-in + 版が変わった回だけ + 1 行報告）が**同じ関数**を通る。
 
 プラグイン側のパスを直接指さないのは、**`${CLAUDE_PLUGIN_ROOT}` が settings.json では展開されないため**（[公式仕様](https://code.claude.com/docs/en/plugins-reference.md)の「Where `${CLAUDE_PLUGIN_ROOT}` is Available」に statusLine と project settings は含まれない）。手で配線する場合は `.claude/settings.json` に上記 `statusLine` ブロックを足すか、絶対パスを書く。不要なら `statusLine` キーを消す。
 
@@ -410,9 +410,9 @@ claude plugins install mattpocock-skills
 
    commands / hooks / agents / MCP サーバー定義はこの時点で有効になる。**rules はまだ配られていない** — プラグインには rules というコンポーネントが無いため。
 
-2. **rules を配置する** — 対象プロジェクトを開いて `/hirai-lite:init` を実行する（全プロジェクト共通に入れるなら `/hirai-lite:init user`）。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ（`mode:` の値は手順 1 の質問 3 の答え。ホーム側にすでにあればそちらを使い、プロジェクト側に新設しない）、`templates/CLAUDE.md` をリポジトリ直下の `CLAUDE.md` へ（`user` 指定なら `~/.claude/CLAUDE.md`）、`scripts/statusline.sh` と `scripts/tasks-path.sh` と `scripts/context-usage.sh` を `.claude/` へ配置し、台帳・draft dir・事故記録・`.claude/rules-archive/` を作る。既存ファイルは上書きしない。
+2. **rules を配置する** — 対象プロジェクトを開いて `/hirai-lite:init` を実行する（全プロジェクト共通に入れるなら `/hirai-lite:init user`）。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ（`mode:` の値は手順 1 の質問 3 の答え。ホーム側にすでにあればそちらを使い、プロジェクト側に新設しない）、`templates/CLAUDE.md` をリポジトリ直下の `CLAUDE.md` へ（`user` 指定なら `~/.claude/CLAUDE.md`）、`scripts/statusline.sh` と `scripts/tasks-path.sh` と `scripts/context-usage.sh` を `.claude/` へ配置し、draft dir・事故記録・`.claude/rules-archive/` を作る（台帳は作らない。やること管理は GitHub Project へ案内する）。既存ファイルは上書きしない。
 
-   台帳 / draft / 事故記録は **常に `docs/` 配下に作る（`docs/` が無ければ作る）**。旧レイアウト（`.claude/tasks/` `.claude/draft/` `.claude/rules-reference/` が残っている環境）のときは**ここでは何も作らず `/hirai-lite:update` の手順 2 に回す** — `docs/` 側に作るとパス解決が `docs/` を先に見るため既存の台帳が黙って隠れるので、先に `mv` で移してから 1 通りに揃える。`scripts/tasks-path.sh` の解決順（`$HARNESS_TASKS_FILE` → `docs/…` → `.claude/…`）は移行前・未移行の環境で台帳を見失わないために残してある。`user` 指定時は台帳 / draft / 事故記録を作らず、`statusLine.command` だけ絶対パスへ書き換える。
+   draft / 事故記録は **常に `docs/` 配下に作る（`docs/` が無ければ作る）**。旧レイアウト（`.claude/tasks/` `.claude/draft/` `.claude/rules-reference/` が残っている環境）のときは**ここでは何も作らず `/hirai-lite:update` の手順 2 に回す** — `docs/` 側に作るとパス解決が `docs/` を先に見るため既存の台帳が黙って隠れるので、先に `mv` で移してから 1 通りに揃える。`scripts/tasks-path.sh` の解決順（`$HARNESS_TASKS_FILE` → `docs/…` → `.claude/…`）は移行前・未移行の環境で台帳を見失わないために残してある。`user` 指定時は draft / 事故記録を作らず、`statusLine.command` だけ絶対パスへ書き換える。
 
 3. **CLAUDE.md を埋める（`/init` の 2 回目）** — 雛形（`templates/CLAUDE.md`）は手順 2 の `/init` が置く（無いときだけ置き、あれば触らない）。**次のセッションで `/hirai-lite:init` をもう一度実行すると、`grilling` skill でヒアリングを行い、`<...>` プレースホルダを実値（概要 / Tech Stack / Commands）に置換し、`docs/` に得られた分だけ書類を作る。** 第 2 段階に入る条件は「配置先に `rules` / `settings.json` / `mode.yml` / `statusline.sh` の 4 つが揃っている」かつ「対応する `CLAUDE.md` に `<...>` が 1 行以上残っている」の 2 つ（埋め終われば入らない）。行動規範は書かない。それは `.claude/rules/core.md` の担当。**`CLAUDE.md` は T0（常時ロード）の 1 本**で、`tests/smoke.sh` case 4 の予算計算にも `templates/CLAUDE.md` として含まれている。雛形をプラグイン直下でなく `templates/` に置いているのは、`claude plugin validate --strict` が「プラグインルートの `CLAUDE.md` は project context として読まれない」と警告するため（v1.7.0 で移動）。
 

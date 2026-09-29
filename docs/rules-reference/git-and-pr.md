@@ -26,9 +26,9 @@
 
 ---
 
-## 3. 完了 commit に台帳を同乗させる
+## 3. 完了の印は PR に同乗させる
 
-merge 後に統合先ブランチ上で台帳だけを直すことはできない (承認が要る操作のため)。台帳の 1 行を直すためだけに追加の PR が必要になった記録がある。詳細は [`task-ledger.md`](task-ledger.md) の項目 4 を参照。
+merge 後に統合先ブランチ上で完了の印だけを直すことはできない (承認が要る操作のため)。GitHub の形では、PR の本文に `Closes #<番号>` を書いておけば merge で issue が閉じ、Status が 完了 になる。積み上げ PR（base が main 以外）は自動では閉じないので、`hirai-task review <番号>` を使う。ファイルに一覧表を持つ形（台帳の形）で追加の PR が必要になった記録は [`task-ledger.md`](task-ledger.md) の項目 4 を参照。
 
 ---
 
@@ -65,5 +65,5 @@ merge 後に統合先ブランチ上で台帳だけを直すことはできな�
 ## 関連
 
 - 並列委譲時の git 制約: [`subagent-operations.md`](subagent-operations.md)
-- 台帳と完了 commit: [`task-ledger.md`](task-ledger.md)
+- 完了の印と PR: 上の項目 3、台帳の形の記録は [`task-ledger.md`](task-ledger.md)
 - 事故の一覧台帳: [`incidents.md`](incidents.md)

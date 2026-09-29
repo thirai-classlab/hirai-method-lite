@@ -29,7 +29,7 @@
 | [`subagent-operations.md`](subagent-operations.md) | 並列起動数の実測、委譲、共有ファイル競合、ファイル間契約、委譲先の検証 | subagent を立てる前 |
 | [`review-practice.md`](review-practice.md) | 偽収束、反復回数、誤報 CRITICAL の潰し方、指摘の集約、設計乖離 | レビューを回すとき / 収束を判断するとき |
 | [`design-process.md`](design-process.md) | 依存の実在確認、前提崩壊時の動き方、規範の書き方、計測値の検証 | draft を起こすとき / 規範を足すとき |
-| [`task-ledger.md`](task-ledger.md) | タスク構造、完了条件の書き方、一括計画、完了 commit | 台帳を触るとき |
+| [`task-ledger.md`](task-ledger.md) | ファイルに一覧表（台帳）を持つ形の記録。タスク構造、完了条件の書き方、一括計画、完了 commit。GitHub の形との区別つき | 台帳の形のリポで台帳を触るとき |
 | [`testing-practice.md`](testing-practice.md) | テストが嘘をつく典型、失敗の分類、並行性のテスト | テストを書く / 直すとき |
 | [`git-and-pr.md`](git-and-pr.md) | stacked PR、複合コマンド、PR 本文の渡し方 | PR を出すとき |
 | [`shell-pitfalls.md`](shell-pitfalls.md) | `set -e` の leak、`grep -c` の exit code、実行ビット、コマンド解決 | bash を書くとき |
