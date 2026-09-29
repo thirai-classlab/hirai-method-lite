@@ -1318,33 +1318,77 @@ case_9() {
   ver="$(head -1 "$ROOT/VERSION" 2>/dev/null | tr -d '\r')"
   pver="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' \
           "$ROOT/.claude-plugin/plugin.json" 2>/dev/null)"
-  mver="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["plugins"][0].get("version",""))' \
-          "$ROOT/.claude-plugin/marketplace.json" 2>/dev/null)"
   if [ "$pver" != "$ver" ]; then
     fail 9 "plugin.json の version が VERSION と一致" "VERSION=${ver} plugin.json=${pver}"; return
-  fi
-  if [ -n "$mver" ] && [ "$mver" != "$ver" ]; then
-    fail 9 "marketplace.json の version が VERSION と一致" "VERSION=${ver} marketplace.json=${mver}"; return
   fi
 
   # 既定の更新 URL の ref (github.com/thirai-classlab/hirai-method-lite/<ref>/VERSION) は、
   # このプラグインを配る branch と一致する。ずれると、この branch の VERSION が別の
   # branch の VERSION と比べ続け、「更新あり」が一生出ない (更新ありの控えを案件ごとに
   # 分ける直しとは別経路の、同じ「無関係な版と比べる」症状)。
-  # git 管理外 (marketplace への複製など) では branch を確かめられないので飛ばす。
+  # git 管理外 (marketplace への複製など) では branch を確かめられないので、3 か所の一致だけ見る。
   local branch uref umd urm
+  uref="$(sed -n 's#.*hirai-method-lite/\([^/]*\)/VERSION.*#\1#p' "$ROOT/scripts/update-check.sh" | head -1)"
+  umd="$(sed -n 's#.*hirai-method-lite/\([^/]*\)/VERSION.*#\1#p' "$ROOT/commands/update.md" | head -1)"
+  urm="$(sed -n 's#.*hirai-method-lite/\([^/]*\)/VERSION.*#\1#p' "$ROOT/README.md" | head -1)"
   branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  if [ -n "$branch" ] && [ "$branch" != "HEAD" ]; then
-    uref="$(sed -n 's#.*hirai-method-lite/\([^/]*\)/VERSION.*#\1#p' "$ROOT/scripts/update-check.sh" | head -1)"
-    umd="$(sed -n 's#.*hirai-method-lite/\([^/]*\)/VERSION.*#\1#p' "$ROOT/commands/update.md" | head -1)"
-    urm="$(sed -n 's#.*hirai-method-lite/\([^/]*\)/VERSION.*#\1#p' "$ROOT/README.md" | head -1)"
-    if [ "$uref" != "$branch" ] || [ "$umd" != "$branch" ] || [ "$urm" != "$branch" ]; then
-      fail 9 "既定の更新 URL の ref がこの branch と一致する" \
-        "branch=${branch} update-check.sh=${uref:-無} update.md=${umd:-無} README.md=${urm:-無}"; return
-    fi
+  if [ -z "$uref" ] || [ "$umd" != "$uref" ] || [ "$urm" != "$uref" ]; then
+    fail 9 "既定の更新 URL の ref が 3 か所で一致する" \
+      "update-check.sh=${uref:-無} update.md=${umd:-無} README.md=${urm:-無}"; return
+  fi
+  if [ -n "$branch" ] && [ "$branch" != "HEAD" ] && [ "$uref" != "$branch" ]; then
+    fail 9 "既定の更新 URL の ref がこの branch と一致する" \
+      "branch=${branch} update-check.sh=${uref} update.md=${umd} README.md=${urm}"; return
   fi
 
-  pass 9 "マニフェスト 4 件が妥当な JSON / version=${pver} が VERSION と一致 / 既定の更新 URL の ref (${branch:-未検証}) がこの branch と一致"
+  # カタログ (marketplace.json) には系列ごとの entry が並ぶ。この branch の版は、自分の
+  # ref (上の uref) を source に持つ entry の版と比べる。plugins[0] の決め打ちにすると、
+  # 別系列の entry を先頭に置いただけで、別の系列の版と比べてしまう。entry の名前は
+  # update-check.sh の HARNESS_V2_ENTRY_NAME と同じで、控えの置き場 (tasks-path.sh の
+  # HARNESS_GHP_ID) は Claude Code が entry 名とカタログ名から作るディレクトリ名
+  # (<entry 名>-<カタログ名>) と同じ。ずれると、控えの置き場が実際の data の置き場と別になる。
+  local ent ename emver mname want_id ename_const ghp_id
+  ent="$(python3 - "$ROOT/.claude-plugin/marketplace.json" "$uref" <<'PYEOF' 2>/dev/null
+import json, sys
+d = json.load(open(sys.argv[1]))
+hit = [e for e in d.get("plugins", [])
+       if isinstance(e.get("source"), dict) and e["source"].get("ref") == sys.argv[2]]
+if len(hit) != 1:
+    print("HITS=%d" % len(hit)); sys.exit(0)
+print("%s\t%s\t%s" % (hit[0].get("name", ""), hit[0].get("version", ""), d.get("name", "")))
+PYEOF
+)"
+  case "$ent" in
+    HITS=*|"") fail 9 "marketplace.json に ref が ${uref} の entry がちょうど 1 つ在る" "${ent:-読めない}"; return ;;
+  esac
+  ename="$(printf '%s' "$ent" | cut -f1)"; emver="$(printf '%s' "$ent" | cut -f2)"; mname="$(printf '%s' "$ent" | cut -f3)"
+  if [ "$emver" != "$ver" ]; then
+    fail 9 "marketplace.json の ref=${uref} の entry の version が VERSION と一致" "VERSION=${ver} entry(${ename})=${emver}"; return
+  fi
+  ename_const="$(sed -n 's/^HARNESS_V2_ENTRY_NAME="\(.*\)"$/\1/p' "$ROOT/scripts/update-check.sh" | head -1)"
+  if [ "$ename" != "$ename_const" ]; then
+    fail 9 "entry 名が update-check.sh の HARNESS_V2_ENTRY_NAME と一致" "marketplace.json=${ename} update-check.sh=${ename_const:-無}"; return
+  fi
+  want_id="${ename}-${mname}"
+  ghp_id="$(sed -n 's/^HARNESS_GHP_ID="\(.*\)"$/\1/p' "$ROOT/scripts/tasks-path.sh" | head -1)"
+  if [ "$ghp_id" != "$want_id" ]; then
+    fail 9 "tasks-path.sh の HARNESS_GHP_ID が <entry 名>-<カタログ名> と一致" "want=${want_id} tasks-path.sh=${ghp_id:-無}"; return
+  fi
+  # CLAUDE_PLUGIN_DATA / CLAUDE_PLUGIN_ROOT が別の値でも、空でも、書く側と読む側は同じ控えを指す。
+  local c9tmp c9a c9b c9c
+  c9tmp="$(mktemp -d)"; git init -q "$c9tmp/r" 2>/dev/null
+  git -C "$c9tmp/r" remote add origin "https://github.com/example-org/example-repo.git" 2>/dev/null
+  c9a="$(env -i HOME="$c9tmp/h" PATH="$PATH" bash -c ". \"$ROOT/scripts/tasks-path.sh\"; harness_ghp_cache_file \"$c9tmp/r\"")"
+  c9b="$(env -i HOME="$c9tmp/h" PATH="$PATH" CLAUDE_PLUGIN_DATA="$c9tmp/decoy-data" CLAUDE_PLUGIN_ROOT="$c9tmp/decoy-root" \
+        bash -c ". \"$ROOT/scripts/tasks-path.sh\"; harness_ghp_cache_file \"$c9tmp/r\"")"
+  c9c="$c9tmp/h/.claude/plugins/data/${want_id}/tasks-example-org-example-repo.json"
+  rm -rf "$c9tmp"
+  if [ "$c9a" != "$c9b" ] || [ "$c9a" != "$c9c" ]; then
+    fail 9 "env の有無に関わらず控えのパスが <HOME>/.claude/plugins/data/<entry 名>-<カタログ名>/ を指す" \
+      "unset=${c9a} decoy=${c9b} want=${c9c}"; return
+  fi
+
+  pass 9 "マニフェスト 4 件が妥当な JSON / version=${pver} が VERSION と一致 / 既定の更新 URL の ref (${uref}) が 3 か所とこの branch (${branch:-未検証}) で一致 / カタログの ref=${uref} の entry (${ename}) の版が VERSION と一致し、名前が HARNESS_V2_ENTRY_NAME と、控えの置き場が <entry 名>-<カタログ名> と一致 / env の有無で控えのパスが変わらない"
 }
 
 # ---------- case 10: 同梱物 (MCP 定義 / agents) が壊れていない ----------

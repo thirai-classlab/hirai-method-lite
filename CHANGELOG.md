@@ -1,8 +1,22 @@
 # 変更履歴
 
-版の付け方は [semver](https://semver.org/lang/ja/)。`VERSION` / `.claude-plugin/plugin.json` / `.claude-plugin/marketplace.json` の 3 つは常に同じ値を持ち、`tests/smoke.sh` case 9 が一致を検証する。
+版の付け方は [semver](https://semver.org/lang/ja/)。`VERSION` / `.claude-plugin/plugin.json` / `.claude-plugin/marketplace.json`（この branch の `ref` を source に持つ entry の行）の 3 つは常に同じ値を持ち、`tests/smoke.sh` case 9 が一致を検証する。
 
 更新のしかたは [README の「更新する」](README.md#更新する既定では自動で新しくなりません)。**既定では自動更新しない**（v1.13.0 から opt-in で自動にできる）。
+
+## v2.0.0
+
+タスク管理の形に、リポに紐づく GitHub Project を足した最初の版。**1.x とは別の entry 名（`hirai-lite-v2`）・別のブランチ（`v2`）で配る**。`hirai-lite`（1.x・`v1` ブランチ）の利用者には何も届かない。
+
+- **台帳（`docs/tasks/`）の案件は何も変わらない。** 台帳で回している案件は、この版に入れ替えるまで、これまでどおり動く。**GitHub の形へ移る道具は、最初の移行が出たときに用意する**（この版は形を読み書きする土台までで、台帳から Project への移行の手順・道具は含まない）。
+- **導入のしかた。** 1.x の案件は `claude plugin install hirai-lite-v2@hirai-lite --scope project` で 2.x を入れ、1.x の行を `claude plugin uninstall hirai-lite@hirai-lite --scope project` で外す。2 つの entry は同じカタログ（`hirai-lite`）に並び、キャッシュ（`plugins/cache/hirai-lite/<entry 名>/<版>`）も、プラグインの data（`plugins/data/<entry 名>-hirai-lite/`）も entry 名ごとに分かれる（偽の HOME に 2 つとも入れて実測）。
+- **`bin/hirai-task`（新規）。** リポに紐づく GitHub Project を読み書きする 1 本の道具。読む側は `ready`・`pending`・`blocked`・`show`、書く側は `new`・`set`・`start`・`review`・`done`、会話の最初と merge の直後に `today`・`comments`・`align`・`after-merge`。`gh` の認証が要る。owner/repo は `git remote get-url origin`（環境変数 `HIRAI_TASK_REPO` で上書き）から、Project は `Repository.projectsV2` から引く（2 件以上は「種別」を持つものを選び、決まらなければ候補を出して止まる。`HIRAI_TASK_PROJECT` で番号を指定できる）。field の id などの控えは checkout の git ディレクトリの下の `hirai-task/` に置くので、追跡されず `.gitignore` も要らない。
+- **形の見分けと画面の表示。** リポに紐づく Project に「種別」の項目があれば GitHub の形とみなし、無ければ台帳の形のまま動く。GitHub の形では、セッション開始時と画面下部の「やること」が「あなたの番 N（承認・裁定・取り込み）／進行中／待ち解け」になる。件数は背景で取り直した控え（`~/.claude/plugins/data/hirai-lite-v2-hirai-lite/tasks-<owner>-<repo>.json`）を読むだけで、表示のために `gh` は呼ばない。控えの置き場は `CLAUDE_PLUGIN_DATA` を使わない（Bash ツールには渡らないため）。環境変数の有無で書く側と読む側の置き場が変わらないことを smoke が見る。
+- **本体の場所の解決。** `CLAUDE_PLUGIN_ROOT` が空のとき、`installed_plugins.json` の 2.x の行のうち最大版の `installPath` → `plugins/cache/hirai-lite/hirai-lite-v2/` の最大版の順で探す。`marketplaces/hirai-lite`（`main`＝1.x のカタログ）には落とさない。コマンド本文の素材行は 1 種類にそろえた。
+- **更新の合図は `v2` ブランチの `VERSION` を読む。** 1.x の案件には 2.0.0 の「更新あり」は出ない。1.x の合図の控えとも別の場所に書く。
+- **コマンド 12 本の本文と rules・雛形・T2 を GitHub の形に合わせた。** `/new-task`・`/start-task`・`/finish-task` は `hirai-task` を呼ぶ（台帳の形では従来どおり台帳に書く）。立ち上げの手順は T2 `docs/rules-reference/project-setup.md`（新規）に置いた。
+- **`tests/smoke.sh` case 9 を直した。** 版の比較を `plugins[0]` の決め打ちから「この branch と同じ `ref` を source に持つ entry」に変え、entry 名が `HARNESS_V2_ENTRY_NAME` と、控えの置き場 `HARNESS_GHP_ID` が `<entry 名>-<カタログ名>` と一致することを見る。`CLAUDE_PLUGIN_DATA`・`CLAUDE_PLUGIN_ROOT` に別の値を入れても空でも、控えのパスが変わらないことも見る（entry の名前・版・ref をそれぞれ壊して FAIL することを確認）。case の数は 10 のまま。
+- **予算・数。** hook 3/5・command 12/12・skill 2/3・smoke case 10/10。
 
 ## v1.16.1
 

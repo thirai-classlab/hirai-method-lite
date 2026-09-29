@@ -438,7 +438,7 @@ claude plugins install mattpocock-skills
 | `templates/` | `settings.json` / `mode.yml` / `CLAUDE.md` / draft の雛形（`CLAUDE.md` は `/init` が導入先へ置く。プラグイン直下に置くと `validate --strict` が警告するため `templates/` に置いている） |
 | `tests/smoke.sh` | 自己検証 10 case（予算監査を含む。hook 5 / command 12 / skill 3 / case 10 の数の予算も case 6 が見る） |
 | `CHANGELOG.md` | 版ごとの変更点。v0.6.0 以前の既知の不具合もここに記録 |
-| `CONTRIBUTING.md` | 開発の進め方。**`main` は常に配布物**（タグではなく `main` の最新が利用者に届く） |
+| `CONTRIBUTING.md` | 開発の進め方。**1.x は `v1` ブランチ、2.x は `v2` ブランチから配る**（`main` はカタログを持ち、`VERSION` は 1.x の最新値に揃える） |
 
 自己テストは `claude --plugin-dir .` でこのリポジトリ自身をプラグインとして読ませて行う。
 

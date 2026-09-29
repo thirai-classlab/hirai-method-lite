@@ -4,13 +4,13 @@
     "name": "thirai-classlab"
   },
   "metadata": {
-    "description": "hirai-method-lite 単体を配るマーケットプレイス。rules 3 層とルール追加パイプラインを備えた軽量ハーネス 1 本のみを収録する。",
+    "description": "hirai-method-lite を配るマーケットプレイス。1.x（hirai-lite・v1 ブランチ）と 2.x（hirai-lite-v2・v2 ブランチ）の 2 系列を、別の entry 名で収録する。",
     "version": "1.16.1"
   },
   "plugins": [
     {
       "name": "hirai-lite",
-      "source": "./",
+      "source": { "source": "github", "repo": "thirai-classlab/hirai-method-lite", "ref": "v1" },
       "description": "常時ロードされるコンテキストに予算を置き、ルールの追加を 6 工程パイプラインで通す rules 3 層構造の軽量ハーネス。",
       "version": "1.16.1",
       "author": {
@@ -22,6 +22,24 @@
         "rules",
         "context-budget",
         "task-management",
+        "workflow"
+      ]
+    },
+    {
+      "name": "hirai-lite-v2",
+      "source": { "source": "github", "repo": "thirai-classlab/hirai-method-lite", "ref": "v2" },
+      "description": "rules 3 層とルール追加パイプラインを備えた軽量ハーネスの 2.x。台帳（docs/tasks/）に加えて、リポに紐づく GitHub Project でタスクを管理する形を持つ。",
+      "version": "2.0.0",
+      "author": {
+        "name": "thirai-classlab"
+      },
+      "license": "MIT",
+      "keywords": [
+        "harness",
+        "rules",
+        "context-budget",
+        "task-management",
+        "github-projects",
         "workflow"
       ]
     }
