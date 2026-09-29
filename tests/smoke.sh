@@ -847,9 +847,9 @@ case_5() {
   if [ -n "$badps" ]; then fail 5 "project-setup.md の立ち上げ手順・自動化・ビュー" "$badps"; return; fi
   # T2 は GitHub の形が主: 承認の型の記入例は台帳 (list.md) を指さず、task-ledger.md は 2 つの形の区別を冒頭に持つ
   local rr="$ROOT/docs/rules-reference" badt2=""
-  grep -qF 'list.md' "$rr/approval-template.md" && badt2="$badt2 approval-template.md が list.md を指す"
-  grep -qF 'list.md' "$rr/git-and-pr.md" && badt2="$badt2 git-and-pr.md が list.md を指す"
-  grep -qF 'list.md' "$ROOT/docs/draft/README.md" && ! grep -qF '台帳の形' "$ROOT/docs/draft/README.md" && badt2="$badt2 docs/draft/README.md が形の区別なく list.md を指す"
+  grep -qE 'list\.md|docs/tasks/|task-[0-9<]' "$rr/approval-template.md" && badt2="$badt2 approval-template.md が list.md を指す"
+  grep -qE 'list\.md|docs/tasks/|task-[0-9<]' "$rr/git-and-pr.md" && badt2="$badt2 git-and-pr.md が list.md を指す"
+  grep -n 'list.md' "$ROOT/docs/draft/README.md" | grep -vF '台帳の形' | grep -vF '一覧表を持つ形' | grep -q . && badt2="$badt2 docs/draft/README.md が形の区別なく list.md を指す行を持つ"
   grep -qF '2 つの形の区別' "$rr/task-ledger.md" || badt2="$badt2 task-ledger.md に 2 つの形の区別が無い"
   if [ -n "$badt2" ]; then fail 5 "T2 は GitHub の形が主で、台帳の形は区別して書く" "$badt2"; return; fi
 
