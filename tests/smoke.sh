@@ -826,9 +826,19 @@ case_5() {
   elif ! grep -qF "$APPROVAL_TEMPLATE" "$tk"; then
     bad5="$bad5 tasks.md:承認テンプレートへのポインタが無い"
   fi
+  # GitHub の形の立ち上げ手順 (T2): 4 手順・自動化 4 本・ビュー 6 枚・画面でしか付けられない 3 つ
+  local ps="$ROOT/docs/rules-reference/project-setup.md" it
+  if [ ! -f "$ps" ]; then bad5="$bad5 project-setup.md が無い"
+  else
+    for it in 'Item added to project' 'Pull request linked to issue' 'Item closed' 'Auto-add to project' \
+              'is:pr' '階層表示' '並べ替え' 'グループ化' '## 1. 立ち上げの 4 手順' '## 6. ビュー 6 枚'; do
+      grep -qF -- "$it" "$ps" || bad5="$bad5 project-setup.md:[${it}]が無い"
+    done
+    [ "$(awk '/^## 6\./{f=1;next} /^## /{f=0} f&&/^\| /&&!/^\|---/&&!/^\| ビュー/' "$ps" | wc -l | tr -d ' ')" -eq 6 ] || bad5="$bad5 project-setup.md:ビューの表が 6 行でない"
+  fi
   if [ -n "$bad5" ]; then fail 5 "承認は T0 に名前 / T1 からポインタ" "$bad5"; return; fi
 
-  pass 5 "T0 層の rule は許可リストどおり ${n} 本 <= ${T0_MAX} (${names# }) / core.md に承認の 1 行 (5 項目入り・2 行以内) / tasks.md から T2 テンプレートへのポインタ"
+  pass 5 "T0 層の rule は許可リストどおり ${n} 本 <= ${T0_MAX} (${names# }) / core.md に承認の 1 行 (5 項目入り・2 行以内) / tasks.md から T2 テンプレートへのポインタ / project-setup.md に 4 手順・自動化 4 本・ビュー 6 枚・画面でしか付けられない 3 つ"
 }
 
 # ---------- case 6: 数の予算 (hook<=5 / command<=12 / skill<=3 / smoke case<=10) ----------

@@ -7,33 +7,23 @@ paths:
 ---
 # タスク運用
 
-対象: 台帳 (`list.md`) / `parking-lot.md` / 設計 draft を触る作業。
+対象: やることの管理（GitHub Project の形）と設計 draft を触る作業。立ち上げ・Status・ビューの詳細は `docs/rules-reference/project-setup.md`（無ければプラグイン同梱の同名ファイル）。台帳（`list.md`）の形のリポは `docs/rules-reference/task-ledger.md` に従う。
 
-## 台帳
+## GitHub Project の形
 
-- **台帳は 1 枚**: メインエージェントは、タスクの正本を台帳 1 表だけに置く。台帳は常に `docs/tasks/list.md` (`$HARNESS_TASKS_FILE` があればそれが優先。旧レイアウトの `.claude/tasks/list.md` は `/hirai-lite:update` が `docs/` へ移す) ／ 例: 進捗は list.md の status 列を書き換える ／ 失効: 外部トラッカー (Asana / Jira) に正本を移したとき
-- **列は 5 つ**: メインエージェントは、list.md を `# / status / タスク / 完了条件 / 詳細` の 5 列で書く ／ 例: `| 3 | 進行中 | ログイン API | `npm test -- auth` が green | [task-3.md](task-3.md) |` ／ 失効: なし
-- **status は 3 種**: メインエージェントは、status に 未着手 / 進行中 / 完了 のいずれかを書く ／ 例: 保留したいタスクは list.md から `parking-lot.md` へ移す ／ 失効: なし
-- **1 task = ゴール 1 文 + N step**: メインエージェントは、task に「ゴール 1 文」「step の箇条書き」「完了条件」を書く ／ 例: `$CLAUDE_PLUGIN_ROOT/templates/task.md` を写して埋める ／ 失効: なし
-- **完了条件は検証可能に**: メインエージェントは、完了条件を再現コマンドか観察可能な事実で書く ／ 例: 「ログイン E2E が green」「`GET /health` が 200 を返す」 ／ 失効: なし
-- **完了 commit に台帳を含める**: メインエージェントは、タスク完了 commit に list.md の status 更新を同梱する ／ 例: `git add docs/tasks/list.md docs/tasks/task-3.md src/auth.ts` ／ 失効: list.md を廃止したとき
-
-## 台帳の管理者
-
-- **台帳更新はメイン専任**: メインエージェントは、list.md と parking-lot.md の更新を自分で行い、サブエージェントに委譲しない ／ 例: サブエージェント起動前に status を 進行中 にする ／ 失効: 台帳を機械生成に切り替えたとき
-- **サブエージェントは台帳を読むだけ**: サブエージェントは、list.md を Read して自分の担当範囲を確認し、書き換えは結果報告でメインに返す ／ 例: 報告に「task 3 完了、status を 完了 へ」と書く ／ 失効: 上と同じ
+- **正本は Project**: メインエージェントは、やることの正本を GitHub の issue と Project に置き、着手前に `gh issue view <n>` で本文と依存を読む ／ 例: `hirai-task ready` で着手できる issue を出す ／ 失効: 外部トラッカー（Asana / Jira）に正本を移したとき
+- **3 段**: メインエージェントは、仕事を wave → feature → task の 3 段（項目「種別」と sub-issue）で組み、task は PR 1 本で閉じる粒度にする ／ 例: PR の本文に `Closes #12` を書く ／ 失効: なし
+- **Status は 8 値**: 承認待ち / 着手可 / 判断待ち / 依存待ち / 進行中 / レビュー中 / 完了 / 保留。レビュー中と完了は組込の自動化が動かし、メインエージェントは書かない ／ 例: PR を出せばレビュー中になる ／ 失効: なし
+- **承認待ち → 着手可は人だけ**: メインエージェントは、feature の着手を人がボードで「着手可」にするまで待ち、自分では動かさない ／ 例: `hirai-task start <n>` は 着手可 でないと止まる ／ 失効: なし
+- **完了条件は検証可能に**: メインエージェントは、issue の完了条件を再現コマンドか観察可能な事実で書く ／ 例: 「ログイン E2E が green」「`GET /health` が 200 を返す」 ／ 失効: なし
+- **書き込みはメイン専任**: サブエージェントは issue を読むだけにし、Status や本文の変更は結果報告でメインに返す ／ 例: 報告に「#12 完了、Status を 完了 へ」と書く ／ 失効: なし
 
 ## 設計 draft
 
 - **設計の起点は draft**: 新機能・仕様変更は `docs/draft/<slug>.md` に設計を起こす ／ 例: `docs/draft/login-rate-limit.md` ／ 失効: なし
-- **承認してから台帳に載せる**: メインエージェントは、user 承認を得た draft だけを list.md の行にする ／ 例: draft 末尾に `approved: 2026-08-22` を書いてから `/new-task` 相当の追記をする ／ 失効: なし
-- **未承認は draft に留める**: 承認前の設計は draft dir に置いたままにし、list.md からリンクしない ／ 例: 検討中の案は draft のまま user レビューに出す ／ 失効: なし
-- **task から draft へリンクする**: メインエージェントは、task の詳細欄に元 draft への相対リンクを書く ／ 例: `詳細: [draft/login-rate-limit.md](../draft/login-rate-limit.md)` ／ 失効: draft を廃止したとき
-
-## 保留
-
-- **保留はリンク付きで移す**: 着手しないタスクは `parking-lot.md` へ移し、保留理由と再開条件を 1 行ずつ書く ／ 例: 「保留理由: 外部 API の仕様未確定 / 再開条件: v2 API 公開」 ／ 失効: なし
-- **不採用も残す**: 不採用にしたタスクは parking-lot.md から消さず、判断日と理由を残す ／ 例: 「不採用 2026-08-22: 利用者ゼロのため」 ／ 失効: なし
+- **承認してから起票する**: メインエージェントは、承認を得た draft だけを issue にする。承認は設計の PR の merge かチャットで、draft の `approved_at:` に書く ／ 例: `approved_at: PR #14 の merge で承認` ／ 失効: なし
+- **未承認は draft に留める**: 承認前の設計は issue にせず、user レビューに出す ／ 例: 検討中の案は draft のまま ／ 失効: なし
+- **止めた設計は保留の issue**: 着手しない設計は種別「設計メモ」・Status「保留」の issue にし、理由と再開条件を本文に書く ／ 例: 「保留理由: 外部 API の仕様未確定 / 再開条件: v2 API 公開」 ／ 失効: なし
 
 - **承認は判断材料つきで求める**: メインエージェントは、着手 / 完了 / 優先順の変更 / draft 承認を求めるとき 5 項目を示す ／ 例: 型と記入例は `docs/rules-reference/approval-template.md` ／ 失効: なし
 

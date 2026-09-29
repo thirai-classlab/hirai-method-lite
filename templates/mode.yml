@@ -20,7 +20,7 @@ mode: normal
 #   on  : プラグインの版が変わった回のセッション冒頭だけ、/init が導入先へ複製した
 #         3 本 (statusline.sh / tasks-path.sh / context-usage.sh) を配布版に揃え、
 #         何件入れ替えたかを 1 行報告する。中身が違うものは .bak に控えてから入れ替える。
-#         決まりごと (rules) ・安全設定 (settings.json) ・CLAUDE.md ・やることの一覧表は
+#         決まりごと (rules) ・安全設定 (settings.json) ・CLAUDE.md ・やること管理の設定は
 #         **自動では一切書き換えない。** 版が同じ回は何もしない。
 #
 # 切り替え : /hirai-lite:config の項目 7

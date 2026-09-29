@@ -36,7 +36,7 @@ T0 は毎セッション常時ロード（合計 6,000 tokens で警告 / 10,000
 | T0 | `CLAUDE.md`（本ファイル） | 常時 | プロジェクト固有情報 + rules index |
 | T0 | `.claude/rules/_meta.md` | 常時 | ルール追加のルール 9 条 / 層定義 / 記述テンプレート |
 | T0 | `.claude/rules/core.md` | 常時 | 全作業に例外なく効く行動規範 |
-| T1 | `.claude/rules/tasks.md` | `docs/{tasks,draft}/**` + `.claude/{tasks,draft}/**` | タスク台帳と draft 承認の運用 |
+| T1 | `.claude/rules/tasks.md` | `docs/{tasks,draft}/**` + `.claude/{tasks,draft}/**` | GitHub Project でのやること管理と draft 承認の運用 |
 | T1 | `.claude/rules/code.md` | `src/**`, `tests/**` | 実装とレビューの運用 |
 | T1 | `.claude/rules/ops.md` | `.github/**`, `infra/**`, `*.tf` | CI / インフラの運用 |
 | T2 | `docs/rules-reference/**` | 明示 Read のみ | 背景・事故記録・詳細手順 |
@@ -51,8 +51,8 @@ T0 は毎セッション常時ロード（合計 6,000 tokens で警告 / 10,000
 | `docs/overview.md` | ゴール / 背景 / スコープ / 体制と関係者 / ドメイン用語 / 関連リポジトリ |
 | `docs/requirements.md` | 要件（機能・非機能） |
 | `docs/architecture.md` | 構成 / データの持ち方 / 技術判断とその理由 |
-| `docs/tasks/list.md` | やること一覧。**いまどこまで進んでいるかもここで分かる**（進捗表は別に作らない） |
-| `docs/draft/` | 設計メモ（承認後に task 化） |
+| GitHub Project | やること一覧。**いまどこまで進んでいるかもここで分かる**（進捗表は別に作らない）。立ち上げは `docs/rules-reference/project-setup.md` |
+| `docs/draft/` | 設計メモ（承認後に issue 化） |
 | `docs/rules-reference/` | 背景・事故記録・承認の型（必要なとき読む） |
 
 `.claude/rules/` のルールは、この表に書かなくても自動で読み込まれる（frontmatter 無し = 常時 / `paths:` 付き = 該当ファイルを触った時）。この表は所在を把握するためのもの。**実在しない行は消す**（`/hirai-lite:init` の 2 回目が実際に作った分だけ残す）。
