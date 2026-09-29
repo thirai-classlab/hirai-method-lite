@@ -54,7 +54,12 @@ ls "$P"/commands/*.md | wc -l       # command は 12 個まで (プラグイン�
 
 各ルール行の `失効:` を読み、その条件が既に成立しているかを実測で判定する。
 
-- 「正本を GitHub に移したら」（タスクの規範にある失効条件の例）→ `harness_ghp_form "$PWD"` が `ghp` なら成立。**`docs/tasks/list.md` の有無だけでは判定しない** — GitHub の形へ移ったあとも古い台帳ファイルが物理的に残っていることがあるため（台帳と GitHub の形は同じリポに同居しうる）。
+```bash
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+. "$P/scripts/tasks-path.sh"; harness_ghp_form "$PWD"
+```
+
+- 「正本を GitHub に移したら」（タスクの規範にある失効条件の例）→ 下の bash で `harness_ghp_form "$PWD"` が `ghp` なら成立。出力が空なら「判定できない」と報告する（成立と読まない）。台帳の形（`ledger`）なら未成立。**`docs/tasks/list.md` の有無だけでは判定しない** — GitHub の形へ移ったあとも古い台帳ファイルが物理的に残っていることがあるため（台帳と GitHub の形は同じリポに同居しうる）。
 - 「CI で必ず落ちる構成になったら」→ `ls .github/workflows/*.yml` が exit 0 なら成立。
 - `失効:` の記載が無い行は、それ自体を欠陥として一覧に載せる。
 

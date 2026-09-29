@@ -129,7 +129,7 @@ bash "$D/statusline.sh" </dev/null
 
 ```bash
 P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
-SCOPE=; if [ "$SCOPE" = user ]; then echo "skip 台帳 / 設計メモ / 記録帳 (全プロジェクト共通には作らない)"; elif ls -d .claude/tasks .claude/draft .claude/rules-reference 2>/dev/null | grep -q .; then echo "skip 旧レイアウト — .claude/ の書類を /hirai-lite:update で docs/ へ移してから作る"
+SCOPE=; if [ "$SCOPE" = user ]; then echo "skip 設計メモ / 記録帳 (全プロジェクト共通には作らない)"; elif ls -d .claude/tasks .claude/draft .claude/rules-reference 2>/dev/null | grep -q .; then echo "skip 旧レイアウト — .claude/ の書類を /hirai-lite:update で docs/ へ移してから作る"
 else BASE=docs; mkdir -p "$BASE/draft" "$BASE/rules-reference"; : > "$BASE/draft/.gitkeep"
 [ -e "$BASE/rules-reference/incidents.md" ] || printf '# 事故記録\n\n1 回目はここに 1 行。2 回目で /add-rule に回す。\n\n| 日付 | 事象 | 影響 | 直し方 | 再発回数 |\n|-----|------|------|-------|--------|\n' > "$BASE/rules-reference/incidents.md"
 [ -e "$BASE/rules-reference/approval-template.md" ] || cp "$P/docs/rules-reference/approval-template.md" "$BASE/rules-reference/approval-template.md"
@@ -166,7 +166,7 @@ bash の出力は作業ログであって報告ではない。**最後に必ず�
 ✅ mode（進め方）の設定を置きました → .claude/mode.yml（いまは normal（確認あり））
    後から /hirai-lite:config で loop（自動で進む）に変えられます
 ✅ プロジェクト情報の下書きを置きました → CLAUDE.md（中身は次回に伺って埋めます）
-✅ やることの管理先を案内します → GitHub Project（立ち上げ方は docs/rules-reference/project-setup.md）
+✅ やることの管理先を案内します → GitHub Project（立ち上げ方はプラグイン同梱の project-setup.md）
 ✅ 設計メモの置き場を作りました → docs/draft/
 ✅ 困ったことの記録帳と、承認をお願いするときの型を置きました → docs/rules-reference/
 ✅ statusLine（画面下部の情報表示）を有効にしました（進め方・残り容量・やること の数が見えます）
@@ -185,7 +185,7 @@ docs/ の書類を埋めます。**
 - `CLAUDE.md` がすでにあった場合は、その 2 行を出さず「そのままにしたもの」に数える (中身は 1 バイトも触っていない)。手順 1 で「すでに一式が入っています」と伝えた再実行のときは、1 行目を `すでに入っている一式を確認しました。変更はありません。` にし、`✅` 行を出さずに「そのままにしたもの」の件数と一覧だけを書く。
 - `user` 指定時は 1 行目を `すべてのプロジェクトで使えるようにしました。` にし、パスを `~/.claude/…` に差し替え、**やることの管理先 / 設計メモの置き場 / 困ったことの記録帳の 3 行を省く**。代わりに 1 行足す: `やることの管理先と設計メモは、プロジェクトごとの中身なので案内していません（各プロジェクトで /hirai-lite:init を実行すると案内します）。`
 - 手順 8 の警告が出ていたら、報告の末尾にその全文をそのまま貼る。中身が違うファイルがあれば末尾に 1 行足し、**手順 5 の承認の型（判断材料 5 項目 → `AskUserQuestion`）で**指示を待ってから書き換える。例: `.claude/settings.json はすでにあり、中身が違います。足したい安全設定が 4 件あります。入れてよいですか?`
-- 途中で止まったら同じ調子で「何が起きたか」「どうすればよいか」「ここまでに置いたもの」を書く。例: `⚠️ 安全設定のファイル (.claude/settings.json) が読めませんでした。書き方が壊れている可能性があります。中身を直すか、別名に退避してから /init をもう一度実行してください。ここまでに置いたもの: ルール 5 件 / タスク一覧表 / 設計メモの置き場`
+- 途中で止まったら同じ調子で「何が起きたか」「どうすればよいか」「ここまでに置いたもの」を書く。例: `⚠️ 安全設定のファイル (.claude/settings.json) が読めませんでした。書き方が壊れている可能性があります。中身を直すか、別名に退避してから /init をもう一度実行してください。ここまでに置いたもの: ルール 5 件 / 設計メモの置き場`
 
 ## 10. 案件を伺い、CLAUDE.md と docs/ を埋める（第 2 段階）
 
@@ -251,10 +251,9 @@ echo "== 既存の書類 =="; find docs -name '*.md' 2>/dev/null | head -20; ech
 | `$BASE/overview.md` | ゴール / 背景 / スコープ（**何を作らないか**を含む）/ 関係者と体制 / ドメイン用語 / 関連リポジトリ | ゴールが 1 文で書ける |
 | `$BASE/requirements.md` | 要件（機能・非機能） | 要件が 1 件以上挙がった |
 | `$BASE/architecture.md` | 構成 / データの持ち方 / その技術を選んだ理由 | 構成・データ・技術判断のどれかが 1 件以上挙がった |
-| `$BASE/tasks/list.md` | 台帳（既存。**上書きしない**）。**進捗もここで表す** | やることが挙がったら行を追加する |
 | `$BASE/draft/<slug>.md` | 設計メモ | これから作るものが具体化している。雛形は `templates/draft.md` |
 
-各ファイルは**得られた項目だけ**を書く（挙がらなかった見出しは置かない）。`list.md` は既存の表に行を足すだけにする (`status` は `未着手`)。**進捗表 (`status.md` の類) は新しく作らない** — 台帳の `status` 列がその役目。`draft/` に起こしたものは、承認を経てから `list.md` の task にする (`/hirai-lite:new-task`)。
+各ファイルは**得られた項目だけ**を書く（挙がらなかった見出しは置かない）。**台帳（`list.md`）は作らない。進捗表 (`status.md` の類) も作らない** — やることは GitHub の issue と Project の Status で表す。やることが挙がったら `draft/` に起こし、承認を経てから `/hirai-lite:new-task` で issue にする。
 
 ### 10-6. 報告する
 
@@ -264,7 +263,7 @@ echo "== 既存の書類 =="; find docs -name '*.md' 2>/dev/null | head -20; ech
 ✅ CLAUDE.md を埋めました（プロジェクト概要 / Tech Stack / Commands）
 ✅ ゴールと背景をまとめました → docs/overview.md
 ✅ 要件をまとめました → docs/requirements.md
-✅ やることを 3 件、一覧表に足しました → docs/tasks/list.md
+✅ やることを 3 件、設計メモにまとめました → docs/draft/（承認されたら /hirai-lite:new-task で issue にします）
 
 伺えなかったところは書類を作っていません（構成の判断 → docs/architecture.md）。
 あとから話していただければ足します。

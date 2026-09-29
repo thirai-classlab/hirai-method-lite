@@ -63,14 +63,14 @@ approved_at:
 4. 禁止語彙を検査する。`grep -nE '適切に|必要に応じて|可能な限り|十分に|慎重に' "$DRAFT/<slug>.md"` が 1 件でもヒットしたら、その行を判定できる条件へ書き換えて再検査する。
 5. draft の §3 採用案と §5 完了条件を要約してチャットに提示し、承認を求める。
    **承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル）。 「何をしたいか」には §3 採用案の要旨を、「どうやるか」には §5 完了条件と step 数を入れる。
-6. user が承認したら frontmatter の `approved_at:` に当日の日付を入れ、§7 に `- YYYY-MM-DD 承認` を追記する。承認が無い間 `approved_at:` は空のままにする。
-7. チャットではなく PR で承認を得る運用のときは、この draft には対応する issue を作らず、`no-issue` の PR (依頼元の issue があれば `Refs #n` を本文に書く) で出す。その PR の merge を承認とみなし、merge 後に `approved_at:` へ merge 日を入れ、§7 に `- YYYY-MM-DD PR #<n> の merge で承認` を追記する。未裁定の論点が残る間は merge しない。
+6. user がチャットで承認したら frontmatter の `approved_at:` に `YYYY-MM-DD（チャット）` を入れ、§7 に `- YYYY-MM-DD 承認（チャット）` を追記する。承認が無い間 `approved_at:` は空のままにする。
+7. チャットではなく PR で承認を得る運用のときは、この draft には対応する issue を作らず、`no-issue` の PR (依頼元の issue があれば `Refs #n` を本文に書く) で出す。その PR の merge を承認とみなす。**PR を出すときに** `approved_at:` へ `PR #<n> の merge で承認` と書き、§7 にも `- PR #<n> の merge で承認` を足してから merge を頼む（merge の後に埋める人がいないため）。merge したあとの追記は要らない。未裁定の論点が残る間は merge しない。
 
 ## 判定できる終了条件
 
 - `$DRAFT/<slug>.md` が存在する (通常 `docs/draft/` の下)。
 - 禁止語彙 grep が 0 件。
-- 承認済なら `grep '^approved_at: 20' "$DRAFT/<slug>.md"` が exit 0。
+- 承認済なら `grep -E '^approved_at: (20|PR #)' "$DRAFT/<slug>.md"` が exit 0。
 
 ## この後
 
