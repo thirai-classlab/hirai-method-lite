@@ -104,7 +104,7 @@ def _discovery_response(project_number: int = 7) -> tuple[int, str, str]:
             'repository': {
                 'projectsV2': {
                     'nodes': [
-                        {'number': project_number, 'title': 'RoomMatch プロ',
+                        {'number': project_number, 'title': 'サンプルのプロジェクト',
                          'fields': {'nodes': [{'name': gh_task.KIND_FIELD}]}},
                     ]
                 }
