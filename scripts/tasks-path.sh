@@ -215,10 +215,13 @@ harness_open_tasks() {
 # 控えの置き場は $CLAUDE_PLUGIN_DATA (hook・MCP・LSP にしか渡らず、Bash ツールには
 # 渡らない: https://code.claude.com/docs/en/plugins-reference の
 # "Where each variable resolves") を使わず、$HOME/.claude/plugins/data/<id>/ の形を
-# 定数で持つ。<id> は将来この GHP の形を持つ配布系列 (エントリ) の名前を仮に置いた
-# もの — 実際のエントリ名が決まったら、この 1 行を合わせる (ズレていても壊れ方は
-# 「控えが前回のまま」で fail-open)。
-HARNESS_GHP_ID="hirai-lite-v2"
+# 定数で持つ。<id> は Claude Code が entry 名とカタログ名から作るディレクトリ名
+# (<entry 名>-<カタログ名>。実測: 偽の HOME に hirai-lite@hirai-lite と
+# hirai-lite-v2@hirai-lite を入れると data/ に hirai-lite-hirai-lite と
+# hirai-lite-v2-hirai-lite ができる)。2.x の entry 名 (update-check.sh の
+# HARNESS_V2_ENTRY_NAME) とカタログ名が変わったら、この 1 行を合わせる
+# (tests/smoke.sh case 9 が突き合わせる。ズレていても壊れ方は「控えが前回のまま」で fail-open)。
+HARNESS_GHP_ID="hirai-lite-v2-hirai-lite"
 
 # 見分け (このリポが GHP の形かどうか自体) の取り直しの間隔。変わることが稀なので
 # 間隔を空ける (既定 24h。update-check.sh の間隔と同じ考え方)。

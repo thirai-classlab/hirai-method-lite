@@ -14,11 +14,11 @@
 
 HARNESS_UPDATE_URL_DEFAULT="https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/v2/VERSION"
 
-# 2.x の配布系列 (marketplace のエントリ名) を仮に置いたもの。配布先の
-# marketplace.json に実際に足すエントリ名が決まったら、この 1 行と commands/*.md の
-# 素材行の同じ文字列を合わせる (ズレていても壊れ方は fail-open — 解決できずに空を返す
-# だけで、旧い版を掴んだりはしない)。scripts/tasks-path.sh の HARNESS_GHP_ID と同じ
-# 仮置きの考え方 (あちらは控えの置き場、こちらは本体の置き場)。
+# 2.x の配布系列 (marketplace のエントリ名)。配布先の marketplace.json の 2.x の entry 名と
+# 同じ値で、変えるときは、この 1 行と commands/*.md の素材行の同じ文字列と
+# scripts/tasks-path.sh の HARNESS_GHP_ID (<entry 名>-<カタログ名>) を合わせる
+# (tests/smoke.sh case 9 が entry 名と HARNESS_GHP_ID を、case 10 が素材行を突き合わせる。
+# ズレていても壊れ方は fail-open — 解決できずに空を返すだけで、旧い版を掴んだりはしない)。
 HARNESS_V2_ENTRY_NAME="hirai-lite-v2"
 
 # --- プラグイン本体の置き場所 --------------------------------------------------
