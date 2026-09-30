@@ -791,19 +791,27 @@ def clear_field_value(project_number: int, item_id: str, field_name: str) -> Non
 REST_FIELDS_CACHE = os.path.join(_local_state_dir(), 'gh-fields-rest.json')
 
 
+def rest_name(value) -> str | None:
+    """REST の選択肢の name は {html, raw} の dict で返る（2026-09-29 実測）。
+    文字列ならそのまま・dict なら raw に揃える。それ以外は None。"""
+    if isinstance(value, dict):
+        value = value.get('raw')
+    return value if isinstance(value, str) else None
+
+
 def sync_fields_rest(project_number: int) -> dict:
     """`GET .../projectsV2/<n>/fields` を頁送りで読み、name → {id（整数）,
     options: {option 名: option id}} を gh-fields-rest.json に控える。"""
     fields = rest_paginated(f'{project_fields_rest_path(project_number)}?per_page=100')
     mapping = {
-        f['name']: {
+        rest_name(f['name']): {
             'id': f['id'],
             'options': {
-                o['name']: o['id'] for o in (f.get('options') or [])
-                if isinstance(o, dict) and isinstance(o.get('name'), str) and 'id' in o
+                rest_name(o.get('name')): o['id'] for o in (f.get('options') or [])
+                if isinstance(o, dict) and rest_name(o.get('name')) is not None and 'id' in o
             },
         }
-        for f in fields if isinstance(f, dict) and 'name' in f and 'id' in f
+        for f in fields if isinstance(f, dict) and rest_name(f.get('name')) is not None and 'id' in f
     }
     if not mapping:
         die(f'REST の field が 0 件。project {project_number} を確認すること', 1)

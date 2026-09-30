@@ -360,7 +360,10 @@ def _fake_rest_field_defs(field_defs: list[dict]) -> list[dict]:
     for i, d in enumerate(field_defs):
         out.append({
             'id': 9000 + i, 'name': d['name'],
-            'options': [{'id': f"R_{o['id']}", 'name': o['name']} for o in d.get('options', [])],
+            # 本番の実物の形（2026-09-29 実測）: 選択肢の name は {html, raw} の dict
+            'options': [{'id': f"R_{o['id']}", 'color': 'GRAY',
+                         'description': {'html': '', 'raw': ''},
+                         'name': {'html': o['name'], 'raw': o['name']}} for o in d.get('options', [])],
         })
     return out
 
