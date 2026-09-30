@@ -567,6 +567,7 @@ def make_command_gh(
     summaries: dict[int, dict] | None = None, extras: dict[int, dict] | None = None,
     closing_refs: dict[int, list[int]] | None = None, project_number: int = 7,
     write_log: list[tuple] | None = None, paginate: dict[str, list] | None = None,
+    children: dict[int, list[dict]] | None = None,
 ):
     """close-parents・align・unblocked・after-merge・today を main([...]) 経由で走らせる
     ための、まとまった偽 gh。write_log には、実際に書き込みが起きたときだけ 1 行ずつ積む
@@ -574,9 +575,11 @@ def make_command_gh(
     更新は ('item-update', field_id, value)、それ以外の REST は
     (method, path, body) の 3 要素）。paginate は `--paginate` の応答を、path に含まれる
     部分文字列で切り分ける（comments・repo_only_issue_numbers・merged-designs のテストが
-    使う。既定はどれも []）。"""
+    使う。既定はどれも []）。children は `issues/{親}/sub_issues` の応答（各要素 state・
+    state_reason）で、無ければ summaries の total・completed から completed で閉じた子を並べる。"""
     bodies = bodies or {}
     summaries = summaries or {}
+    children = children or {}
     extras = extras or {}
     closing_refs = closing_refs or {}
     paginate = paginate or {}
@@ -591,6 +594,18 @@ def make_command_gh(
         if '--paginate' in args:
             idx = args.index('--paginate')
             path = args[idx + 1] if len(args) > idx + 1 else ''
+            sub_match = re.search(r'/issues/(\d+)/sub_issues$', path)
+            if sub_match:
+                parent = int(sub_match.group(1))
+                if parent in children:
+                    return 0, json.dumps(children[parent]), ''
+                summary = summaries.get(parent, {'total': 0, 'completed': 0})
+                total, completed = summary.get('total', 0), summary.get('completed', 0)
+                return 0, json.dumps([
+                    {'number': parent * 100 + k, 'state': 'closed' if k < completed else 'open',
+                     'state_reason': 'completed' if k < completed else None}
+                    for k in range(total)
+                ]), ''
             if re.search(r'projectsV2/\d+/fields', path):
                 return 0, json.dumps(_fake_rest_field_defs(_fake_field_defs())), ''
             for key, value in paginate.items():
@@ -2608,14 +2623,14 @@ def main() -> int:
         # ── close-parents ─────────────────────────
         def _close_parents_skips_childless_parent() -> None:
             items = [{'number': 100, 'kind': gh_task.FEATURE_KIND, 'state': 'OPEN', 'title': 'f'}]
-            plan = gh_task.close_parents_plan(items, {}, {100: {'total': 0, 'completed': 0}})
+            plan = gh_task.close_parents_plan(items, {}, {100: []})
             assert plan['close_parents'] == [], f'子 0 件なのに閉じる対象になった: {plan}'
 
         t('close-parents は子 0 件の親を閉じない', _close_parents_skips_childless_parent)
 
         def _close_parents_closes_fully_closed_parent() -> None:
             items = [{'number': 101, 'kind': gh_task.FEATURE_KIND, 'state': 'OPEN', 'title': 'f'}]
-            plan = gh_task.close_parents_plan(items, {}, {101: {'total': 3, 'completed': 3}})
+            plan = gh_task.close_parents_plan(items, {}, {101: [{'state': 'closed'}] * 3})
             assert plan['close_parents'] == [
                 {'number': 101, 'kind': 'feature', 'children_total': 3},
             ], plan
@@ -2625,7 +2640,7 @@ def main() -> int:
         def _close_parents_skips_permanent_wave() -> None:
             items = [{'number': 102, 'kind': gh_task.WAVE_KIND, 'state': 'OPEN', 'title': 'P0'}]
             bodies = {102: gh_task.PERMANENT_MARK}
-            plan = gh_task.close_parents_plan(items, bodies, {102: {'total': 5, 'completed': 5}})
+            plan = gh_task.close_parents_plan(items, bodies, {102: [{'state': 'closed'}] * 5})
             assert plan['close_parents'] == [], f'常設の wave を閉じようとした: {plan}'
 
         t('close-parents は「- 常設: はい」の wave を閉じない', _close_parents_skips_permanent_wave)
@@ -2634,7 +2649,7 @@ def main() -> int:
         # 子が全部閉じていても close-parents では閉じない（wave-holds に回るだけ）。
         def _close_parents_skips_wave_without_exit_line() -> None:
             items = [{'number': 103, 'kind': gh_task.WAVE_KIND, 'state': 'OPEN', 'title': 'P1'}]
-            plan = gh_task.close_parents_plan(items, {}, {103: {'total': 2, 'completed': 2}})
+            plan = gh_task.close_parents_plan(items, {}, {103: [{'state': 'closed'}] * 2})
             assert plan['close_parents'] == [], (
                 f'出る条件のコマンドの行が無い wave を閉じた: {plan}'
             )
@@ -2647,7 +2662,7 @@ def main() -> int:
         def _close_parents_closes_wave_with_exit_line() -> None:
             items = [{'number': 104, 'kind': gh_task.WAVE_KIND, 'state': 'OPEN', 'title': 'P1'}]
             bodies = {104: '- 出る条件のコマンド: exit 0（2026-09-28・abc1234）\n'}
-            plan = gh_task.close_parents_plan(items, bodies, {104: {'total': 2, 'completed': 2}})
+            plan = gh_task.close_parents_plan(items, bodies, {104: [{'state': 'closed'}] * 2})
             assert plan['close_parents'] == [
                 {'number': 104, 'kind': 'wave', 'children_total': 2},
             ], f'行があるのに閉じなかった: {plan}'
@@ -3372,6 +3387,51 @@ def main() -> int:
             'MIGRATION_ALIGN_WRITE_ENABLED は True で、False にすると align・close-parents が書かない',
             _write_switch_is_on_after_1_8a,
         )
+
+        # ── #516: not planned で閉じた子も「閉じた」に数える ──
+        def _close_parents_counts_not_planned_child_as_closed() -> None:
+            items = [{
+                'number': 650, 'kind': gh_task.FEATURE_KIND, 'status': gh_task.READY_STATUS,
+                'state': 'OPEN', 'title': 'F', 'parent_number': None,
+            }]
+            # 本番の実測（not planned の子は completed に数えない）から推した値。子 2 件がどちらも閉じていれば summary は completed 1・total 2 になる。判定は summary を読まず children の state だけで見る
+            gh_task.run_gh = make_command_gh(
+                items, summaries={650: {'total': 2, 'completed': 1}},
+                children={650: [
+                    {'number': 6501, 'state': 'closed', 'state_reason': 'completed'},
+                    {'number': 6502, 'state': 'closed', 'state_reason': 'not_planned'},
+                ]},
+            )
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = gh_task.main(['close-parents', '--json'])
+            assert rc == 0
+            plan = json.loads(out.getvalue())
+            assert plan['close_parents'] == [
+                {'number': 650, 'kind': 'feature', 'children_total': 2},
+            ], f'not planned の子を閉じた数に入れていない: {plan}'
+
+        t(
+            'close-parents は not planned で閉じた子も閉じた数に入れ、全部閉じた feature を候補にする（#516）',
+            _close_parents_counts_not_planned_child_as_closed,
+        )
+
+        def _close_parents_keeps_parent_with_open_child() -> None:
+            items = [{
+                'number': 651, 'kind': gh_task.FEATURE_KIND, 'status': gh_task.READY_STATUS,
+                'state': 'OPEN', 'title': 'F', 'parent_number': None,
+            }]
+            gh_task.run_gh = make_command_gh(items, children={651: [
+                {'number': 6511, 'state': 'closed', 'state_reason': 'not_planned'},
+                {'number': 6512, 'state': 'open', 'state_reason': None},
+            ]})
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = gh_task.main(['close-parents', '--json'])
+            assert rc == 0
+            assert json.loads(out.getvalue())['close_parents'] == [], out.getvalue()
+
+        t('close-parents は open の子が 1 件でも残る親を閉じない（#516）', _close_parents_keeps_parent_with_open_child)
 
         # ── main([...]) を実際に走らせる（書き込みの有無を見る） ──
         def _close_parents_command_lists_but_does_not_write_when_switch_off() -> None:

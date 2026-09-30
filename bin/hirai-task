@@ -91,8 +91,8 @@ memos / today / after-merge）:
     コメントだけを拾う。since は gh-comments-since.json に持ち、次回はそこから読む
     （無ければ既定で 24 時間前から）。
 
-  close-parents: 直下の子が 1 件以上あり（REST の sub_issues_summary.total≥1）、
-    全部閉じた種別 feature・wave の issue を閉じる。本文に「- 常設: はい」とある
+  close-parents: 直下の子が 1 件以上あり（REST の issues/{親}/sub_issues が 1 件以上）、
+    全部閉じた（閉じた理由は問わない・not planned も閉じた数に入れる）種別 feature・wave の issue を閉じる。本文に「- 常設: はい」とある
     wave は飛ばす（終わりの無い親）。Status は書かない（進み具合は帯で見る）。
 
   unblocked: 一覧を出すだけで書かない。対象は依存待ちの task のうち、task 自身と
@@ -2100,18 +2100,22 @@ def align_plan(
     return {'align': plans}
 
 
-def fetch_sub_issues_summaries(numbers: list[int]) -> dict[int, dict]:
-    """close-parents の「直下の子が 1 件以上・全部閉じた」を見るための sub_issues_summary
-    を、REST で 1 件ずつ引く（対象は open の feature・wave だけなので、通常は数十件以下）。"""
-    return {n: rest('GET', f'repos/{REPO}/issues/{n}').get('sub_issues_summary') or {} for n in numbers}
+def fetch_sub_issue_lists(numbers: list[int]) -> dict[int, list[dict]]:
+    """close-parents の「直下の子が 1 件以上・全部閉じた」を見るための子の一覧を、REST で
+    親ごとに引く（対象は open の feature・wave だけなので、通常は数十件以下）。
+    sub_issues_summary の completed は not planned で閉じた子を数えないので使わない
+    （#516）。各要素の state（open・closed）で見る。"""
+    return {
+        n: rest_paginated(f'repos/{REPO}/issues/{n}/sub_issues') for n in numbers
+    }
 
 
 def close_parents_plan(
-    items: list[dict], bodies: dict[int, str], summaries: dict[int, dict],
+    items: list[dict], bodies: dict[int, str], children: dict[int, list[dict]],
 ) -> dict:
-    """閉じる候補の feature・wave を計算する（書き込みはしない・純粋関数）。子の数は
-    summaries（呼び出し側が fetch_sub_issues_summaries で先に引く）で見る
-    （直下の子が 1 件以上・全部閉じた）。wave は、さらに「出る
+    """閉じる候補の feature・wave を計算する（書き込みはしない・純粋関数）。子は
+    children（呼び出し側が fetch_sub_issue_lists で先に引く）の state で見る
+    （直下の子が 1 件以上・全部閉じた・閉じた理由は問わない）。wave は、さらに「出る
     条件のコマンド」の行が本文に無ければ閉じない。"""
     candidates = []
     for i in items:
@@ -2124,11 +2128,9 @@ def close_parents_plan(
                 continue
             if not _EXIT_LINE_RE.search(body):
                 continue
-        summary = summaries.get(i['number']) or {}
-        total = summary.get('total', 0)
-        completed = summary.get('completed', 0)
-        if isinstance(total, int) and total >= 1 and completed == total:
-            candidates.append({'number': i['number'], 'kind': kind, 'children_total': total})
+        kids = children.get(i['number']) or []
+        if kids and all(str(k.get('state', '')).lower() == 'closed' for k in kids):
+            candidates.append({'number': i['number'], 'kind': kind, 'children_total': len(kids)})
     return {'close_parents': candidates}
 
 
@@ -2469,8 +2471,8 @@ def cmd_close_parents(as_json: bool = False, *, items: list[dict] | None = None)
         items = fetch_all_items(project_number)
     wave_numbers = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
     bodies = fetch_bodies(wave_numbers)
-    summaries = fetch_sub_issues_summaries(_open_parent_candidate_numbers(items))
-    plan = close_parents_plan(items, bodies, summaries)
+    children = fetch_sub_issue_lists(_open_parent_candidate_numbers(items))
+    plan = close_parents_plan(items, bodies, children)
     candidates = plan.get('close_parents') or []
     if as_json:
         print(json.dumps(plan, ensure_ascii=False))
@@ -2647,8 +2649,8 @@ def cmd_after_merge(pr_number: int) -> int:
             break
         visited_parents |= parents
         parent_items = [i for i in items if i.get('number') in parents]
-        summaries = fetch_sub_issues_summaries(_open_parent_candidate_numbers(parent_items))
-        plan = close_parents_plan(parent_items, bodies, summaries)
+        children = fetch_sub_issue_lists(_open_parent_candidate_numbers(parent_items))
+        plan = close_parents_plan(parent_items, bodies, children)
         candidates = plan.get('close_parents') or []
         if not candidates:
             break
