@@ -1018,7 +1018,23 @@ case_9() {
   if [ -n "$mver" ] && [ "$mver" != "$ver" ]; then
     fail 9 "marketplace.json の version が VERSION と一致" "VERSION=${ver} marketplace.json=${mver}"; return
   fi
-  pass 9 "マニフェスト 4 件が妥当な JSON / version=${pver} が VERSION と一致"
+  # 2.x の entry (ref=v2) の版は、v2 ブランチの VERSION と同じ。手作業でそろえる前提なので、
+  # v2 が手元に在るときだけ突き合わせる (無ければ未検証)。
+  local v2ver="" v2ent="" v2note="v2 が手元に無く未検証"
+  if git -C "$ROOT" rev-parse --verify -q refs/heads/v2:VERSION >/dev/null 2>&1; then
+    v2ver="$(git -C "$ROOT" show refs/heads/v2:VERSION 2>/dev/null | head -1 | tr -d '\r')"
+    v2ent="$(python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(",".join(e.get("version", "") for e in d["plugins"]
+               if isinstance(e.get("source"), dict) and e["source"].get("ref") == "v2"))
+' "$ROOT/.claude-plugin/marketplace.json" 2>/dev/null)"
+    if [ "$v2ent" != "$v2ver" ]; then
+      fail 9 "カタログの ref=v2 の entry の version が v2 ブランチの VERSION と一致" "v2:VERSION=${v2ver} entry=${v2ent:-無し}"; return
+    fi
+    v2note="ref=v2 の entry の版 ${v2ent} が v2 ブランチの VERSION と一致"
+  fi
+  pass 9 "マニフェスト 4 件が妥当な JSON / version=${pver} が VERSION と一致 / ${v2note}"
 }
 
 # ---------- case 10: 同梱物 (MCP 定義 / agents) が壊れていない ----------
