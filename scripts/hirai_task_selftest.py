@@ -3144,6 +3144,101 @@ def main() -> int:
             _wave_has_exited_treats_empty_wave_as_not_met,
         )
 
+        def _wave_has_exited_counts_only_tasks_not_feature_rows() -> None:
+            # #521: feature は子が全部閉じたときにしか閉じない。保留の task だけを持つ
+            # feature（承認待ち・着手可のまま）を子に持つ wave も、コマンドの行があれば出る。
+            line = {310: '- 出る条件のコマンド: exit 0（2026-09-29・abc1234）\n'}
+            for feature_status in (gh_task.PENDING_STATUS, gh_task.READY_STATUS):
+                items = [
+                    {'number': 310, 'kind': gh_task.WAVE_KIND, 'status': '', 'state': 'OPEN',
+                     'title': 'W1', 'parent_number': None},
+                    {'number': 311, 'type': 'Issue', 'kind': gh_task.FEATURE_KIND,
+                     'status': feature_status, 'state': 'OPEN', 'title': 'F', 'parent_number': 310},
+                    {'number': 312, 'type': 'Issue', 'kind': 'task', 'status': gh_task.HOLD_STATUS,
+                     'state': 'OPEN', 'title': 't', 'parent_number': 311},
+                ]
+                by_number, children_of = gh_task._board_index(items)
+                met, has_line = gh_task.wave_has_exited(310, by_number, children_of, line)
+                assert met is True and has_line is True, (
+                    f'保留の task だけを持つ feature（{feature_status}）のせいで出たにならない'
+                )
+
+        t(
+            'wave_has_exited は保留の task だけを持つ feature を子に持つ wave を、行があれば出たと読む（#521）',
+            _wave_has_exited_counts_only_tasks_not_feature_rows,
+        )
+
+        def _wave_has_exited_open_task_under_pending_feature_blocks() -> None:
+            line = {320: '- 出る条件のコマンド: exit 0（2026-09-29・abc1234）\n'}
+            items = [
+                {'number': 320, 'kind': gh_task.WAVE_KIND, 'status': '', 'state': 'OPEN',
+                 'title': 'W1', 'parent_number': None},
+                {'number': 321, 'type': 'Issue', 'kind': gh_task.FEATURE_KIND,
+                 'status': gh_task.PENDING_STATUS, 'state': 'OPEN', 'title': 'F', 'parent_number': 320},
+                {'number': 322, 'type': 'Issue', 'kind': 'task', 'status': gh_task.HOLD_STATUS,
+                 'state': 'OPEN', 'title': 't', 'parent_number': 321},
+                # 種別が空でも task とみなす（§8-1）。この行が未完了なので wave は出ない
+                {'number': 323, 'type': 'Issue', 'kind': '', 'status': gh_task.READY_STATUS,
+                 'state': 'OPEN', 'title': 't2', 'parent_number': 321},
+            ]
+            by_number, children_of = gh_task._board_index(items)
+            met, _has_line = gh_task.wave_has_exited(320, by_number, children_of, line)
+            assert met is False, '承認待ちの feature の下に未完了の task があるのに出た扱い'
+
+        t(
+            'wave_has_exited は承認待ちの feature の下に未完了の task があれば出ない（#521）',
+            _wave_has_exited_open_task_under_pending_feature_blocks,
+        )
+
+        def _feature_under_wave_items(wave: int) -> list[dict]:
+            # wave → feature（承認待ち）→ 保留の task（#521 の実物の形）
+            return [
+                {'number': wave, 'kind': gh_task.WAVE_KIND, 'status': '', 'state': 'OPEN',
+                 'title': 'W1', 'parent_number': None},
+                {'number': wave + 1, 'type': 'Issue', 'kind': gh_task.FEATURE_KIND,
+                 'status': gh_task.PENDING_STATUS, 'state': 'OPEN', 'title': 'F',
+                 'parent_number': wave},
+                {'number': wave + 2, 'type': 'Issue', 'kind': 'task', 'status': gh_task.HOLD_STATUS,
+                 'state': 'OPEN', 'title': 't', 'parent_number': wave + 1},
+            ]
+
+        def _unblocked_after_wave_with_pending_feature_of_hold_tasks() -> None:
+            items = _feature_under_wave_items(330) + [
+                {'number': 340, 'kind': gh_task.WAVE_KIND, 'status': '', 'state': 'OPEN',
+                 'title': 'W2', 'parent_number': None},
+                {'number': 341, 'type': 'Issue', 'kind': gh_task.FEATURE_KIND,
+                 'status': gh_task.READY_STATUS, 'state': 'OPEN', 'title': 'F2',
+                 'parent_number': 340},
+                {'number': 342, 'type': 'Issue', 'kind': 'task', 'status': gh_task.DEP_STATUS,
+                 'state': 'OPEN', 'title': 't2', 'parent_number': 341},
+            ]
+            extras = {
+                342: {'blocked_by_open': 0}, 341: {'blocked_by_open': 0},
+                340: {'blocked_by_open_numbers': [330]},
+            }
+            bodies = {330: '- 出る条件のコマンド: exit 0（2026-09-29・abc1234）\n'}
+            rows = gh_task.unblocked_rows(items, extras, bodies)
+            assert [r['number'] for r in rows] == [342], (
+                f'保留の task だけの feature を挟む W1 が出たのに W2 の子が出ない（#521）: {rows}'
+            )
+
+        t(
+            'unblocked は、承認待ちの feature の下が保留の task だけの wave が出たら、次の wave の子を出す（#521）',
+            _unblocked_after_wave_with_pending_feature_of_hold_tasks,
+        )
+
+        def _wave_hold_rows_sees_wave_with_pending_feature_of_hold_tasks() -> None:
+            items = _feature_under_wave_items(350)
+            lines = gh_task.wave_hold_rows(items, {})
+            assert any('#350' in x for x in lines), (
+                f'承認待ちの feature を挟む W1 の子の条件が満たされているのに wave-holds に出ない（#521）: {lines}'
+            )
+
+        t(
+            'wave-holds は、承認待ちの feature の下が保留の task だけの wave も、行が無ければ出す（#521）',
+            _wave_hold_rows_sees_wave_with_pending_feature_of_hold_tasks,
+        )
+
         def _preceding_wave_unresolved_closed_wave_without_line_still_blocks() -> None:
             # 閉じた P1 でも、「出る条件のコマンド」の行が無ければ
             # 未了のまま。以前は blocked_by_open_numbers（open だけ）で見ており、閉じた

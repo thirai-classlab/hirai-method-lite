@@ -1985,8 +1985,15 @@ def wave_has_exited(
     """(子の条件を満たすか, 出る条件のコマンドの行があるか) を返す。両方 True の
     ときだけ、この wave は「出た」（後続の wave・feature・task が進んでよい）。子の条件
     だけ満たしたものは today の wave-holds に出す（1 つ目だけ True・2 つ目 False）。
-    子孫が 0 件（子がまだ 1 件も居ない新しい wave）は、子の条件を満たしたとは数えない。"""
-    descendants = _descendants(wave_number, children_of, items_by_number)
+    task（種別 空を含む）の子孫が 0 件（子がまだ 1 件も居ない新しい wave・feature だけで
+    task がまだ居ない wave を含む）は、子の条件を満たしたとは数えない。"""
+    # 数えるのは種別が task（空を含む）の子孫だけ。feature・wave・設計メモの行は数えない
+    # （#521: feature は子が全部閉じたときにしか閉じないので、保留の task しか持たない
+    # feature が承認待ち・着手可のまま残り、wave が永久に「出た」にならなかった）。
+    descendants = [
+        d for d in _descendants(wave_number, children_of, items_by_number)
+        if (d.get('kind') or '') not in EXCLUDE_KINDS
+    ]
     non_done = [
         d for d in descendants if (d.get('status') or '') not in (DONE_STATUS, HOLD_STATUS)
     ]
