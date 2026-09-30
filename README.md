@@ -22,6 +22,8 @@ Claude Code で次の 2 行を順に実行します。
 - **1 行目は配布元の一覧を登録するだけ**です。この時点では何もインストールされません。
 - **2 行目で実際に入ります。** 詳細画面が開き、次のステップの選択を求められます。
 
+> 1.x は `hirai-lite`（`main` から配る）、2.x は `hirai-lite-v2`（`ref=v2`）から配ります。2.x を入れるときは `/plugin install hirai-lite-v2@hirai-lite` です。1.x を `main` から配るあいだは `main` の版を上げないため、`hirai-lite` の利用者に 2.x は届きません。
+
 ターミナルから同じ操作（`claude plugin marketplace add …`）を試したときは確認は出ず、`✔ Successfully added marketplace: hirai-lite` とだけ表示されました。**画面の中から `/plugin` で実行した場合に確認が出るかは未確認です。** 出た場合は、追加先が `thirai-classlab/hirai-method-lite` になっていることを確かめてから進めてください。
 
 なお公式ドキュメントには「プラグインとマーケットプレイスは、あなたの権限で任意のプログラムを実行できる。信頼できる配布元のものだけを入れること」という注意書きがあります（[Security](https://code.claude.com/docs/en/discover-plugins.md#security)）。
