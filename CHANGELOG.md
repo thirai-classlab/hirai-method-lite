@@ -6,7 +6,7 @@
 
 ## v2.0.0
 
-タスク管理の形に、リポに紐づく GitHub Project を足した最初の版。**1.x とは別の entry 名（`hirai-lite-v2`）・別のブランチ（`v2`）で配る**。`hirai-lite`（1.x・`v1` ブランチ）の利用者には何も届かない。
+タスク管理の形に、リポに紐づく GitHub Project を足した最初の版。**1.x とは別の entry 名（`hirai-lite-v2`）・別のブランチ（`v2`）で配る**。`hirai-lite`（1.x・`main`）の利用者には何も届かない（`main` の `VERSION` と `plugin.json` の版を上げないため）。
 
 - **台帳（`docs/tasks/`）の案件は何も変わらない。** 台帳で回している案件は、この版に入れ替えるまで、これまでどおり動く。**GitHub の形へ移る道具は、最初の移行が出たときに用意する**（この版は形を読み書きする土台までで、台帳から Project への移行の手順・道具は含まない）。
 - **導入のしかた。** 1.x の案件は `claude plugin install hirai-lite-v2@hirai-lite --scope project` で 2.x を入れ、1.x の行を `claude plugin uninstall hirai-lite@hirai-lite --scope project` で外す。2 つの entry は同じカタログ（`hirai-lite`）に並び、キャッシュ（`plugins/cache/hirai-lite/<entry 名>/<版>`）も、プラグインの data（`plugins/data/<entry 名>-hirai-lite/`）も entry 名ごとに分かれる（偽の HOME に 2 つとも入れて実測）。
@@ -17,15 +17,6 @@
 - **コマンド 12 本の本文と rules・雛形・T2 を GitHub の形に合わせた。** `/new-task`・`/start-task`・`/finish-task` は `hirai-task` を呼ぶ（台帳の形では従来どおり台帳に書く）。立ち上げの手順は T2 `docs/rules-reference/project-setup.md`（新規）に置いた。
 - **`tests/smoke.sh` case 9 を直した。** 版の比較を `plugins[0]` の決め打ちから「この branch と同じ `ref` を source に持つ entry」に変え、entry 名が `HARNESS_V2_ENTRY_NAME` と、控えの置き場 `HARNESS_GHP_ID` が `<entry 名>-<カタログ名>` と一致することを見る。`CLAUDE_PLUGIN_DATA`・`CLAUDE_PLUGIN_ROOT` に別の値を入れても空でも、控えのパスが変わらないことも見る（entry の名前・版・ref をそれぞれ壊して FAIL することを確認）。case の数は 10 のまま。
 - **予算・数。** hook 3/5・command 12/12・skill 2/3・smoke case 10/10。
-
-## v1.16.1
-
-配布元を `main` から `v1` ブランチへ切り離した 1 件。今後 `main` のカタログには 1.x（`v1`）に加えて別系列（2.0.0 以降）の entry も並ぶようになるため、1.x を使う利用者が別系列の変更を巻き込まれないよう、この版で 1.x の内容を `v1` ブランチに固定する。
-
-- **更新検知の URL 3 か所を `main` から `v1` に向け直した。** `scripts/update-check.sh` の既定 URL・`commands/update.md` の手で確かめる手順・`README.md` の同じ手順の 3 か所。今後 1.x の配布元は `v1` ブランチになるため、「更新あり」の比較対象も実際の配布元に合わせた。`main` の `VERSION` はこの版のまま 1.x の最新値として保つ（別系列の版に上書きしない）。
-- **版の 3 か所（`VERSION` / `plugin.json` / `marketplace.json`）を揃えた。** それ以外のコマンド・rules・agents・hooks・skills は 1 バイトも変えていない。
-- **予算・数は据え置き**（hook 3/5・command 12/12・skill 2/3・smoke case 10/10。T0 実測 4,365 tokens で変化なし。`rules/` と `templates/CLAUDE.md` を触っていないため）。
-- **実測。** (1) `bash tests/smoke.sh` 全 10 case PASS / exit 0 (2) `claude plugin validate --strict` PASS (3) `claude --plugin-dir . plugin details hirai-lite` の登録件数（commands 12・skills 2・agents 3・hooks 2 イベント）が変更前と一致（今回の差分はコンポーネントを増減させないため）。
 
 ## v1.16.0
 
