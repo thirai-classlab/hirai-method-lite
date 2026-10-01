@@ -76,8 +76,14 @@ def _extract_flag(args: list[str], name: str) -> str | None:
 def _fake_row(
     number: int, *, status: str = '', kind: str = '', state: str = 'OPEN',
     typename: str = 'Issue', title: str | None = None, parent_number: int | None = None,
+    order: float | None = None,
 ) -> dict:
     field_values = []
+    if order is not None:
+        field_values.append({
+            '__typename': 'ProjectV2ItemFieldNumberValue', 'number': order,
+            'field': {'name': gh_task.ORDER_FIELD},
+        })
     if status:
         field_values.append({
             '__typename': 'ProjectV2ItemFieldSingleSelectValue', 'name': status,
@@ -2546,6 +2552,19 @@ def main() -> int:
                 for i in items
             ]
 
+        def _reversed_board(orders: dict) -> list[dict]:
+            # POSITION の順（800→801→802）と番号の順が逆: 先頭の wave の子が最も大きい番号
+            items = [
+                {'number': 800, 'kind': 'wave', 'title': '基盤（P9）', 'parent_number': None},
+                {'number': 801, 'kind': 'wave', 'title': '認証（P8）', 'parent_number': None},
+                {'number': 802, 'kind': 'wave', 'title': '課金（P7）', 'parent_number': None},
+                _task_row(12, 800), _task_row(11, 801), _task_row(10, 802),
+            ]
+            return [
+                {**i, 'order': orders[i['number']]} if i['number'] in orders else i
+                for i in items
+            ]
+
         def _ready_sort_by_order_field() -> None:
             numbers = _sorted_ready(_ordered_board({10: 3.0, 11: 2.0, 12: 1.0}))
             assert numbers == [12, 11, 10], f'着手順の小さい順になっていない: {numbers}'
@@ -2559,18 +2578,18 @@ def main() -> int:
         t('着手順の無い task は、着手順のある task の後ろに並ぶ', _ready_sort_unordered_after_ordered)
 
         def _ready_sort_same_order_keeps_current() -> None:
-            numbers = _sorted_ready(_ordered_board({10: 1.0, 11: 1.0, 12: 1.0}))
-            assert numbers == [10, 11, 12], f'同じ着手順が今の並び（POSITION → 番号）にならない: {numbers}'
-            numbers = _sorted_ready(_ordered_board({12: 2.0, 10: 1.0, 11: 1.0}))
-            assert numbers == [10, 11, 12], f'同じ着手順の組が今の並びにならない: {numbers}'
+            numbers = _sorted_ready(_reversed_board({10: 1.0, 11: 1.0, 12: 1.0}))
+            assert numbers == [12, 11, 10], f'同じ着手順が今の並び（POSITION → 番号）にならない: {numbers}'
+            numbers = _sorted_ready(_reversed_board({10: 2.0, 12: 1.0, 11: 1.0}))
+            assert numbers == [12, 11, 10], f'同じ着手順の組が POSITION の順にならない: {numbers}'
 
         t('同じ着手順の task は今の並び（先祖の wave の POSITION → 番号）のまま', _ready_sort_same_order_keeps_current)
 
         def _ready_sort_without_order_field_is_unchanged() -> None:
-            plain = _ordered_board({})
+            plain = _reversed_board({})
             with_none = [{**i, 'order': None} for i in plain]
-            assert _sorted_ready(plain) == [10, 11, 12] == _sorted_ready(with_none), (
-                '着手順の項目が無い items で並びが変わった'
+            assert _sorted_ready(plain) == [12, 11, 10] == _sorted_ready(with_none), (
+                '着手順の項目が無い items で並びが変わった（POSITION の順のはず）'
             )
 
         t('着手順の項目が無い items では今の並びと同じ', _ready_sort_without_order_field_is_unchanged)
@@ -2590,6 +2609,46 @@ def main() -> int:
             assert gh_task.parse_item(node([]))['order'] is None, '値が無いのに None でない'
 
         t('parse_item は NumberValue（着手順）を float で読み、無ければ None', _parse_item_reads_number_value)
+
+        def _items_query_reads_number_value() -> None:
+            assert re.search(r'ProjectV2ItemFieldNumberValue\s*\{\s*number\b', gh_task.ITEMS_QUERY), (
+                'ITEMS_QUERY に NumberValue（着手順）の断片が無い（本番で order が常に None になる）'
+            )
+            nodes_part = gh_task.ITEMS_QUERY.split('nodes', 1)[1]
+            assert len(re.findall(r'\bfirst:', nodes_part)) == 1, (
+                'ITEMS_QUERY の nodes の中の first: が 1 本でない（connection を増やした）'
+            )
+
+        t('ITEMS_QUERY が NumberValue（着手順）を引き、connection を増やしていない', _items_query_reads_number_value)
+
+        def _ready_prints_order() -> None:
+            def run(rows):
+                gh_task.run_gh = make_board_gh(rows)
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    rc = gh_task.main(['ready'])
+                assert rc == 0
+                return out.getvalue()
+
+            def board(orders):
+                return [
+                    _fake_row(800, kind='wave'), _fake_row(801, kind='wave'),
+                    _fake_row(500, status='着手可', kind='feature', parent_number=800),
+                    _fake_row(10, status='着手可', kind='task', parent_number=500, order=orders.get(10)),
+                    _fake_row(11, status='着手可', kind='task', parent_number=500, order=orders.get(11)),
+                    _fake_row(12, status='着手可', kind='task', parent_number=500, order=orders.get(12)),
+                ]
+
+            with_order = run(board({10: 30.0, 11: 20.0, 12: 12.0}))
+            pos = [with_order.index(f'#{n}') for n in (12, 11, 10)]
+            assert pos == sorted(pos), f'行の順が着手順の順でない: {with_order!r}'
+            assert '(着手順 12)' in with_order, f'着手順が出ていない: {with_order!r}'
+            plain = run(board({}))
+            assert '着手順' not in plain, f'着手順の無い盤で「着手順」が出た: {plain!r}'
+            pos = [plain.index(f'#{n}') for n in (10, 11, 12)]
+            assert pos == sorted(pos), f'着手順の無い盤で今の並び（番号順）にならない: {plain!r}'
+
+        t('ready は着手順の順に出し、値のある行だけ (着手順 N) を付ける。無い盤では出力が変わらない', _ready_prints_order)
 
         # ── ready の厳しい形 ───────────────────────
         def _ready_numbers(items, extras=None, bodies=None) -> list[int]:

@@ -42,7 +42,7 @@ entry 名は系列ごとに分けます）。
 - **2.x（`v2`）:** `v2` の `VERSION` / `plugin.json` / `marketplace.json` の `hirai-lite-v2` の行
   （`ref` が自分の branch の entry）を揃えて上げます。カタログ（`main`）の `hirai-lite-v2` の行の版も
   同じ値にします（`main` の case 9 が、`v2` が手元に在るときに見ます）。`main` の `VERSION` は上げません。
-- `v2` の `marketplace.json` は、配られない写しです。`hirai-lite` の行は、`plugin.json` が 2.0.0 の `v2` 上で
+- `v2` の `marketplace.json` は、配られない写しです。`hirai-lite` の行は、`plugin.json` が 2.x の `v2` 上で
   `validate --strict` が「版が違う」と落ちないよう `ref: main`（1.16.0）の github source にしてあります。
   実際に配られるカタログは `main` の方で、そちらは `source: "./"` です。
 - **push は `v2` → `main` の順。** カタログ（`main`）を先に配ると、まだ `v2` に無い版を指す entry が

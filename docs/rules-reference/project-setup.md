@@ -13,7 +13,7 @@
 
 - **3 段**: wave → feature → task。段は項目「種別」と sub-issue で表す。着手の承認は feature の単位で、人がボードで「着手可」に動かす
 - **task**: PR 1 本で閉じる作業。PR の本文に `Closes #<番号>` を書く
-- **止める依存**: blocked by で表す。wave の行の並び順が着手順
+- **止める依存**: blocked by で表す。wave の行の並び順が wave の並び
 - **止めた設計**: 種別「設計メモ」・Status「保留」の issue にする。理由と再開条件は本文に書く
 
 ## 3. 組込の自動化 4 本の設定値（画面で On にする）
@@ -34,6 +34,7 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 
 - **Status**（単一選択・8 値）: 承認待ち / 着手可 / 判断待ち / 依存待ち / 進行中 / レビュー中 / 完了 / 保留
 - **種別**（単一選択・4 値）: wave / feature / task / 設計メモ
+- **着手順**（数値・任意）: task の行に入れる。ある Project では `hirai-task ready` が小さい順に出し、値の無い行は後ろに回る（同じ値・無い行どうしは wave の並び順）。wave・feature に入れても効かない。型は Number にする（Text では読まない）
 
 | Status | 入るとき | 動かすもの |
 |---|---|---|
@@ -51,7 +52,7 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 
 ## 5. wave と feature の作り方
 
-- **wave**: 種別 wave の issue。Project の中での行の並び順が着手順（ボードで行を並べ替える）。終わりの無い仕事は常設の wave に置く
+- **wave**: 種別 wave の issue。Project の中での行の並び順が wave の並び（ボードで行を並べ替える）。終わりの無い仕事は常設の wave に置く
 - **feature**: 種別 feature の issue。wave の sub-issue にする（wave × 機能）
 - **task**: 種別 task の issue。feature の sub-issue にする。起票は `/hirai-lite:new-task`（`hirai-task new`）が種別と親を付けて Project に入れる
 - **期日**: Milestone は期日のある出す段だけに付ける
@@ -63,7 +64,7 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 | 承認 | `種別:feature status:承認待ち,着手可` | 着手の承認を待つ feature |
 | 裁定 | `status:判断待ち` | 人の答えを待つ問い |
 | 取り込み | `is:pr is:open` | merge を待つ PR |
-| 全体 | 階層 On・`種別:wave`・並べ替えなし | wave を着手順に並べ、開くと feature と task の帯 |
+| 全体 | 階層 On・`種別:wave`・並べ替えなし | wave を並び順に並べ、開くと feature と task の帯 |
 | 止まっているもの | `種別:task status:依存待ち,判断待ち,保留` | 待っている task |
 | 保留中の設計メモ | `種別:設計メモ status:保留` | 止めた設計 |
 
@@ -75,7 +76,7 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 API で付けられるかは未検証。付けられない前提で、ビューを作ったあと人が画面で付けて見る。
 
 1. **階層表示**: 全体ビューで Hierarchy を On にする
-2. **並べ替え**: wave の並びを着手順にする（全体ビューは並べ替えなしで、Project の行の並びに従う）
+2. **並べ替え**: wave の並びを決める（全体ビューは並べ替えなしで、Project の行の並びに従う）
 3. **グループ化**: 種別でのグループ化は、どのビューに付けるかが決まっていない。付けるなら人が画面で決める
 
 ## 8. 立ち上げ後の確かめ

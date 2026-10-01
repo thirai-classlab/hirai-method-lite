@@ -19,7 +19,8 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
 
   ready: 種別が task の着手可で、題名に `[User]` が無く、親が着手可の feature で、
   task と feature に未完了の blocked by が無く、先祖の wave を止める wave が
-  出る条件を満たしているものだけ。並びは先祖の wave の POSITION の順。
+  出る条件を満たしているものだけ。並びは着手順（数値の項目。ある行を先に小さい順）→
+  先祖の wave の POSITION → 番号。着手順の項目が無い Project では先祖の wave の POSITION → 番号のまま。
   pending は承認待ちの feature、blocked は判断待ち・依存待ち・保留の task を出す。
 
   Project の在り処は Repository.projectsV2 から引く。0 件なら「無し」、
@@ -1044,7 +1045,8 @@ def fetch_bodies(numbers: list[int]) -> dict[int, str]:
 
 
 # ── ready ────────────────────────────────────────────────────────────
-# 並びの鍵: task ごとに、先祖の wave の POSITION を使う。
+# 並びの鍵: 着手順（数値の項目。ある行を先に小さい順）→ 先祖の wave の POSITION → 番号。着手順の項目が無い Project では後ろの 2 つだけ。
+# wave の POSITION は task ごとに、先祖の wave のものを使う。
 # items は POSITION の順（GraphQL items() の既定の並び。REST の既定の並びも同じ順）なので、並びの位置は items の中の index で表せる。先祖に wave が無い
 # task は、wave のある task のあとに番号順で並べる。
 #
