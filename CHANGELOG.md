@@ -4,6 +4,15 @@
 
 更新のしかたは [README の「更新する」](README.md#更新する既定では自動で新しくなりません)。**既定では自動更新しない**（v1.13.0 から opt-in で自動にできる）。
 
+## v2.1.0
+
+`hirai-task ready` が、数値の項目「着手順」を持つ Project では着手順の小さい順に task を出す（エージェントが ready の先頭から着手できるようにする）。
+
+- **項目名は `ORDER_FIELD = '着手順'`（数値）。** 一覧の問い合わせ（`ITEMS_QUERY`）の `fieldValues` に `ProjectV2ItemFieldNumberValue` を足しただけで、connection は増やしていない（1 頁 2 点の前提は変わらない）。`show` の問い合わせも同じ形に合わせた。`parse_item` に `order`（float か None）を足した。
+- **並び。** 着手順のある行を先に小さい順、無い行はその後ろ。同じ着手順・着手順の無い行どうしは従来どおり（先祖の wave の POSITION → 番号）。`ready` の各行は着手順があれば `(着手順 12)` を出し、無ければ出さない。
+- **後方互換。** 着手順の項目が無い Project では、並びも出力も 2.0.0 と同じ。
+- **selftest。** 「ready の並び」に 5 case（着手順の小さい順・無い行は後ろ・同じ着手順は従来の並び・項目が無ければ従来どおり・`parse_item` が数値を読む）。
+
 ## v2.0.0
 
 タスク管理の形に、リポに紐づく GitHub Project を足した最初の版。**1.x とは別の entry 名（`hirai-lite-v2`）・別のブランチ（`v2`）で配る**。`hirai-lite`（1.x・`main`）の利用者には何も届かない（`main` の `VERSION` と `plugin.json` の版を上げないため）。

@@ -2533,6 +2533,64 @@ def main() -> int:
 
         t('先祖に wave の無い task は、wave のある task のあとに番号順で並ぶ', _ready_sort_puts_waveless_after_wave_tasks)
 
+        def _ordered_board(orders: dict) -> list[dict]:
+            # wave の POSITION は 800→801→802、番号は 10→11→12 の順。着手順はこれに逆らう値を渡す
+            items = [
+                {'number': 800, 'kind': 'wave', 'title': '基盤（P9）', 'parent_number': None},
+                {'number': 801, 'kind': 'wave', 'title': '認証（P8）', 'parent_number': None},
+                {'number': 802, 'kind': 'wave', 'title': '課金（P7）', 'parent_number': None},
+                _task_row(10, 800), _task_row(11, 801), _task_row(12, 802),
+            ]
+            return [
+                {**i, 'order': orders[i['number']]} if i['number'] in orders else i
+                for i in items
+            ]
+
+        def _ready_sort_by_order_field() -> None:
+            numbers = _sorted_ready(_ordered_board({10: 3.0, 11: 2.0, 12: 1.0}))
+            assert numbers == [12, 11, 10], f'着手順の小さい順になっていない: {numbers}'
+
+        t('ready は着手順の小さい順に並ぶ（wave の POSITION・番号に逆らう値）', _ready_sort_by_order_field)
+
+        def _ready_sort_unordered_after_ordered() -> None:
+            numbers = _sorted_ready(_ordered_board({12: 5.0}))
+            assert numbers == [12, 10, 11], f'着手順の無い行が着手順のある行より前に出た: {numbers}'
+
+        t('着手順の無い task は、着手順のある task の後ろに並ぶ', _ready_sort_unordered_after_ordered)
+
+        def _ready_sort_same_order_keeps_current() -> None:
+            numbers = _sorted_ready(_ordered_board({10: 1.0, 11: 1.0, 12: 1.0}))
+            assert numbers == [10, 11, 12], f'同じ着手順が今の並び（POSITION → 番号）にならない: {numbers}'
+            numbers = _sorted_ready(_ordered_board({12: 2.0, 10: 1.0, 11: 1.0}))
+            assert numbers == [10, 11, 12], f'同じ着手順の組が今の並びにならない: {numbers}'
+
+        t('同じ着手順の task は今の並び（先祖の wave の POSITION → 番号）のまま', _ready_sort_same_order_keeps_current)
+
+        def _ready_sort_without_order_field_is_unchanged() -> None:
+            plain = _ordered_board({})
+            with_none = [{**i, 'order': None} for i in plain]
+            assert _sorted_ready(plain) == [10, 11, 12] == _sorted_ready(with_none), (
+                '着手順の項目が無い items で並びが変わった'
+            )
+
+        t('着手順の項目が無い items では今の並びと同じ', _ready_sort_without_order_field_is_unchanged)
+
+        def _parse_item_reads_number_value() -> None:
+            def node(fvs):
+                return {'id': 'x', 'content': {'__typename': 'Issue', 'number': 7, 'title': 't',
+                        'state': 'OPEN', 'url': 'u', 'parent': {'number': 1}},
+                        'fieldValues': {'nodes': fvs}}
+            order_fv = {'__typename': 'ProjectV2ItemFieldNumberValue', 'number': 12,
+                        'field': {'name': gh_task.ORDER_FIELD}}
+            other_fv = {'__typename': 'ProjectV2ItemFieldNumberValue', 'number': 99,
+                        'field': {'name': '見積'}}
+            got = gh_task.parse_item(node([order_fv, other_fv]))
+            assert got['order'] == 12.0 and isinstance(got['order'], float), f"order={got['order']!r}"
+            assert gh_task.parse_item(node([other_fv]))['order'] is None, '別名の数値を着手順と読んだ'
+            assert gh_task.parse_item(node([]))['order'] is None, '値が無いのに None でない'
+
+        t('parse_item は NumberValue（着手順）を float で読み、無ければ None', _parse_item_reads_number_value)
+
         # ── ready の厳しい形 ───────────────────────
         def _ready_numbers(items, extras=None, bodies=None) -> list[int]:
             return [r['number'] for r in gh_task.ready_rows(items, extras or {}, bodies or {})]

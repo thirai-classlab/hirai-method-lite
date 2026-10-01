@@ -215,6 +215,8 @@ PROJECT_NUMBER_OVERRIDE = os.environ.get('HIRAI_TASK_PROJECT', '').strip()
 
 # 種別（kind）の項目名と、一覧から除く種別。空（項目が無い・値が無い）は task とみなす。
 KIND_FIELD = '種別'
+# 着手順（数値の項目）。ある Project では ready が小さい順に出す。無ければ従来の並び。
+ORDER_FIELD = '着手順'
 EXCLUDE_KINDS = {'wave', 'feature', '設計メモ'}
 DESIGN_MEMO_KIND = '設計メモ'
 
@@ -499,6 +501,10 @@ query($owner:String!, $name:String!, $projectNumber:Int!, $after:String) {
                 text
                 field { ... on ProjectV2FieldCommon { name } }
               }
+              ... on ProjectV2ItemFieldNumberValue {
+                number
+                field { ... on ProjectV2FieldCommon { name } }
+              }
             }
           }
         }
@@ -510,7 +516,7 @@ query($owner:String!, $name:String!, $projectNumber:Int!, $after:String) {
 
 
 def _field_values(node: dict) -> dict:
-    fields: dict[str, str] = {}
+    fields: dict[str, str | float] = {}
     for fv in (node.get('fieldValues') or {}).get('nodes') or []:
         typename = fv.get('__typename')
         field = fv.get('field') or {}
@@ -521,6 +527,10 @@ def _field_values(node: dict) -> dict:
             fields[name] = fv.get('name') or ''
         elif typename == 'ProjectV2ItemFieldTextValue':
             fields[name] = fv.get('text') or ''
+        elif typename == 'ProjectV2ItemFieldNumberValue':
+            number = fv.get('number')
+            if isinstance(number, (int, float)) and not isinstance(number, bool):
+                fields[name] = float(number)
     return fields
 
 
@@ -528,6 +538,7 @@ def parse_item(node: dict) -> dict:
     content = node.get('content') or {}
     fields = _field_values(node)
     parent = content.get('parent')
+    order = fields.get(ORDER_FIELD)
     return {
         'id': node.get('id'),
         'type': content.get('__typename'),
@@ -538,6 +549,7 @@ def parse_item(node: dict) -> dict:
         'parent_number': (parent or {}).get('number'),
         'status': fields.get('Status', ''),
         'kind': fields.get(KIND_FIELD, ''),
+        'order': order if isinstance(order, float) else None,
     }
 
 
@@ -1086,9 +1098,12 @@ def ready_sort_key(items: list[dict]):
     def key(i: dict):
         number = i.get('number') or 0
         pos = _wave_ancestor_position(number, parent_of, wave_position)
+        order = i.get('order')
+        # 着手順のある行を先に（小さい順）。同じ・無い行どうしは wave の POSITION → 番号
+        order_key = (0, order) if order is not None else (1, 0.0)
         if pos is not None:
-            return (0, pos, number)
-        return (1, 0, number)
+            return (order_key, 0, pos, number)
+        return (order_key, 1, 0, number)
 
     return key
 
@@ -1102,7 +1117,8 @@ def ready_rows(
     ・親が種別 feature で、その Status が着手可
     ・task と親の feature に、未完了の blocked by が無い
     ・先祖の wave を止める wave が、出る条件を満たしている
-    並びは先祖の wave の POSITION の順。"""
+    並びは着手順（数値の項目。ある行を先に小さい順）→ 先祖の wave の POSITION → 番号。
+    着手順の項目が無い Project では先祖の wave の POSITION → 番号のまま。"""
     items_by_number, children_of = _board_index(items)
     rows = []
     for i in items:
@@ -1179,7 +1195,9 @@ def cmd_ready() -> int:
     else:
         print(f'着手可 {len(rows)} 件')
         for i in rows:
-            print(f"  #{i['number']:<4} [feature #{i['parent_number']}] {i['title'][:64]}")
+            order = i.get('order')
+            order_text = f' (着手順 {order:g})' if order is not None else ''
+            print(f"  #{i['number']:<4} [feature #{i['parent_number']}]{order_text} {i['title'][:64]}")
     for line in ready_warnings(items, extras):
         print(line)
     return 0
@@ -1244,6 +1262,10 @@ _PROJECT_ITEM_FRAGMENT = '''
                 }
                 ... on ProjectV2ItemFieldTextValue {
                   text
+                  field { ... on ProjectV2FieldCommon { name } }
+                }
+                ... on ProjectV2ItemFieldNumberValue {
+                  number
                   field { ... on ProjectV2FieldCommon { name } }
                 }
               }
