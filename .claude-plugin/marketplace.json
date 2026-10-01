@@ -29,7 +29,7 @@
       "name": "hirai-lite-v2",
       "source": { "source": "url", "url": "https://github.com/thirai-classlab/hirai-method-lite.git", "ref": "v2" },
       "description": "rules 3 層とルール追加パイプラインを備えた軽量ハーネスの 2.x。台帳（docs/tasks/）に加えて、リポに紐づく GitHub Project でタスクを管理する形を持つ。",
-      "version": "2.0.0",
+      "version": "2.1.0",
       "author": {
         "name": "thirai-classlab"
       },
