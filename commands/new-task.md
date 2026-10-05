@@ -39,7 +39,7 @@ task と feature は親が必須。親は feature（task の場合）か wave（
 親が無いときは、`new` で作る（1 件ずつ・作った直後に承認待ちで出る）。
 
 - **feature が無い**: `hirai-task new <題名> --kind feature --parent <wave の番号>`。承認待ちで作られ、「ボードで着手可にする」と 1 行で知らされる。着手可にするのは人（AI は動かさない）
-- **親の feature が着手可のとき**: 目印の無い task は、あとから足したものでも `hirai-task start <番号>` で着手できる。`new` が「親 #N は着手可。`hirai-task start <番号>` で着手できる」と 1 行で知らせる（本文には何も足さない）
+- **親の feature が着手可のとき**: 目印の無い task は、あとから足したものでも、未完了の blocked by が無く、先の wave が出ていれば `hirai-task start <番号>` で着手できる。`new` は、`start` が通る形のときだけ「親 #N は着手可。`hirai-task start <番号>` で着手できる」と 1 行で知らせ、通らない形では「いまは着手できない: <理由>」と出す（本文には何も足さない。通らない task は align が依存待ちへ動かす）
 - **wave が無い**: `hirai-task new <題名> --kind wave`。wave の issue の本文の「まだ作っていない wave」の節にあるものだけ作れる。節の書式は 1 行 1 件で、`- P3 基盤の部品・着手順 4・blocked by P1・目的と条件`（名前は最初の「・」まで。blocked by は `#番号` か短い ID）。作ったあと、節の blocked by が張られ、「並び順をボードで直してください」と知らされる。節に無い wave は作らず exit 2
 
 ### 止める依存と緩い依存

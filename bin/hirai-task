@@ -73,26 +73,35 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
   1 行で知らせる。wave は、wave の issue の本文の「まだ作っていない wave」の節
   （UNBUILT_WAVES_HEADING）にあるものだけ作り、節に書いた blocked by を張って
   「並び順をボードで直してください」と知らせる。節に無い wave は作らず exit 2。
-  目印（`[操作]`・`[User]`）の無い task を、着手可の feature の下に作ったときは、
-  「親 #N は着手可。`hirai-task start <番号>` で着手できる」と 1 行で知らせる
-  （本文には何も足さない。いつ足した子かは区別しない）。
+  目印（`[操作]`・`[User]`）の無い task を、着手可の feature の下に作ったときは、start の
+  承認待ちからの経路と同じ判定（task_not_startable_reason）を通るときだけ「親 #N は着手可。
+  `hirai-task start <番号>` で着手できる」と 1 行で知らせ、通らないときは「いまは着手できない:
+  <理由>」と出す（親の feature が着手可でないときは何も出さない。本文には何も足さない。
+  いつ足した子かは区別しない）。
 
   approve は廃止: 「approve は廃止。feature をボードで着手可に」と出して
   exit 2。feature の承認待ち→着手可は人だけが動かす（着手可の feature の子の承認待ちは
   align が動かすか、start が進行中へ進める）。
 
   set・start・review・done・reopen の守り: 種別=wave・feature は動かさない
-  （align・close-parents か、ボードの役目）。set は Status と種別だけを受け付け、
-  着手可へ書くときは、目印つきの task・親の無い task・親の feature が着手可でない
-  task を断る（承認待ち・依存待ち・判断待ち・保留のどこからでも同じ守り）。
-  start（`--approved` なし）は、着手可の task と、承認待ちで・目印が無く・親の feature が
-  着手可（種別が feature で、未完了の blocked by が無い）の task を進行中に進める。
-  いつ子になったかは問わない。親が無い・親の種別が feature でない・親が着手可でない
-  （理由に親の番号と今の Status を出す）・親に未完了の blocked by がある・目印つきで
-  承認待ち（start --approved を案内）のときは exit 2。`--approved` は `[操作]` の task に
-  限り、着手可・承認待ちからだけ進行中にでき、本文に出どころを 1 行残す。reopen は CLOSED の
-  issue だけを受け付け、Status の書き込みは set と同じ守りを通す（開いた issue を
-  reopen で回避できない）。start・reopen のどちらも、未完了の blocked by があれば断る。
+  （align・close-parents か、ボードの役目）。set は Status と種別だけを受け付ける。
+  task を着手可・進行中にしてよいかの判定は 1 つ（task_not_startable_reason）。条件は全部:
+  種別が task（空を含む）で、目印が無い／親の feature があり、種別が feature で、着手可／自分と親の feature に未完了の
+  blocked by が無い／先祖の wave を止める wave が「出た」（align_plan・ready と同じ
+  preceding_wave_unresolved。止める wave が 1 つも無いときは板の全件を引かずに通す）。
+  align が「着手可へ」と出す子だけを通し、「依存待ち」と出す子は断る。いつ子になったかは
+  問わない。断るときは理由（親の番号と今の Status・blocked by の番号など）を出して exit 2。
+  - set: Status を着手可へ書くとき、承認待ち・依存待ち・判断待ち・保留のどこからでも、この
+    判定を通す。進行中へ書けるのは、今の Status がレビュー中・進行中・完了のときだけ（承認待ち・
+    判断待ち・依存待ち・保留・着手可・空からは exit 2。start を案内）。着手可・進行中へ書くとき、
+    閉じた issue は断る（reopen を案内）。
+  - start（`--approved` なし）: 閉じた issue は断る。着手可の task は親を見ずに進行中へ進める
+    （見るのは自分の未完了の blocked by だけ。2.1.0 のまま）。承認待ちの task は、この判定を
+    通るときだけ進行中へ進める（目印つきは start --approved を案内）。ほかの Status は exit 2。
+    `--approved` は `[操作]` の task に限り、着手可・承認待ちからだけ進行中にでき、本文に
+    出どころを 1 行残す。
+  - reopen: 閉じた issue だけを受け付ける。着手可へは set と同じ判定を通し、進行中へは自分の
+    未完了の blocked by があれば断る（完了から戻す用途のため、親は見ない）。
 
 会話の最初と merge の直後の仕事（comments / close-parents / unblocked / align /
 memos / today / after-merge）:
@@ -116,7 +125,8 @@ memos / today / after-merge）:
     何もしない（着手可→着手可は出さない）。判断待ち・依存待ち・保留の子は最初から
     対象にしない。
     目印（`[操作]`・`[User]`）がある子は動かさず、番号だけを出す（承認待ち・着手可の
-    どちらでも）。いつ子になったか（本文の「- 後から追加:」の行・feature が初めて着手可に
+    どちらでも）。閉じた子と、種別が task 以外（EXCLUDE_KINDS）の子は、moves にも skipped にも
+    出さない（種別が空の子は対象のまま）。いつ子になったか（本文の「- 後から追加:」の行・feature が初めて着手可に
     なった時点の子の一覧）は見ない。feature が着手可なら、あとから足した子も同じに動かす。
     旧版（2.1.0 まで）が置いた gh-align-seen.json は読まない・書かない・消さない。
     moves の各要素には、元の Status（"from"。journal にも残す。承認待ちへ戻すときの
@@ -1429,23 +1439,115 @@ def _reject_wave_feature(item: dict, number: int, verb: str) -> None:
         )
 
 
-# ── set（Status と種別だけ） ────────────────
-def _guard_status_write(project_number: int, item: dict, number: int, value: str) -> None:
-    _reject_wave_feature(item, number, 'Status の書き込み')
-    if value != READY_STATUS:
-        return
+# ── 着手の判定（start の承認待ちからの経路・set の着手可・new の案内が共通で使う） ──
+_SET_TO_IN_PROGRESS_FROM = (REVIEW_STATUS, IN_PROGRESS_STATUS, DONE_STATUS)
+_WAVE_ANCESTOR_MAX_DEPTH = 6
+
+
+def _wave_ancestor_of_feature(project_number: int, feature: dict) -> int | None:
+    """feature の親をたどり、種別が wave の祖先の番号を返す（無い・板に載っていなければ
+    None）。_ancestor_number_of_kind と同じ深さまで見る。"""
+    seen: set[int] = set()
+    current = feature.get('parent_number')
+    depth = 0
+    while current is not None and current not in seen and depth < _WAVE_ANCESTOR_MAX_DEPTH:
+        item = fetch_write_item(project_number, current)
+        if not item.get('found'):
+            return None
+        if item['fields'].get(KIND_FIELD, '') == WAVE_KIND:
+            return current
+        seen.add(current)
+        current = item.get('parent_number')
+        depth += 1
+    return None
+
+
+def _preceding_wave_reason(project_number: int, feature: dict) -> str:
+    """feature の先祖の wave を止める wave が「出た」を満たさなければ、その理由を返す
+    （満たす・止める wave が無いときは空文字）。判定は align_plan・ready と同じ
+    preceding_wave_unresolved を使う。止める wave が 1 つも無いときは全件を引かずに通し、
+    あるときだけ板の全件・wave の blocked by と本文を引く。"""
+    wave_ancestor = _wave_ancestor_of_feature(project_number, feature)
+    if wave_ancestor is None:
+        return ''
+    wave = fetch_write_item(project_number, wave_ancestor)
+    blocking = [
+        n for n, _state in wave.get('blocked_by', [])
+        if fetch_write_item(project_number, n).get('fields', {}).get(KIND_FIELD, '') == WAVE_KIND
+    ]
+    if not blocking:
+        return ''
+    items = fetch_all_items(project_number)
+    items_by_number, children_of = _board_index(items)
+    wave_numbers = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
+    extras = fetch_extras(wave_numbers)
+    bodies = fetch_bodies(wave_numbers)
+    if preceding_wave_unresolved(wave_ancestor, items_by_number, children_of, bodies, extras):
+        return (
+            f'先祖の wave #{wave_ancestor} を止める wave が出ていない（承認待ちの子は'
+            'align が依存待ちへ動かす）'
+        )
+    return ''
+
+
+def task_not_startable_reason(project_number: int, item: dict) -> str:
+    """task を着手可・進行中にしてよいかの判定（start の承認待ちからの経路・set の着手可への
+    書き込み・new の案内が、この 1 つを通る）。進めてよければ空文字、断るときは理由を返す。
+    条件は全部: 目印（`[操作]`・`[User]`）が無い／親の feature が着手可／自分と親の feature に
+    未完了の blocked by が無い／先祖の wave を止める wave が出ている（align_plan が
+    「着手可へ」と出す子だけを通し、「依存待ちへ」と出す子は断る）。いつ子になったかは問わない。"""
+    own_kind = item['fields'].get(KIND_FIELD, '')
+    if own_kind in EXCLUDE_KINDS:
+        return f'種別が {own_kind}（task ではない）'
     if has_mark(item['title']):
-        die(f'#{number} は目印つきの task で、set では着手可にしない。start --approved を使うこと', 2)
+        return '目印つきの task（start --approved <出どころ> を使う。`[操作]` のみ）'
     parent_number = item.get('parent_number')
     if parent_number is None:
-        die(f'#{number} には親の feature が無いため、着手可にしない', 2)
+        return '親の feature が無い'
     parent = _require_item(project_number, parent_number)
+    parent_kind = parent['fields'].get(KIND_FIELD, '')
+    if parent_kind != FEATURE_KIND:
+        return f'親 #{parent_number} の種別が feature ではない（今「{parent_kind or "空"}」）'
     parent_status = parent['fields'].get('Status', '')
     if parent_status != READY_STATUS:
-        die(
-            f'#{number} の親 #{parent_number} の feature が着手可（今「{parent_status or "空"}」）'
-            'ではないため、着手可にしない', 2,
-        )
+        return f'親 #{parent_number} の feature が着手可ではない（今「{parent_status or "空"}」）'
+    if item['blocked_by_open']:
+        blockers = ', '.join(f'#{n}' for n in item['blocked_by_open'])
+        return f'未完了の blocked by がある: {blockers}'
+    if parent['blocked_by_open']:
+        blockers = ', '.join(f'#{n}' for n in parent['blocked_by_open'])
+        return f'親 #{parent_number} の feature に未完了の blocked by がある: {blockers}'
+    return _preceding_wave_reason(project_number, parent)
+
+
+def _reject_closed(item: dict, number: int, verb: str) -> None:
+    if item.get('state') == 'CLOSED':
+        die(f'#{number} は閉じている。{verb}ではなく reopen {number} <Status> で開き直すこと', 2)
+
+
+# ── set（Status と種別だけ） ────────────────
+def _guard_status_write(
+    project_number: int, item: dict, number: int, value: str, *, reopening: bool = False,
+) -> None:
+    _reject_wave_feature(item, number, 'Status の書き込み')
+    if value not in (READY_STATUS, IN_PROGRESS_STATUS):
+        return
+    if not reopening:
+        _reject_closed(item, number, f'{value}への set')
+    if value == IN_PROGRESS_STATUS:
+        status = item['fields'].get('Status', '')
+        if not reopening and status not in _SET_TO_IN_PROGRESS_FROM:
+            die(
+                f'#{number} の Status は「{status or "空"}」。進行中へは start を使うこと'
+                f'（{OPERATION_MARK} の task は start --approved <出どころ>）', 2,
+            )
+        if reopening and item['blocked_by_open']:
+            blockers = ', '.join(f'#{n}' for n in item['blocked_by_open'])
+            die(f'#{number} には未完了の blocked by がある: {blockers}', 2)
+        return
+    reason = task_not_startable_reason(project_number, item)
+    if reason:
+        die(f'#{number} は着手可にしない: {reason}', 2)
 
 
 def cmd_set(number: int, field: str, value: str) -> int:
@@ -1491,29 +1593,11 @@ def cmd_add(number: int) -> int:
 
 # ── start（着手可から。目印なしで親の feature が着手可なら承認待ちからも。
 #    `[操作]` は --approved で承認待ちからも） ──
-def _parent_feature_not_startable(project_number: int, item: dict) -> str:
-    """承認待ちの子を start で進めてよいかの、親の側の条件。進めてよければ空文字、
-    断るときはその理由（親の番号と今の Status を含む）を返す。"""
-    parent_number = item.get('parent_number')
-    if parent_number is None:
-        return '親の feature が無い'
-    parent = _require_item(project_number, parent_number)
-    parent_kind = parent['fields'].get(KIND_FIELD, '')
-    if parent_kind != FEATURE_KIND:
-        return f'親 #{parent_number} の種別が feature ではない（今「{parent_kind or "空"}」）'
-    parent_status = parent['fields'].get('Status', '')
-    if parent_status != READY_STATUS:
-        return f'親 #{parent_number} の feature が着手可ではない（今「{parent_status or "空"}」）'
-    if parent['blocked_by_open']:
-        blockers = ', '.join(f'#{n}' for n in parent['blocked_by_open'])
-        return f'親 #{parent_number} の feature に未完了の blocked by がある: {blockers}'
-    return ''
-
-
 def cmd_start(number: int, approved: str | None) -> int:
     project_number = discover_project_number()
     item = _require_item(project_number, number)
     _reject_wave_feature(item, number, 'start')
+    _reject_closed(item, number, 'start')
     if item['blocked_by_open']:
         blockers = ', '.join(f'#{n}' for n in item['blocked_by_open'])
         die(f'#{number} には未完了の blocked by がある: {blockers}', 2)
@@ -1537,14 +1621,15 @@ def cmd_start(number: int, approved: str | None) -> int:
         print(f'#{number} Status={IN_PROGRESS_STATUS}（{OPERATION_MARK}・出どころ: {approved}）')
         return 0
     if status == PENDING_STATUS:
-        # 承認待ちから進めてよいのは、目印が無く、親の feature が着手可のときだけ
-        # （feature の承認が子にも及ぶ。いつ子になったかは問わない）。
+        # 承認待ちから進めてよいのは、task_not_startable_reason を通るときだけ（目印が無く、
+        # 親の feature が着手可で、blocked by と先の wave が済んでいる。align が着手可へ
+        # 動かす子と同じ。いつ子になったかは問わない）。
         if has_mark(item['title']):
             die(
                 f'#{number} は目印つきで承認待ちのため、start では進めない'
                 f'（チャットの承認のあと start --approved <出どころ> を使う。{OPERATION_MARK} の task のみ）', 2,
             )
-        reason = _parent_feature_not_startable(project_number, item)
+        reason = task_not_startable_reason(project_number, item)
         if reason:
             die(f'#{number} は承認待ちのまま start では進めない: {reason}', 2)
     elif status != READY_STATUS:
@@ -1605,7 +1690,7 @@ def cmd_reopen(number: int, status: str) -> int:
             f'#{number} は既に開いている（state={item.get("state")}）。'
             'reopen は閉じている issue だけを開き直す', 2,
         )
-    _guard_status_write(project_number, item, number, status)
+    _guard_status_write(project_number, item, number, status, reopening=True)
     item_id = rest_item_id(project_number, number)  # state の PATCH の前に引く（半端に書かない）
     rest('PATCH', f'repos/{REPO}/issues/{number}', {'state': 'open'})
     write_single_select_rest(project_number, number, 'Status', status, item_id=item_id)
@@ -1917,7 +2002,19 @@ def cmd_new(argv: list[str]) -> int:
     elif kind == WAVE_KIND:
         print(f'  wave #{number} を作った。並び順をボードで直してください')
     elif kind == TASK_KIND and parent_is_ready and not has_mark(opts['title']):
-        print(f'  親 #{parent_number} は着手可。`hirai-task start {number}` で着手できる')
+        # start の承認待ちからの経路と同じ判定（task_not_startable_reason）を通るときだけ
+        # 案内する。通らないときは、断られる理由を出す。
+        # 親は attach_sub_issue で付けた番号をそのまま使う（読み直しの遅れに左右されない）。
+        created_item = fetch_write_item(project_number, number)
+        reason = (
+            task_not_startable_reason(project_number, {
+                **created_item, 'title': opts['title'], 'parent_number': parent_number,
+            }) if created_item.get('found') else 'Projects から状態を読み直せなかった'
+        )
+        if reason:
+            print(f'  いまは着手できない: {reason}')
+        else:
+            print(f'  親 #{parent_number} は着手可。`hirai-task start {number}` で着手できる')
     return 0
 
 
@@ -2106,6 +2203,9 @@ def align_plan(items: list[dict], extras: dict[int, dict], bodies: dict[int, str
                 continue
             status = child.get('status')
             if status not in (PENDING_STATUS, READY_STATUS):
+                continue
+            # 閉じた子と、task 以外の種別（種別が空の子は task 扱いで対象のまま）は動かさない。
+            if child.get('state') != 'OPEN' or (child.get('kind') or '') in EXCLUDE_KINDS:
                 continue
             if has_mark(child.get('title') or ''):
                 skipped.append(cnum)
@@ -2529,7 +2629,7 @@ def cmd_align(as_json: bool = False, *, items: list[dict] | None = None) -> int:
     ]
     wave_numbers = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
     extras = fetch_extras(feature_children + wave_numbers + list(ready_features))
-    bodies = fetch_bodies(feature_children + wave_numbers)
+    bodies = fetch_bodies(wave_numbers)
     plan = align_plan(items, extras, bodies)
     if as_json:
         print(json.dumps(plan, ensure_ascii=False))

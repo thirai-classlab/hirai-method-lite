@@ -634,12 +634,16 @@ def make_command_gh(
                 data = {}
                 for i, number in enumerate(numbers):
                     blocker_numbers = (extras.get(number) or {}).get('blocked_by_open_numbers', [])
+                    closed_numbers = (extras.get(number) or {}).get('blocked_by_closed_numbers', [])
                     data[f'i{i}'] = {
                         'issue': {
                             'number': number,
                             'blockedBy': {
-                                'totalCount': len(blocker_numbers),
-                                'nodes': [{'number': n, 'state': 'OPEN'} for n in blocker_numbers],
+                                'totalCount': len(blocker_numbers) + len(closed_numbers),
+                                'nodes': (
+                                    [{'number': n, 'state': 'OPEN'} for n in blocker_numbers]
+                                    + [{'number': n, 'state': 'CLOSED'} for n in closed_numbers]
+                                ),
                             },
                             'closedByPullRequestsReferences': {'nodes': []},
                         },
@@ -675,8 +679,13 @@ def make_command_gh(
                 return 0, json.dumps(_write_item_body(found=False)), ''
             return 0, json.dumps(_write_item_body(
                 project_number=project_number, title=item.get('title', ''),
+                body=bodies.get(number, ''),
                 state=item.get('state', 'OPEN'), parent_number=item.get('parent_number'),
                 status=item.get('status', ''), kind=item.get('kind', ''),
+                blockers=(
+                    [(n, 'OPEN') for n in (extras.get(number) or {}).get('blocked_by_open_numbers', [])]
+                    + [(n, 'CLOSED') for n in (extras.get(number) or {}).get('blocked_by_closed_numbers', [])]
+                ),
             )), ''
         if 'project field-list' in joined:
             return 0, json.dumps({'fields': _fake_field_defs()}), ''
@@ -1355,10 +1364,24 @@ def main() -> int:
         t('start --approved も未完了の blocked by があれば断る', _start_rejects_unresolved_blockers_approved)
 
         def _start_default_requires_ready() -> None:
-            gh_task.run_gh = make_write_gh({624: dict(title='task', status=gh_task.DEP_STATUS, kind='task')})
-            _expect_exit(lambda: gh_task.cmd_start(624, None), 2)
+            # 親の feature が着手可で、自分の blocked by も無い形で見る（親が無い・親が着手可でない
+            # といった別の理由で exit 2 になって、Status の分岐の緩みを隠さないため）。
+            for status in (
+                gh_task.DEP_STATUS, gh_task.JUDGMENT_STATUS, gh_task.HOLD_STATUS,
+                gh_task.IN_PROGRESS_STATUS, gh_task.REVIEW_STATUS, gh_task.DONE_STATUS, '',
+            ):
+                record: list = []
+                gh_task.run_gh = make_write_gh({
+                    624: dict(title='task', status=status, kind='task', parent_number=699),
+                    699: dict(title='feature', status=gh_task.READY_STATUS, kind='feature'),
+                }, record=record)
+                _expect_exit(lambda: gh_task.cmd_start(624, None), 2)
+                assert record == [], (status, record)
 
-        t('start（既定の形）は依存待ちからは進めない', _start_default_requires_ready)
+        t(
+            'start（既定の形）は親の feature が着手可でも、着手可・承認待ち以外の Status からは進めない',
+            _start_default_requires_ready,
+        )
 
         def _start_pending_child_of_ready_feature_ok() -> None:
             record: list = []
@@ -1385,7 +1408,7 @@ def main() -> int:
                 gh_task.cmd_start(662, None)
             except gh_task.GhError as exc:
                 assert exc.code == 2, f'exit {exc.code}（期待 2）'
-                assert '#663' in str(exc) and '承認待ち' in str(exc), f'親の番号と Status が理由に無い: {exc}'
+                assert '#663' in str(exc) and '今「承認待ち」' in str(exc), f'親の番号と Status が理由に無い: {exc}'
             else:
                 raise AssertionError('親の feature が承認待ちなのに start が通った')
             assert record == [], f'書き込みが起きた: {record}'
@@ -1540,6 +1563,204 @@ def main() -> int:
             assert record == [('F_Status', 'O_Status_進行中')]
 
         t('start（既定の形）は着手可から進行中に進む（親を見ない）', _start_default_ready_ok)
+
+        def _start_rejects_closed_issue() -> None:
+            # CLOSED の issue は start で進めない（既定の形も --approved も。reopen を案内する）。
+            record: list = []
+            gh_task.run_gh = make_write_gh({
+                671: dict(
+                    title='task', status=gh_task.PENDING_STATUS, kind='task', state='CLOSED',
+                    parent_number=672,
+                ),
+                672: dict(title='feature', status=gh_task.READY_STATUS, kind='feature'),
+                673: dict(title='task', status=gh_task.READY_STATUS, kind='task', state='CLOSED'),
+                674: dict(
+                    title=f'{gh_task.OPERATION_MARK} task', status=gh_task.PENDING_STATUS,
+                    kind='task', state='CLOSED',
+                ),
+            }, record=record)
+            for number, approved in ((671, None), (673, None), (674, '出どころ')):
+                try:
+                    gh_task.cmd_start(number, approved)
+                except gh_task.GhError as exc:
+                    assert exc.code == 2 and 'reopen' in str(exc), f'#{number}: {exc}'
+                else:
+                    raise AssertionError(f'#{number}: 閉じている issue を start が進めた')
+            assert record == [], f'書き込みが起きた: {record}'
+
+        t('start は閉じている issue を断る（既定の形も --approved も・reopen を案内）', _start_rejects_closed_issue)
+
+        def _set_rejects_closed_issue_to_ready_or_in_progress() -> None:
+            record: list = []
+            gh_task.run_gh = make_write_gh({
+                675: dict(
+                    title='task', status=gh_task.PENDING_STATUS, kind='task', state='CLOSED',
+                    parent_number=676,
+                ),
+                676: dict(title='feature', status=gh_task.READY_STATUS, kind='feature'),
+                677: dict(title='task', status=gh_task.REVIEW_STATUS, kind='task', state='CLOSED'),
+            }, record=record)
+            _expect_exit(lambda: gh_task.cmd_set(675, 'Status', gh_task.READY_STATUS), 2)
+            _expect_exit(lambda: gh_task.cmd_set(677, 'Status', gh_task.IN_PROGRESS_STATUS), 2)
+            assert record == [], f'書き込みが起きた: {record}'
+            # 着手可・進行中以外の値は、閉じていても書ける（完了へ直すなど）。
+            assert gh_task.cmd_set(677, 'Status', gh_task.DONE_STATUS) == 0
+            assert record == [('F_Status', 'O_Status_完了')], record
+
+        t('set は閉じている issue を着手可・進行中にしない（それ以外の値は書ける）', _set_rejects_closed_issue_to_ready_or_in_progress)
+
+        def _set_ready_rejects_blockers_and_non_feature_parent() -> None:
+            # start の承認待ちからの経路と同じ判定を通る（set → start の 2 手で抜けない）。
+            cases = {
+                'own blocked by': {
+                    681: dict(title='task', status=gh_task.DEP_STATUS, kind='task', parent_number=682,
+                              blockers=[(689, 'OPEN')]),
+                    682: dict(title='feature', status=gh_task.READY_STATUS, kind='feature'),
+                },
+                'feature blocked by': {
+                    681: dict(title='task', status=gh_task.PENDING_STATUS, kind='task', parent_number=682),
+                    682: dict(title='feature', status=gh_task.READY_STATUS, kind='feature',
+                              blockers=[(689, 'OPEN')]),
+                },
+                'parent is a wave': {
+                    681: dict(title='task', status=gh_task.PENDING_STATUS, kind='task', parent_number=682),
+                    682: dict(title='wave', status=gh_task.READY_STATUS, kind='wave'),
+                },
+            }
+            for label, specs in cases.items():
+                record: list = []
+                gh_task.run_gh = make_write_gh(specs, record=record)
+                _expect_exit(lambda: gh_task.cmd_set(681, 'Status', gh_task.READY_STATUS), 2)
+                assert record == [], (label, record)
+            # 閉じた blocker は止めない。
+            record = []
+            gh_task.run_gh = make_write_gh({
+                681: dict(title='task', status=gh_task.PENDING_STATUS, kind='task', parent_number=682,
+                          blockers=[(689, 'CLOSED')]),
+                682: dict(title='feature', status=gh_task.READY_STATUS, kind='feature'),
+            }, record=record)
+            assert gh_task.cmd_set(681, 'Status', gh_task.READY_STATUS) == 0
+            assert record == [('F_Status', 'O_Status_着手可')], record
+
+        t(
+            'set は着手可へ、自分・親の feature の未完了の blocked by と、親の種別が feature でないことを断る',
+            _set_ready_rejects_blockers_and_non_feature_parent,
+        )
+
+        def _set_in_progress_only_from_review_or_later() -> None:
+            # 進行中へ set で書けるのは、レビュー中・進行中・完了からだけ（それ以外は start）。
+            for status in (
+                gh_task.PENDING_STATUS, gh_task.JUDGMENT_STATUS, gh_task.DEP_STATUS,
+                gh_task.HOLD_STATUS, gh_task.READY_STATUS, '',
+            ):
+                record: list = []
+                gh_task.run_gh = make_write_gh({
+                    683: dict(title='task', status=status, kind='task', parent_number=684),
+                    684: dict(title='feature', status=gh_task.READY_STATUS, kind='feature'),
+                }, record=record)
+                try:
+                    gh_task.cmd_set(683, 'Status', gh_task.IN_PROGRESS_STATUS)
+                except gh_task.GhError as exc:
+                    assert exc.code == 2 and 'start' in str(exc), (status, str(exc))
+                else:
+                    raise AssertionError(f'{status} から set で進行中になった')
+                assert record == [], (status, record)
+            # 目印つき・親が承認待ち・自分に open の blocked by がある承認待ちの task も同じ。
+            record = []
+            gh_task.run_gh = make_write_gh({
+                685: dict(title='[User] task', status=gh_task.PENDING_STATUS, kind='task',
+                          parent_number=686, blockers=[(689, 'OPEN')]),
+                686: dict(title='feature', status=gh_task.PENDING_STATUS, kind='feature'),
+            }, record=record)
+            _expect_exit(lambda: gh_task.cmd_set(685, 'Status', gh_task.IN_PROGRESS_STATUS), 2)
+            assert record == [], record
+            for status in (gh_task.REVIEW_STATUS, gh_task.IN_PROGRESS_STATUS, gh_task.DONE_STATUS):
+                record = []
+                gh_task.run_gh = make_write_gh(
+                    {687: dict(title='task', status=status, kind='task')}, record=record,
+                )
+                assert gh_task.cmd_set(687, 'Status', gh_task.IN_PROGRESS_STATUS) == 0, status
+                assert record == [('F_Status', 'O_Status_進行中')], (status, record)
+
+        t(
+            'set は承認待ち・判断待ち・依存待ち・保留・着手可から進行中を書かない（start を案内）。レビュー中・進行中・完了からは書ける',
+            _set_in_progress_only_from_review_or_later,
+        )
+
+        def _decision_rejects_non_task_kind_child() -> None:
+            # 種別が設計メモの子は、align が動かさないので、start・set も通さない。
+            for status in (gh_task.PENDING_STATUS, gh_task.HOLD_STATUS):
+                record: list = []
+                gh_task.run_gh = make_write_gh({
+                    695: dict(title='memo', status=status, kind=gh_task.DESIGN_MEMO_KIND, parent_number=696),
+                    696: dict(title='feature', status=gh_task.READY_STATUS, kind='feature'),
+                }, record=record)
+                _expect_exit(lambda: gh_task.cmd_set(695, 'Status', gh_task.READY_STATUS), 2)
+                if status == gh_task.PENDING_STATUS:
+                    _expect_exit(lambda: gh_task.cmd_start(695, None), 2)
+                assert record == [], (status, record)
+
+        t('set（→ 着手可）・start は、種別が設計メモの子を通さない（align と同じ）', _decision_rejects_non_task_kind_child)
+
+        def _reopen_rejects_open_blockers() -> None:
+            # reopen で着手可・進行中にするとき、自分の未完了の blocked by があれば断る。
+            for target in (gh_task.READY_STATUS, gh_task.IN_PROGRESS_STATUS):
+                record: list = []
+                gh_task.run_gh = make_write_gh({
+                    691: dict(
+                        title='task', status=gh_task.DONE_STATUS, kind='task', state='CLOSED',
+                        parent_number=692, blockers=[(699, 'OPEN')],
+                    ),
+                    692: dict(title='feature', status=gh_task.READY_STATUS, kind='feature'),
+                }, record=record)
+                _expect_exit(lambda: gh_task.cmd_reopen(691, target), 2)
+                assert record == [], (target, record)
+
+        t('reopen は着手可・進行中へ、自分の未完了の blocked by があれば断る', _reopen_rejects_open_blockers)
+
+        def _new_announcement_matches_start() -> None:
+            # 案内が出てはいけない形（start が断る形）では出さず、断られる理由を出す。
+            def run(title: str, specs: dict, extra_args: list[str] | None = None) -> str:
+                created = {'number': 931, 'id': 931931, 'node_id': 'X931'}
+
+                def rest_handler(method, path, body):
+                    if method == 'POST' and path == f'repos/{gh_task.REPO}/issues':
+                        return created
+                    if method == 'GET' and path == f'repos/{gh_task.REPO}/issues/931':
+                        return {'milestone': None, 'body': ''}
+                    if method == 'GET' and re.search(r'/issues/\d+$', path):
+                        return {'sub_issues_summary': {'total': 1}}
+                    return {}
+
+                gh_task.run_gh = make_write_gh(specs, rest_handler=rest_handler)
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    assert gh_task.cmd_new([title, '--parent', '932'] + (extra_args or [])) == 0
+                return out.getvalue()
+
+            feature_ok = dict(title='feature', status=gh_task.READY_STATUS, kind='feature')
+            plain = dict(title='t', status=gh_task.PENDING_STATUS, kind='')
+            hint = '`hirai-task start 931` で着手できる'
+            out = run('t', {931: plain, 932: feature_ok})
+            assert hint in out, f'通る形で案内が出ない: {out!r}'
+            for label, specs, title in (
+                ('blocked by つき', {931: dict(plain, blockers=[(940, 'OPEN')]), 932: feature_ok}, 't'),
+                ('親の feature に blocked by', {
+                    931: plain, 932: dict(feature_ok, blockers=[(940, 'OPEN')])}, 't'),
+                ('親が承認待ち', {
+                    931: plain, 932: dict(feature_ok, status=gh_task.PENDING_STATUS)}, 't'),
+                ('[User]', {931: plain, 932: feature_ok}, '[User] t'),
+                ('[操作]', {931: plain, 932: feature_ok}, f'{gh_task.OPERATION_MARK} t'),
+            ):
+                out = run(title, specs)
+                assert 'で着手できる' not in out, (label, out)
+                if label in ('blocked by つき', '親の feature に blocked by'):
+                    assert 'いまは着手できない' in out and '#940' in out, (label, out)
+
+        t(
+            'new の着手の案内は、start が断る形（blocked by・親が承認待ち・目印つき）では出さず、断られる理由を出す',
+            _new_announcement_matches_start,
+        )
 
         # ── done / reopen / review ───────────────────────────────────
         def _done_writes_and_closes() -> None:
@@ -3202,37 +3423,274 @@ def main() -> int:
             _align_moves_children_added_after_first_plan,
         )
 
-        def _align_does_not_read_or_write_align_seen_file() -> None:
-            # 旧版の gh-align-seen.json が手元に残っていても、読まず・書かず・消さない。
-            # 控えが「この子は一覧に無い」と言っていても、子は動く。
+        # ── 着手の判定が align・start・set・new で割れないこと ──────────────────
+        EXIT_LINE = '- 出る条件のコマンド: exit 0 （例）'
+        W1, F1, T1, W2, FEAT, CHILD = 10, 11, 12, 20, 21, 22
+
+        def _board(
+            *, title: str = 'task', status: str = gh_task.PENDING_STATUS, state: str = 'OPEN',
+            parent_kind: str = 'feature', feature_status: str = gh_task.READY_STATUS,
+            child_blockers: tuple = (), feature_blockers: tuple = (), prior: str = 'none',
+        ) -> tuple[list[dict], dict, dict]:
+            """W2（wave）→ FEAT（feature）→ CHILD（task）の板。prior は W2 を止める先の wave W1 の形:
+            none=止めるものが無い / unfinished=W1 の task が進行中 / no-line=task は全部完了だが
+            出る条件の行が無い / exited=行があり W1 は閉じた / exited-open=行があるが W1 はまだ開いている。"""
+            items = [
+                {'number': W2, 'kind': gh_task.WAVE_KIND, 'title': 'W2'},
+                {'number': FEAT, 'kind': gh_task.FEATURE_KIND, 'status': feature_status,
+                 'title': 'F', 'parent_number': W2},
+                {'number': CHILD, 'kind': 'task', 'status': status, 'state': state,
+                 'title': title, 'parent_number': FEAT if parent_kind == 'feature' else W2},
+            ]
+            if parent_kind != 'feature':
+                items = [i for i in items if i['number'] != FEAT]
+            extras: dict = {
+                CHILD: {'blocked_by_open_numbers': list(child_blockers)},
+                FEAT: {'blocked_by_open_numbers': list(feature_blockers)},
+            }
+            bodies: dict = {}
+            if prior != 'none':
+                items += [
+                    {'number': W1, 'kind': gh_task.WAVE_KIND, 'title': 'W1',
+                     'state': 'CLOSED' if prior == 'exited' else 'OPEN'},
+                    {'number': F1, 'kind': gh_task.FEATURE_KIND, 'status': gh_task.READY_STATUS,
+                     'title': 'F1', 'parent_number': W1},
+                    {'number': T1, 'kind': 'task', 'title': 'T1', 'parent_number': F1,
+                     'status': gh_task.IN_PROGRESS_STATUS if prior == 'unfinished' else gh_task.DONE_STATUS,
+                     'state': 'OPEN' if prior == 'unfinished' else 'CLOSED'},
+                ]
+                key = 'blocked_by_closed_numbers' if prior == 'exited' else 'blocked_by_open_numbers'
+                extras[W2] = {key: [W1]}
+                if prior in ('exited', 'exited-open'):
+                    bodies[W1] = EXIT_LINE
+            return items, extras, bodies
+
+        def _align_destination(items, extras, bodies) -> str:
+            gh_task.run_gh = make_command_gh(items, bodies=bodies, extras=extras)
+            out = io.StringIO()
+            with redirect_stdout(out):
+                assert gh_task.cmd_align(as_json=True) == 0
+            for entry in json.loads(out.getvalue())['align']:
+                for move in entry['moves']:
+                    if move['number'] == CHILD:
+                        return 'ready' if move['to'] == gh_task.READY_STATUS else 'dep'
+                if CHILD in entry['skipped']:
+                    return 'skipped'
+            return 'none'
+
+        def _verdict(fn) -> str:
+            try:
+                fn()
+            except gh_task.GhError as exc:
+                assert exc.code == 2, f'exit {exc.code}（期待 2）: {exc}'
+                return 'refused'
+            return 'ok'
+
+        def _start_verdict(items, extras, bodies) -> str:
+            log: list = []
+            gh_task.run_gh = make_command_gh(items, bodies=bodies, extras=extras, write_log=log)
+            verdict = _verdict(lambda: gh_task.cmd_start(CHILD, None))
+            assert (verdict == 'ok') == bool(log), f'start の結果と書き込みが合わない: {verdict} {log}'
+            return verdict
+
+        def _set_verdict(items, extras, bodies) -> str:
+            log: list = []
+            gh_task.run_gh = make_command_gh(items, bodies=bodies, extras=extras, write_log=log)
+            verdict = _verdict(lambda: gh_task.cmd_set(CHILD, 'Status', gh_task.READY_STATUS))
+            assert (verdict == 'ok') == bool(log), f'set の結果と書き込みが合わない: {verdict} {log}'
+            return verdict
+
+        def _new_verdict(items, extras, bodies, title: str) -> str:
+            base = make_command_gh(items, bodies=bodies, extras=extras)
+
+            def fake(args, input_text=None):
+                if args[:4] == ['api', '-X', 'POST', f'repos/{gh_task.REPO}/issues']:
+                    return 0, json.dumps({'number': CHILD, 'id': 424242, 'node_id': 'X'}), ''
+                return base(args, input_text)
+
+            gh_task.run_gh = fake
+            out = io.StringIO()
+            try:
+                with redirect_stdout(out):
+                    gh_task.cmd_new([title, '--parent', str(FEAT)])
+            except gh_task.GhError:
+                return 'refused'
+            text = out.getvalue()
+            if 'で着手できる' in text:
+                return 'hint'
+            return 'reason' if 'いまは着手できない' in text else 'silent'
+
+        BOARD_TABLE = (
+            ('止めるものが無い', {}, 'ready'),
+            ('自分に blocked by', dict(child_blockers=(900,)), 'dep'),
+            ('親の feature に blocked by', dict(feature_blockers=(900,)), 'dep'),
+            ('先の wave が出ていない（task が進行中）', dict(prior='unfinished'), 'dep'),
+            ('先の wave の task は完了だが出る条件の行が無い', dict(prior='no-line'), 'dep'),
+            ('先の wave が出た（blocker は閉じた）', dict(prior='exited'), 'ready'),
+            ('先の wave が出た（blocker はまだ開いている）', dict(prior='exited-open'), 'ready'),
+            ('目印 [User]', dict(title='[User] task'), 'skipped'),
+            ('目印 [操作]', dict(title=f'{gh_task.OPERATION_MARK} task'), 'skipped'),
+            ('親の feature が承認待ち', dict(feature_status=gh_task.PENDING_STATUS), 'none'),
+            ('親が wave', dict(parent_kind='wave'), 'none'),
+            ('CLOSED', dict(state='CLOSED'), 'none'),
+        )
+
+        def _decision_matches_align() -> None:
+            for label, spec, expected in BOARD_TABLE:
+                items, extras, bodies = _board(**spec)
+                dest = _align_destination(items, extras, bodies)
+                assert dest == expected, f'{label}: align の行き先 {dest}（期待 {expected}）'
+                startable = dest == 'ready'
+                start = _start_verdict(items, extras, bodies)
+                setv = _set_verdict(items, extras, bodies)
+                assert start == ('ok' if startable else 'refused'), f'{label}: start={start} align={dest}'
+                assert setv == ('ok' if startable else 'refused'), f'{label}: set={setv} align={dest}'
+                if spec.get('state') == 'CLOSED':
+                    continue  # new が作る issue は常に開いている
+                new = _new_verdict(items, extras, bodies, spec.get('title', 'task'))
+                if startable:
+                    assert new == 'hint', f'{label}: new={new} align={dest}'
+                else:
+                    assert new != 'hint', f'{label}: new が案内を出した（align={dest}）'
+                if dest == 'dep':
+                    assert new == 'reason', f'{label}: 断られる理由が出ていない（new={new}）'
+
+        t(
+            'align の行き先と、start（承認待ち）・set（→ 着手可）・new の案内の可否が、盤面の全行で一致する',
+            _decision_matches_align,
+        )
+
+        def _wave_lookup_is_light_only_without_blocking_wave() -> None:
+            # 先祖の wave を止める wave が無いときは、板の全件（items(first:）を引かずに通す。
+            # あるときだけ全件を引いて、align と同じ判定を使う。
+            def count_board_fetches(prior: str) -> tuple[int, str]:
+                calls = {'board': 0}
+                items, extras, bodies = _board(prior=prior)
+                base = make_command_gh(items, bodies=bodies, extras=extras)
+
+                def counting(args, input_text=None):
+                    if 'items(first:' in ' '.join(args):
+                        calls['board'] += 1
+                    return base(args, input_text)
+
+                gh_task.run_gh = counting
+                verdict = _verdict(lambda: gh_task.cmd_start(CHILD, None))
+                return calls['board'], verdict
+
+            assert count_board_fetches('none') == (0, 'ok')
+            fetched, verdict = count_board_fetches('unfinished')
+            assert fetched >= 1 and verdict == 'refused', (fetched, verdict)
+
+        t('着手の判定は、先祖の wave を止める wave が無いときだけ全件を引かずに通す', _wave_lookup_is_light_only_without_blocking_wave)
+
+        def _align_skips_closed_and_non_task_children() -> None:
             feature = {
-                'number': 244, 'kind': gh_task.FEATURE_KIND, 'status': gh_task.READY_STATUS,
+                'number': 250, 'kind': gh_task.FEATURE_KIND, 'status': gh_task.READY_STATUS,
                 'state': 'OPEN', 'title': 'F', 'parent_number': None,
             }
-            child = {
-                'number': 245, 'type': 'Issue', 'kind': 'task', 'status': gh_task.PENDING_STATUS,
-                'state': 'OPEN', 'title': 't', 'parent_number': 244,
-            }
-            leftover = os.path.join(cache_tmp_dir, 'gh-align-seen.json')
-            old_body = json.dumps({f'{gh_task.REPO}#7': {'244': []}})
-            with open(leftover, 'w', encoding='utf-8') as f:
-                f.write(old_body)
+
+            def child(number, **kw):
+                row = {'number': number, 'type': 'Issue', 'kind': 'task',
+                       'status': gh_task.PENDING_STATUS, 'state': 'OPEN', 'title': 't',
+                       'parent_number': 250}
+                row.update(kw)
+                return row
+
+            children = [
+                child(251),                                  # 通常の子
+                child(252, state='CLOSED'),                  # 閉じた子（承認待ちのまま）
+                child(253, state='CLOSED', status=gh_task.READY_STATUS),
+                child(254, kind=gh_task.DESIGN_MEMO_KIND),   # 設計メモ
+                child(255, kind=''),                         # 種別が空は task 扱いで対象
+                child(256, state='CLOSED', title=f'{gh_task.OPERATION_MARK} t'),  # 閉じた目印つき
+            ]
+            plan = gh_task.align_plan([feature] + children, {}, {})
+            assert len(plan['align']) == 1, plan
+            entry = plan['align'][0]
+            assert [m['number'] for m in entry['moves']] == [251, 255], entry
+            assert entry['skipped'] == [], f'閉じた子・設計メモが skipped に出た: {entry}'
+
+        t('align は閉じた子と task 以外の種別の子を、moves にも skipped にも出さない（種別が空は対象のまま）', _align_skips_closed_and_non_task_children)
+
+        def _align_does_not_fetch_child_bodies() -> None:
+            items, extras, bodies = _board(prior='exited')
+            gh_task.run_gh = make_command_gh(items, bodies=bodies, extras=extras)
+            asked: list = []
+            real_fetch_bodies = gh_task.fetch_bodies
+            gh_task.fetch_bodies = lambda numbers: asked.append(sorted(numbers)) or real_fetch_bodies(numbers)
             try:
+                with redirect_stdout(io.StringIO()):
+                    assert gh_task.cmd_align(as_json=True) == 0
+            finally:
+                gh_task.fetch_bodies = real_fetch_bodies
+            assert asked == [[W1, W2]], f'wave の本文だけを引くはず: {asked}'
+
+        t('align は wave の本文だけを引き、子の本文を引かない', _align_does_not_fetch_child_bodies)
+
+        def _align_does_not_read_or_write_align_seen_file() -> None:
+            # 2.1.0 が gh-align-seen.json を実際に置いていた場所（共有の置き場）に、
+            # 「この子は一覧に無い」と言う控えを残しても、読まず・書かず・消さず・横にも増やさない。
+            import subprocess
+            repo = os.path.realpath(tempfile.mkdtemp(dir=cache_tmp_dir))
+            subprocess.run(['git', '-C', repo, 'init', '-q'], check=True, capture_output=True)
+            saved_root = os.environ.get('HIRAI_TASK_ROOT')
+            os.environ['HIRAI_TASK_ROOT'] = repo
+            try:
+                shared = gh_task._shared_state_dir()
+                os.makedirs(shared, exist_ok=True)
+                leftover = os.path.join(shared, 'gh-align-seen.json')
+                old_body = json.dumps({f'{gh_task.REPO}#7': {'244': []}})
+                with open(leftover, 'w', encoding='utf-8') as f:
+                    f.write(old_body)
+                before = sorted(os.listdir(shared))
+                feature = {
+                    'number': 244, 'kind': gh_task.FEATURE_KIND, 'status': gh_task.READY_STATUS,
+                    'state': 'OPEN', 'title': 'F', 'parent_number': None,
+                }
+                child = {
+                    'number': 245, 'type': 'Issue', 'kind': 'task', 'status': gh_task.PENDING_STATUS,
+                    'state': 'OPEN', 'title': 't', 'parent_number': 244,
+                }
                 plan = gh_task.align_plan([feature, child], {245: {'blocked_by_open': 0}}, {})
                 assert plan['align'][0]['moves'] == [
                     {'number': 245, 'to': gh_task.READY_STATUS, 'from': gh_task.PENDING_STATUS},
                 ], f'残っている控えを読んで動かさなかった: {plan}'
+                # 実際の経路（--json と書く側）も通す。
+                gh_task.run_gh = make_command_gh([feature, child])
+                with redirect_stdout(io.StringIO()):
+                    assert gh_task.cmd_align(as_json=True) == 0
+                    assert gh_task.cmd_align() == 0
                 with open(leftover, encoding='utf-8') as f:
                     assert f.read() == old_body, '残っている控えを書き換えた'
+                added = [n for n in os.listdir(shared) if n.startswith('gh-align-seen') and n not in before]
+                assert added == [], f'控えの横にファイルが増えた: {added}'
             finally:
-                os.remove(leftover)
+                if saved_root is None:
+                    os.environ.pop('HIRAI_TASK_ROOT', None)
+                else:
+                    os.environ['HIRAI_TASK_ROOT'] = saved_root
             assert not hasattr(gh_task, 'ALIGN_SEEN_CACHE'), '控えの定数が残っている'
             assert not hasattr(gh_task, 'LATE_ADD_PREFIX'), '「後から追加」の定数が残っている'
 
         t(
-            'align は手元に残る gh-align-seen.json を読まず・書かず・消さない（定数も残さない）',
+            'align は 2.1.0 が置いていた場所の gh-align-seen.json を読まず・書かず・消さず、横に増やさない（定数も残さない）',
             _align_does_not_read_or_write_align_seen_file,
         )
+
+        def _since_cache_keeps_other_namespaces() -> None:
+            # 共有の since の控えは、repo ごとの名前空間を分ける（ほかの名前空間を捨てない）。
+            path = gh_task.COMMENTS_SINCE_CACHE
+            other = 'other-org/other-repo'
+            gh_task._save_shared_json(path, {other: {'since': 'X'}})
+            try:
+                gh_task._save_since_cache(path, gh_task.REPO, 'Y')
+                assert set(gh_task._load_shared_json(path)) == {other, gh_task.REPO}
+                assert gh_task._load_since_cache(path, gh_task.REPO) == 'Y'
+                assert gh_task._load_since_cache(path, other) == 'X'
+            finally:
+                os.remove(path)
+
+        t('since の控えは、ほかの repo の名前空間を残して書く', _since_cache_keeps_other_namespaces)
 
         def _shared_json_load_warns_on_corrupt_file_and_treats_as_empty() -> None:
             broken = os.path.join(cache_tmp_dir, 'gh-broken-shared.json')

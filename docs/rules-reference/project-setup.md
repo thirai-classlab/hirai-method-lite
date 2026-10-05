@@ -39,7 +39,7 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 | Status | 入るとき | 動かすもの |
 |---|---|---|
 | 承認待ち | task が Project に入ったとき | 自動（Item added） |
-| 着手可 | feature の着手が承認されたとき | 人が feature を動かし、AI が子の task をそろえる（そろう前でも、`hirai-task start` で承認待ちの子を進行中にできる） |
+| 着手可 | feature の着手が承認されたとき | 人が feature を動かし、AI が子の task をそろえる（そろう前でも、先の wave が出ていて未完了の blocked by が無ければ、`hirai-task start` で承認待ちの子を進行中にできる） |
 | 判断待ち | 裁定が要るとき | AI |
 | 依存待ち | 先の task や wave が済んでいないとき | AI |
 | 進行中 | AI が着手したとき | AI（`hirai-task start <n>`） |
@@ -47,7 +47,7 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 | 完了 | PR を merge したとき | 自動（Item closed） |
 | 保留 | 止めると決めたとき | AI |
 
-- AI は feature の「承認待ち → 着手可」を自分で動かさない。着手可の feature の子の task（目印なし・あとから足したものも）は、`hirai-task align`（today が回す）・`set`・`start` が動かしてよい。`[操作]`・`[User]` の task は align も set も動かさず、`[操作]` は `start --approved` で進める
+- AI は feature の「承認待ち → 着手可」を自分で動かさない。着手可の feature の子の task（目印なし・あとから足したものも）は、`hirai-task align`（today が回す）が着手可へ（blocked by か先の wave が済んでいなければ依存待ちへ）動かす。`set`（→ 着手可）・`start`（承認待ち → 進行中）も、align が「着手可へ」と出す子だけを通す。`set` で進行中を書けるのはレビュー中・進行中・完了からだけ（承認待ち・判断待ち・依存待ち・保留・着手可・空からは `start` を使う）。`[操作]`・`[User]` の task は align も set も動かさず、`[操作]` は `start --approved` で進める
 - 依存待ち・判断待ち・保留が解けた task は、親 feature の Status に合わせて戻す（着手可なら着手可、承認待ちなら承認待ち）
 
 ## 5. wave と feature の作り方

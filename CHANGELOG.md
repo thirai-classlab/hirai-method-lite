@@ -6,15 +6,15 @@
 
 ## v2.2.0
 
-着手可（承認済み）の feature の子の task は、あとから足したものも着手できる。task を着手可・進行中にしてよい条件は「目印（`[操作]`・`[User]`）が無く、親の feature が着手可で、未完了の blocked by が無い」の 1 本になり、いつ子になったかは問わない。
+着手可（承認済み）の feature の子の task は、あとから足したものも着手できる。task を着手可・進行中にしてよい条件は「目印（`[操作]`・`[User]`）が無く、親の feature が着手可で、未完了の blocked by（自分と親の feature）が無く、先祖の wave を止める wave が出ている」の 1 本になり、いつ子になったかは問わない。判定は 1 つの関数（`task_not_startable_reason`）にまとめ、`align` が「着手可へ」と出す子だけを通し、「依存待ちへ」と出す子は断る。
 
-- **`align`。** 着手可の feature の、承認待ちの子（目印なし）を、いつ足したものでも着手可へ動かす（子か feature 自身に未完了の blocked by があるか、先祖の wave を止める wave が「出た」を満たさなければ依存待ち。この分岐は 2.1.0 のまま）。本文の「- 後から追加:」の行と、feature を初めて着手可と見た時点の子の一覧（`gh-align-seen.json`）は、もう見ない。`ALIGN_SEEN_CACHE`・`_align_seen_namespace`・`align_plan` の `seen_store` / `project_number` 引数・`LATE_ADD_PREFIX` を消した。
-- **`new`。** 親の feature が着手可でも、本文に「- 後から追加:」を書かない。目印の無い task を着手可の feature の下に作ったときは「親 #N は着手可。`hirai-task start <番号>` で着手できる」と 1 行で知らせる。
-- **`start`（`--approved` なし）。** 着手可からに加えて、承認待ちで・目印が無く・親の feature が着手可のときも進行中へ進める。断るのは、親が無い・親の種別が feature でない・親が着手可でない（理由に親の番号と今の Status）・親の feature に未完了の blocked by がある・目印つきで承認待ち（`start --approved` を案内）のとき（exit 2）。自分の未完了の blocked by と、着手可からの `start` は 2.1.0 のまま。
-- **`set`。** 承認待ち → 着手可を、目印が無く親の feature が着手可のときは通す（依存待ち・判断待ち・保留 → 着手可と同じ守り）。目印つき・親なし・親が着手可でない・種別 wave と feature は断る。`reopen` は `set` と同じ守りを通るので、同じ結果になる。
-- **導入先で要る操作。** プラグインを 2.2.0 に上げるだけ。旧版が置いた `gh-align-seen.json`（全 worktree 共有の `hirai-task/` の下）は読まれなくなるが、消さなくてよい（消してもよい）。既存の issue の本文に残る「- 後から追加:」の行は無視される（消しに行かない）。2.1.0 まで承認待ちのまま残っていた子は、次の `today`（align）で着手可へ動くか、`start` で着手できる。
-- **変えないもの。** `[操作]`・`[User]` の扱い全部（align は動かさず番号だけ出す・`start --approved`・unblocked の注記・user-actions）。feature と wave の Status を道具で動かさないこと（`approve` は廃止のまま）。`ready`・`pending`・`blocked`・`close-parents`・`comments` の挙動。
-- **selftest。** align に 3 case（「後から追加」の行が残る子・1 回目のあとで子になった task・残った `gh-align-seen.json` を読み書きしない）、new・start・set・reopen に case を足し、旧い決まり（後から追加・初めて見た子の一覧・set が承認待ち→着手可を断る・start は着手可からだけ）を確かめていた case は新しい決まりに書き直した。足した分岐を 1 つずつ元へ戻すと対応する case が FAIL することを確かめてある。
+- **`align`。** 着手可の feature の、承認待ちの子（目印なし）を、いつ足したものでも着手可へ動かす（子か feature 自身に未完了の blocked by があるか、先祖の wave を止める wave が「出た」を満たさなければ依存待ち。この分岐は 2.1.0 のまま）。本文の「- 後から追加:」の行と、feature を初めて着手可と見た時点の子の一覧（`gh-align-seen.json`）は、もう見ない。`ALIGN_SEEN_CACHE`・`_align_seen_namespace`・`align_plan` の `seen_store` / `project_number` 引数・`LATE_ADD_PREFIX` を消した。閉じた子と、種別が task 以外（wave・feature・設計メモ）の子は、moves にも skipped にも出さない（種別が空の子は対象のまま）。子の本文はもう引かない（wave の本文だけ引く）。
+- **`new`。** 親の feature が着手可でも、本文に「- 後から追加:」を書かない。目印の無い task を着手可の feature の下に作ったときは、`start` の承認待ちからの経路と同じ判定を通るときだけ「親 #N は着手可。`hirai-task start <番号>` で着手できる」と 1 行で知らせ、通らないとき（blocked by・先の wave が出ていない・親の種別が feature でない）は「いまは着手できない: <理由>」と出す。親の feature が着手可でないときと、目印つきのときは何も出さない。
+- **`start`（`--approved` なし）。** 着手可からに加えて、承認待ちの task も、上の判定を通るときは進行中へ進める。断るのは、親が無い・親の種別が feature でない・親が着手可でない（理由に親の番号と今の Status）・自分か親の feature に未完了の blocked by がある・先祖の wave を止める wave が出ていない・目印つきで承認待ち（`start --approved` を案内）のとき（exit 2）。閉じた issue は、既定の形も `--approved` も断る（`reopen` を案内）。着手可からの `start` は親を見ず、自分の未完了の blocked by だけを見る（2.1.0 のまま）。
+- **`set`。** 着手可へ書くときは、承認待ち・依存待ち・判断待ち・保留のどこからでも上の判定を通す（親が wave などで種別が feature でない・自分か親の feature の blocked by・先の wave が出ていないも断る）。進行中へ書けるのは、今の Status がレビュー中・進行中・完了のときだけで、承認待ち・判断待ち・依存待ち・保留・着手可・空からは exit 2（`start` を案内）。着手可・進行中を書くときの閉じた issue は断る。`reopen` は、着手可へは `set` と同じ判定を通し、進行中へは自分の未完了の blocked by があれば断る（完了から開き直す用途は変わらない）。種別 wave・feature は動かさない。
+- **導入先で要る操作。** プラグインを 2.2.0 に上げ、上げたあと新しい会話を開く（PATH に古い版の `bin` が残るため、開いている会話は古い `hirai-task` を呼び続ける）。rules は更新で配られないので、導入先の `rules/tasks.md`（T1）・T0 の規範に同じ句を足す場合は手で合わせる（2.2.0 の条件は上の 1 本）。旧版が置いた `gh-align-seen.json`（全 worktree 共有の `hirai-task/` の下）は読まれなくなるが、消さなくてよい（消してもよい）。既存の issue の本文に残る「- 後から追加:」の行は無視される（消しに行かない）。2.1.0 まで承認待ちのまま残っていた子は、次の `today`（align）で着手可へ動くか、`start` で着手できる（先の wave が出ていなければ align は依存待ちへ動かし、`start` は断る）。
+- **変えないもの。** `[操作]`・`[User]` の扱い全部（align は動かさず番号だけ出す・`start --approved`・unblocked の注記・user-actions）。feature と wave の Status を道具で動かさないこと（`approve` は廃止のまま）。`ready`・`pending`・`blocked`・`close-parents`・`comments`・`unblocked` の挙動。
+- **selftest。** 「align の行き先と、`start`（承認待ち）・`set`（→ 着手可）・`new` の案内の可否が一致する」盤面の表の case（止めるもの無し・自分に blocked by・親の feature に blocked by・先の wave が出ていない／行が無い／出た・目印・親が承認待ち・親が wave・閉じた issue の 12 行）を 1 本足した。ほかに align の閉じた子・種別の絞り込み、wave の本文だけを引くこと、`start` が着手可・承認待ち以外を親の feature が着手可の形で断ること、`set` の進行中の守り・着手可の判定、閉じた issue、`reopen`、`new` の案内が出てはいけない形、共有の控えが他の名前空間を残すこと、`gh-align-seen.json` を 2.1.0 の置き場に置いても読み書きしないことを見る。旧い決まり（後から追加・初めて見た子の一覧・set が承認待ち→着手可を断る・start は着手可からだけ）を確かめていた case は新しい決まりに書き直した。判定の条件を 1 つずつ外す・進行中の守り・閉じた issue の検査・align の絞り込みと本文の取得を 1 つずつ元へ戻すと、対応する case が FAIL することを確かめてある（24 通り。うち 2 つはレビュー後に足した、空の Status と設計メモの子）。
 
 ## v2.1.0
 
