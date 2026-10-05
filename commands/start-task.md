@@ -20,7 +20,7 @@ exit code が 2 (プラグイン本体が見つからない) なら、その場�
 
 引数が空なら `hirai-task ready` の結果を一覧表示し、どの id に着手するか聞き返して停止する。
 
-1. `hirai-task start <task-id>` を呼び、Status を 進行中 にする。Status が 着手可 でないときは `--approved <出どころ>` を付ける経路がある。`command -v hirai-task` が無ければ「hirai-task が見つからない（PATH に入っていない）」と報告して終了する。
+1. `hirai-task start <task-id>` を呼び、Status を 進行中 にする。着手可の task に加えて、承認待ちで目印が無く親の feature が着手可の task も進めてよい（あとから足した task も同じ）。親の feature が着手可でない・親に未完了の blocked by がある task は断られる（理由に親の番号と Status が出る）。`[操作]` の task は `--approved <出どころ>` を付ける経路がある。`command -v hirai-task` が無ければ「hirai-task が見つからない（PATH に入っていない）」と報告して終了する。
 2. branch の切替えは `hirai-task start` の役目ではない。そのあと下の「## 手順」の 5〜6 (branch の切替え・未コミット変更の確認) はそのまま実行する。手順 7 (台帳の書き換え) だけ、ここでは実行しない。
 
 判定できる終了条件: `hirai-task start` が exit 0 で、`git rev-parse --abbrev-ref HEAD` が手順 5 で切替えた branch 名を返すこと。片方でも成立しなければ原因を 1 行で報告して停止する。

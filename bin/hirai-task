@@ -73,17 +73,25 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
   1 行で知らせる。wave は、wave の issue の本文の「まだ作っていない wave」の節
   （UNBUILT_WAVES_HEADING）にあるものだけ作り、節に書いた blocked by を張って
   「並び順をボードで直してください」と知らせる。節に無い wave は作らず exit 2。
+  目印（`[操作]`・`[User]`）の無い task を、着手可の feature の下に作ったときは、
+  「親 #N は着手可。`hirai-task start <番号>` で着手できる」と 1 行で知らせる
+  （本文には何も足さない。いつ足した子かは区別しない）。
 
   approve は廃止: 「approve は廃止。feature をボードで着手可に」と出して
-  exit 2。AI は承認待ち→着手可を自分で動かさない（子の承認待ちは align が動かす）。
+  exit 2。feature の承認待ち→着手可は人だけが動かす（着手可の feature の子の承認待ちは
+  align が動かすか、start が進行中へ進める）。
 
   set・start・review・done・reopen の守り: 種別=wave・feature は動かさない
   （align・close-parents か、ボードの役目）。set は Status と種別だけを受け付け、
-  着手可へ書くときは、承認待ちからの遷移と目印つきの task を断り、依存待ち・
-  判断待ち・保留からは、親の feature が着手可のときだけ許す。start は着手可からだけ
-  進行中に進める。`--approved` は `[操作]` の task に限り、着手可・承認待ちからだけ
-  進行中にでき、本文に出どころを 1 行残す。reopen は CLOSED の issue だけを受け付け、
-  Status の書き込みは set と同じ守りを通す（開いた issue や承認待ち→着手可を
+  着手可へ書くときは、目印つきの task・親の無い task・親の feature が着手可でない
+  task を断る（承認待ち・依存待ち・判断待ち・保留のどこからでも同じ守り）。
+  start（`--approved` なし）は、着手可の task と、承認待ちで・目印が無く・親の feature が
+  着手可（種別が feature で、未完了の blocked by が無い）の task を進行中に進める。
+  いつ子になったかは問わない。親が無い・親の種別が feature でない・親が着手可でない
+  （理由に親の番号と今の Status を出す）・親に未完了の blocked by がある・目印つきで
+  承認待ち（start --approved を案内）のときは exit 2。`--approved` は `[操作]` の task に
+  限り、着手可・承認待ちからだけ進行中にでき、本文に出どころを 1 行残す。reopen は CLOSED の
+  issue だけを受け付け、Status の書き込みは set と同じ守りを通す（開いた issue を
   reopen で回避できない）。start・reopen のどちらも、未完了の blocked by があれば断る。
 
 会話の最初と merge の直後の仕事（comments / close-parents / unblocked / align /
@@ -107,16 +115,10 @@ memos / today / after-merge）:
     承認待ちの子でどちらも満たさなければ着手可へ。着手可の子はブロックされていなければ
     何もしない（着手可→着手可は出さない）。判断待ち・依存待ち・保留の子は最初から
     対象にしない。
-    次の子は動かさず、番号だけを出す（承認待ち・着手可のどちらでも）:
-      ・`[操作]`・`[User]` の目印がある子
-      ・本文に「- 後から追加:」がある子（new が、着手可の feature に足す子に書く）
-      ・feature が初めて着手可になった時点の子の一覧に無い子（gh-align-seen.json に、
-        feature ごとに最初に見た子の一覧を保存する。キーは `<repo>#<project番号>` の
-        下に置き、checkout をまたいで共有する置き場所に置く（_shared_state_dir）。
-        checkout ごとに置くと、新しい worktree で最初に align が動いたとき、その時点の
-        子を全部基準にしてしまい、あとから子になった子を承認なしに着手可へ書く。
-        「子になった時刻」と「feature が着手可になった時刻」を比べる経路は確実に読めない
-        ので、時刻の比較ではなくこの一覧で代える）
+    目印（`[操作]`・`[User]`）がある子は動かさず、番号だけを出す（承認待ち・着手可の
+    どちらでも）。いつ子になったか（本文の「- 後から追加:」の行・feature が初めて着手可に
+    なった時点の子の一覧）は見ない。feature が着手可なら、あとから足した子も同じに動かす。
+    旧版（2.1.0 まで）が置いた gh-align-seen.json は読まない・書かない・消さない。
     moves の各要素には、元の Status（"from"。journal にも残す。承認待ちへ戻すときの
     手がかり）を含む。
     動かした子があれば、その feature に AI_MARKER 付きで 1 行コメントを残す
@@ -151,13 +153,13 @@ memos / today / after-merge）:
     （_WRITE_INTERVAL_SECONDS）おきに書く。
 
   状態の置き場所: gh-fields.json・gh-fields-rest.json・gh-task-journal.jsonl は
-    checkout の git ディレクトリの下の `hirai-task/`、gh-align-seen.json・
+    checkout の git ディレクトリの下の `hirai-task/`、
     gh-comments-since.json・gh-merged-designs-since.json は、全 worktree で共有する
     git の common-dir の下の `hirai-task/`（_shared_state_dir）に置く。作業ツリーの外なので
-    追跡されず、.gitignore も要らない。共有の 3 ファイルは
+    追跡されず、.gitignore も要らない。共有の 2 ファイルは
     `{"<repo>[#<project番号>]": {...}}` の形で、複数リポ・複数 Project を 1 ファイルで
     区別する。読めない・壊れているときは警告を出し、その回は「何も基準が無い」側
-    （align は動かさない方へ、comments は既定の遡りへ）に倒す。
+    （既定の遡りへ）に倒す。
 
   --json の形（align・close-parents）:
     align   : {"align": [{"feature": <int>, "moves": [{"number": <int>,
@@ -250,7 +252,6 @@ FEATURE_KIND = 'feature'
 TASK_KIND = 'task'
 AI_MARKER = '<!-- ai -->'  # 印つきのコメントは comments が拾わない。
 PERMANENT_MARK = '- 常設: はい'  # wave の本文。close-parents はこの wave を閉じない。
-LATE_ADD_PREFIX = '- 後から追加:'  # new が、着手可の feature に足す子の本文に書く。
 NO_TODAY_MARK = '- today は書かない: はい'  # `[操作]` の open issue の本文。
 # 「出る条件のコマンド: exit 0（<日付>・<commit>）」の行。
 _EXIT_LINE_RE = re.compile(r'^- 出る条件のコマンド: exit 0', re.MULTILINE)
@@ -641,7 +642,7 @@ def _load_shared_json(path: str) -> dict:
     except Exception as exc:
         print(
             f'警告: {path} を読めなかった（{exc}）。この回は空として扱う'
-            '（判定は安全側＝動かさない方へ倒す）', file=sys.stderr,
+            '（基準が無い回として、既定の値で進める）', file=sys.stderr,
         )
         return {}
     if not isinstance(data, dict):
@@ -1022,7 +1023,7 @@ def fetch_extras(numbers: list[int]) -> dict[int, dict]:
 
 
 def fetch_bodies(numbers: list[int]) -> dict[int, str]:
-    """close-parents（「- 常設: はい」）・align（「- 後から追加:」）・wave-holds
+    """close-parents（「- 常設: はい」）・align と unblocked の「先の wave が出たか」・wave-holds
     （「出る条件のコマンド」の行）が使う本文を、まとめて 1 回の GraphQL で引く
     （fetch_extras と同じ alias の考え方）。"""
     unique = sorted({int(n) for n in numbers if n is not None})
@@ -1407,12 +1408,12 @@ def _write_status(project_number: int, number: int, status: str) -> None:
 
 
 # ── approve は廃止。承認はボードで feature を着手可にすること。
-# 着手可になった feature の子の承認待ちは、align が着手可（か依存待ち）へそろえる。
-# AI は承認待ち→着手可を自分で動かさない。
+# 着手可になった feature の子の承認待ち（目印なし）は、align が着手可（か依存待ち）へ
+# そろえるか、start が進行中へ進める。feature の承認待ち→着手可は人だけが動かす。
 def cmd_approve(number: int) -> int:
     die(
         'approve は廃止。feature をボードで着手可に'
-        '（子の task は today の align が着手可へそろえる）', 2,
+        '（子の task は today の align が着手可へそろえるか、start で着手できる）', 2,
     )
     return 2
 
@@ -1433,12 +1434,6 @@ def _guard_status_write(project_number: int, item: dict, number: int, value: str
     _reject_wave_feature(item, number, 'Status の書き込み')
     if value != READY_STATUS:
         return
-    current = item['fields'].get('Status', '')
-    if current == PENDING_STATUS:
-        die(
-            f'#{number} は承認待ちから着手可へ set で進めない'
-            '（feature をボードで着手可にし、align に任せる）', 2,
-        )
     if has_mark(item['title']):
         die(f'#{number} は目印つきの task で、set では着手可にしない。start --approved を使うこと', 2)
     parent_number = item.get('parent_number')
@@ -1494,7 +1489,27 @@ def cmd_add(number: int) -> int:
     return 0
 
 
-# ── start（着手可からだけ進める。`[操作]` は --approved で承認待ちからも） ──
+# ── start（着手可から。目印なしで親の feature が着手可なら承認待ちからも。
+#    `[操作]` は --approved で承認待ちからも） ──
+def _parent_feature_not_startable(project_number: int, item: dict) -> str:
+    """承認待ちの子を start で進めてよいかの、親の側の条件。進めてよければ空文字、
+    断るときはその理由（親の番号と今の Status を含む）を返す。"""
+    parent_number = item.get('parent_number')
+    if parent_number is None:
+        return '親の feature が無い'
+    parent = _require_item(project_number, parent_number)
+    parent_kind = parent['fields'].get(KIND_FIELD, '')
+    if parent_kind != FEATURE_KIND:
+        return f'親 #{parent_number} の種別が feature ではない（今「{parent_kind or "空"}」）'
+    parent_status = parent['fields'].get('Status', '')
+    if parent_status != READY_STATUS:
+        return f'親 #{parent_number} の feature が着手可ではない（今「{parent_status or "空"}」）'
+    if parent['blocked_by_open']:
+        blockers = ', '.join(f'#{n}' for n in parent['blocked_by_open'])
+        return f'親 #{parent_number} の feature に未完了の blocked by がある: {blockers}'
+    return ''
+
+
 def cmd_start(number: int, approved: str | None) -> int:
     project_number = discover_project_number()
     item = _require_item(project_number, number)
@@ -1521,10 +1536,22 @@ def cmd_start(number: int, approved: str | None) -> int:
         write_single_select_rest(project_number, number, 'Status', IN_PROGRESS_STATUS, item_id=item_id)
         print(f'#{number} Status={IN_PROGRESS_STATUS}（{OPERATION_MARK}・出どころ: {approved}）')
         return 0
-    if status != READY_STATUS:
+    if status == PENDING_STATUS:
+        # 承認待ちから進めてよいのは、目印が無く、親の feature が着手可のときだけ
+        # （feature の承認が子にも及ぶ。いつ子になったかは問わない）。
+        if has_mark(item['title']):
+            die(
+                f'#{number} は目印つきで承認待ちのため、start では進めない'
+                f'（チャットの承認のあと start --approved <出どころ> を使う。{OPERATION_MARK} の task のみ）', 2,
+            )
+        reason = _parent_feature_not_startable(project_number, item)
+        if reason:
+            die(f'#{number} は承認待ちのまま start では進めない: {reason}', 2)
+    elif status != READY_STATUS:
         die(
-            f'#{number} の Status は「{status or "空"}」で、着手可ではない'
-            f'（{OPERATION_MARK} の task はチャットの承認のあと start --approved <出どころ> を使う）', 2,
+            f'#{number} の Status は「{status or "空"}」で、着手可でも、承認待ち（目印なし・'
+            f'親の feature が着手可）でもない（{OPERATION_MARK} の task はチャットの承認のあと'
+            ' start --approved <出どころ> を使う）', 2,
         )
     write_single_select_rest(project_number, number, 'Status', IN_PROGRESS_STATUS)
     print(f'#{number} Status={IN_PROGRESS_STATUS}')
@@ -1840,11 +1867,7 @@ def cmd_new(argv: list[str]) -> int:
     parent_number = opts.get('parent')
     if parent_number is not None:
         parent = _validate_parent(project_number, parent_number, kind)
-        if parent['fields'].get('Status') == READY_STATUS:
-            # 親の feature が既に着手可なら、最初の本文に書いておく（作った
-            # あとで PATCH するより、読み直しと書き込みが 1 回分減る）。
-            now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
-            body = (body.rstrip('\n') + '\n' if body else '') + f'- 後から追加: {now}\n'
+        parent_is_ready = parent['fields'].get('Status') == READY_STATUS
 
     created = create_issue(
         opts['title'], body,
@@ -1893,6 +1916,8 @@ def cmd_new(argv: list[str]) -> int:
         print(f'  feature #{number} を承認待ちで作った。ボードで着手可にすると、子の task が動く')
     elif kind == WAVE_KIND:
         print(f'  wave #{number} を作った。並び順をボードで直してください')
+    elif kind == TASK_KIND and parent_is_ready and not has_mark(opts['title']):
+        print(f'  親 #{parent_number} は着手可。`hirai-task start {number}` で着手できる')
     return 0
 
 
@@ -2052,46 +2077,21 @@ def preceding_wave_unresolved(
     return False
 
 
-# ── align の「初めて着手可と見た子の一覧」（時刻の比較は使わない。比べる相手の
-#    「feature が着手可になった時刻」を確実に読む経路が無いため） ────────────
-ALIGN_SEEN_CACHE = os.path.join(_shared_state_dir(), 'gh-align-seen.json')
+def align_plan(items: list[dict], extras: dict[int, dict], bodies: dict[int, str]) -> dict:
+    """着手可の feature ごとに、承認待ち・着手可の子の移動先を計算する（書き込みはしない・
+    控えも読み書きしない）。戻り値は --json と同じ形（モジュール docstring）。
 
-
-def _align_seen_namespace(project_number: int) -> str:
-    return f'{REPO}#{project_number}'
-
-
-def align_plan(
-    items: list[dict], extras: dict[int, dict], bodies: dict[int, str],
-    *, seen_store: dict[str, list[int]] | None = None, project_number: int | None = None,
-) -> dict:
-    """着手可の feature ごとに、承認待ち・着手可の子の移動先を計算する（書き込みはしない）。
-    戻り値は --json と同じ形（モジュール docstring）。seen_store を渡さなければ
-    ALIGN_SEEN_CACHE の `<repo>#<project番号>` の名前空間を読み書きする（project_number
-    が要る）。selftest は空の辞書を渡し、実ファイルに触れずに「初めて見た時点の子」を
-    検査する（渡した辞書はその場で更新される）。
-
-    着手可の子は、ブロックされて
-    いなければ何もしない（着手可→着手可は出さない）。目印・後から追加・baseline 外の
-    子は、着手可の子でも動かさず skipped へ回す。feature 自身の未完了の blocked by
-    も、子を依存待ちへ動かす条件に含める。"""
+    承認待ちの子は、目印（`[操作]`・`[User]`）が無ければ、いつ子になったかを問わず
+    着手可へ動かす（未完了の blocked by が子か feature 自身にある、または先祖の wave を
+    止める wave が「出た」を満たさなければ依存待ちへ）。着手可の子は、ブロックされて
+    いなければ何もしない（着手可→着手可は出さない）。目印つきの子は、承認待ちでも
+    着手可でも動かさず skipped へ回す。"""
     items_by_number, children_of = _board_index(items)
-    persist = seen_store is None
-    namespace = _align_seen_namespace(project_number) if persist and project_number is not None else None
-    if persist and namespace is None:
-        die('align_plan: 控えを保存するには project_number が要る', 1)
-    seen = _load_namespaced(ALIGN_SEEN_CACHE, namespace) if persist else seen_store
-    dirty = False
     plans = []
     for feature in items:
         if feature.get('kind') != FEATURE_KIND or feature.get('status') != READY_STATUS:
             continue
         fnum = feature['number']
-        key = str(fnum)
-        if key not in seen:
-            seen[key] = list(children_of.get(fnum, []))
-            dirty = True
-        baseline = set(seen.get(key) or [])
         feature_extra = extras.get(fnum) or {}
         feature_blocked = feature_extra.get('blocked_by_open', 0) > 0
         wave_ancestor = _ancestor_number_of_kind(fnum, items_by_number, WAVE_KIND)
@@ -2110,12 +2110,6 @@ def align_plan(
             if has_mark(child.get('title') or ''):
                 skipped.append(cnum)
                 continue
-            if LATE_ADD_PREFIX in (bodies.get(cnum) or ''):
-                skipped.append(cnum)
-                continue
-            if cnum not in baseline:
-                skipped.append(cnum)
-                continue
             child_extra = extras.get(cnum) or {}
             blocked = feature_blocked or child_extra.get('blocked_by_open', 0) > 0 or wave_unresolved
             if status == READY_STATUS:
@@ -2126,8 +2120,6 @@ def align_plan(
             moves.append({'number': cnum, 'to': target, 'from': PENDING_STATUS})
         if moves or skipped:
             plans.append({'feature': fnum, 'moves': moves, 'skipped': skipped})
-    if dirty and persist:
-        _save_namespaced(ALIGN_SEEN_CACHE, namespace, seen)
     return {'align': plans}
 
 
@@ -2538,7 +2530,7 @@ def cmd_align(as_json: bool = False, *, items: list[dict] | None = None) -> int:
     wave_numbers = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
     extras = fetch_extras(feature_children + wave_numbers + list(ready_features))
     bodies = fetch_bodies(feature_children + wave_numbers)
-    plan = align_plan(items, extras, bodies, project_number=project_number)
+    plan = align_plan(items, extras, bodies)
     if as_json:
         print(json.dumps(plan, ensure_ascii=False))
     else:

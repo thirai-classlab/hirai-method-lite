@@ -11,7 +11,7 @@
 
 ## 2. 仕事の組み立て
 
-- **3 段**: wave → feature → task。段は項目「種別」と sub-issue で表す。着手の承認は feature の単位で、人がボードで「着手可」に動かす
+- **3 段**: wave → feature → task。段は項目「種別」と sub-issue で表す。着手の承認は feature の単位で、人がボードで「着手可」に動かす。着手可の feature の子の task（目印なし）は、あとから足したものも着手してよい
 - **task**: PR 1 本で閉じる作業。PR の本文に `Closes #<番号>` を書く
 - **止める依存**: blocked by で表す。wave の行の並び順が wave の並び
 - **止めた設計**: 種別「設計メモ」・Status「保留」の issue にする。理由と再開条件は本文に書く
@@ -39,7 +39,7 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 | Status | 入るとき | 動かすもの |
 |---|---|---|
 | 承認待ち | task が Project に入ったとき | 自動（Item added） |
-| 着手可 | feature の着手が承認されたとき | 人が feature を動かし、AI が子の task をそろえる |
+| 着手可 | feature の着手が承認されたとき | 人が feature を動かし、AI が子の task をそろえる（そろう前でも、`hirai-task start` で承認待ちの子を進行中にできる） |
 | 判断待ち | 裁定が要るとき | AI |
 | 依存待ち | 先の task や wave が済んでいないとき | AI |
 | 進行中 | AI が着手したとき | AI（`hirai-task start <n>`） |
@@ -47,7 +47,7 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 | 完了 | PR を merge したとき | 自動（Item closed） |
 | 保留 | 止めると決めたとき | AI |
 
-- AI は「承認待ち → 着手可」を自分で動かさない
+- AI は feature の「承認待ち → 着手可」を自分で動かさない。着手可の feature の子の task（目印なし・あとから足したものも）は、`hirai-task align`（today が回す）・`set`・`start` が動かしてよい。`[操作]`・`[User]` の task は align も set も動かさず、`[操作]` は `start --approved` で進める
 - 依存待ち・判断待ち・保留が解けた task は、親 feature の Status に合わせて戻す（着手可なら着手可、承認待ちなら承認待ち）
 
 ## 5. wave と feature の作り方
