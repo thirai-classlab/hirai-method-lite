@@ -77,7 +77,8 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
   承認待ちからの経路と同じ判定（task_not_startable_reason）を通るときだけ「親 #N は着手可。
   `hirai-task start <番号>` で着手できる」と 1 行で知らせ、通らないときは「いまは着手できない:
   <理由>」と出す（親の feature が着手可でないときは何も出さない。本文には何も足さない。
-  いつ足した子かは区別しない）。
+  いつ足した子かは区別しない）。案内のための読み取りが落ちても、issue はもうできているので
+  new は exit 0 で終え、「着手できるかを確かめられなかった: <理由>」を 1 行出す。
 
   approve は廃止: 「approve は廃止。feature をボードで着手可に」と出して
   exit 2。feature の承認待ち→着手可は人だけが動かす（着手可の feature の子の承認待ちは
@@ -93,7 +94,10 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
   問わない。断るときは理由（親の番号と今の Status・blocked by の番号など）を出して exit 2。
   - set: Status を着手可へ書くとき、承認待ち・依存待ち・判断待ち・保留のどこからでも、この
     判定を通す。進行中へ書けるのは、今の Status がレビュー中・進行中・完了のときだけ（承認待ち・
-    判断待ち・依存待ち・保留・着手可・空からは exit 2。start を案内）。着手可・進行中へ書くとき、
+    判断待ち・依存待ち・保留・着手可・空からは exit 2。start を案内。`[User]` の task には
+    「道具では進行中にしない」と出す）。レビュー中・完了へ書く（set・review）のも、今の Status が
+    進行中・レビュー中・完了のときだけ（それ以外は exit 2。レビュー中を踏み台に 2 手で進行中へ
+    回れないようにする。done と reopen はこの守りの外）。着手可・進行中へ書くとき、
     閉じた issue は断る（reopen を案内）。
   - start（`--approved` なし）: 閉じた issue は断る。着手可の task は親を見ずに進行中へ進める
     （見るのは自分の未完了の blocked by だけ。2.1.0 のまま）。承認待ちの task は、この判定を
@@ -1444,9 +1448,10 @@ _SET_TO_IN_PROGRESS_FROM = (REVIEW_STATUS, IN_PROGRESS_STATUS, DONE_STATUS)
 _WAVE_ANCESTOR_MAX_DEPTH = 6
 
 
-def _wave_ancestor_of_feature(project_number: int, feature: dict) -> int | None:
-    """feature の親をたどり、種別が wave の祖先の番号を返す（無い・板に載っていなければ
-    None）。_ancestor_number_of_kind と同じ深さまで見る。"""
+def _wave_ancestor_of_feature(project_number: int, feature: dict) -> tuple[int, dict] | None:
+    """feature の親をたどり、種別が wave の祖先の（番号, 1 件引きの行）を返す（無い・板に
+    載っていなければ None）。_ancestor_number_of_kind と同じ深さまで見る。たどる途中で
+    引いた wave の行をそのまま返すので、呼び出し側は wave を引き直さない。"""
     seen: set[int] = set()
     current = feature.get('parent_number')
     depth = 0
@@ -1455,11 +1460,22 @@ def _wave_ancestor_of_feature(project_number: int, feature: dict) -> int | None:
         if not item.get('found'):
             return None
         if item['fields'].get(KIND_FIELD, '') == WAVE_KIND:
-            return current
+            return current, item
         seen.add(current)
         current = item.get('parent_number')
         depth += 1
     return None
+
+
+def _is_wave_number(project_number: int, number: int) -> bool:
+    """number が（この repo の）種別 wave の issue か。この repo の issue として引けない番号
+    （別 repo の blocked by の番号が同じ番号の PR に当たる等）は、align と同じく wave では
+    ないものとして扱う。"""
+    try:
+        item = fetch_write_item(project_number, number)
+    except GhError:
+        return False
+    return item.get('fields', {}).get(KIND_FIELD, '') == WAVE_KIND
 
 
 def _preceding_wave_reason(project_number: int, feature: dict) -> str:
@@ -1467,13 +1483,12 @@ def _preceding_wave_reason(project_number: int, feature: dict) -> str:
     （満たす・止める wave が無いときは空文字）。判定は align_plan・ready と同じ
     preceding_wave_unresolved を使う。止める wave が 1 つも無いときは全件を引かずに通し、
     あるときだけ板の全件・wave の blocked by と本文を引く。"""
-    wave_ancestor = _wave_ancestor_of_feature(project_number, feature)
-    if wave_ancestor is None:
+    found = _wave_ancestor_of_feature(project_number, feature)
+    if found is None:
         return ''
-    wave = fetch_write_item(project_number, wave_ancestor)
+    wave_ancestor, wave = found
     blocking = [
-        n for n, _state in wave.get('blocked_by', [])
-        if fetch_write_item(project_number, n).get('fields', {}).get(KIND_FIELD, '') == WAVE_KIND
+        n for n, _state in wave.get('blocked_by', []) if _is_wave_number(project_number, n)
     ]
     if not blocking:
         return ''
@@ -1526,10 +1541,25 @@ def _reject_closed(item: dict, number: int, verb: str) -> None:
 
 
 # ── set（Status と種別だけ） ────────────────
+def _require_in_progress_or_later(item: dict, number: int, value: str) -> None:
+    """レビュー中・完了を set・review で書けるのは、今の Status が進行中・レビュー中・完了の
+    ときだけ。それ以外から書けると、レビュー中を踏み台に set 進行中が通り、start の判定を
+    迂回できる（2 手で進行中）。閉じる（done）と開き直す（reopen）はこの守りの外。"""
+    status = item['fields'].get('Status', '')
+    if status in _SET_TO_IN_PROGRESS_FROM:
+        return
+    die(
+        f'#{number} の Status は「{status or "空"}」。{value}へは、進行中の task からだけ書ける。'
+        '着手は start を使う', 2,
+    )
+
+
 def _guard_status_write(
     project_number: int, item: dict, number: int, value: str, *, reopening: bool = False,
 ) -> None:
     _reject_wave_feature(item, number, 'Status の書き込み')
+    if value in (REVIEW_STATUS, DONE_STATUS) and not reopening:
+        _require_in_progress_or_later(item, number, value)
     if value not in (READY_STATUS, IN_PROGRESS_STATUS):
         return
     if not reopening:
@@ -1537,6 +1567,11 @@ def _guard_status_write(
     if value == IN_PROGRESS_STATUS:
         status = item['fields'].get('Status', '')
         if not reopening and status not in _SET_TO_IN_PROGRESS_FROM:
+            if has_mark(item['title'], USER_MARK):
+                die(
+                    f'#{number} は {USER_MARK} の task。道具では進行中にしない'
+                    '（ユーザーの手作業の task）', 2,
+                )
             die(
                 f'#{number} の Status は「{status or "空"}」。進行中へは start を使うこと'
                 f'（{OPERATION_MARK} の task は start --approved <出どころ>）', 2,
@@ -1648,6 +1683,7 @@ def cmd_review(number: int) -> int:
     project_number = discover_project_number()
     item = _require_item(project_number, number)
     _reject_wave_feature(item, number, 'review')
+    _require_in_progress_or_later(item, number, REVIEW_STATUS)
     write_single_select_rest(project_number, number, 'Status', REVIEW_STATUS)
     print(f'#{number} Status={REVIEW_STATUS}')
     return 0
@@ -2005,12 +2041,17 @@ def cmd_new(argv: list[str]) -> int:
         # start の承認待ちからの経路と同じ判定（task_not_startable_reason）を通るときだけ
         # 案内する。通らないときは、断られる理由を出す。
         # 親は attach_sub_issue で付けた番号をそのまま使う（読み直しの遅れに左右されない）。
-        created_item = fetch_write_item(project_number, number)
-        reason = (
-            task_not_startable_reason(project_number, {
-                **created_item, 'title': opts['title'], 'parent_number': parent_number,
-            }) if created_item.get('found') else 'Projects から状態を読み直せなかった'
-        )
+        # 案内は読み取りだけで、issue はもうできている。読み取りが落ちても new は落とさない。
+        try:
+            created_item = fetch_write_item(project_number, number)
+            reason = (
+                task_not_startable_reason(project_number, {
+                    **created_item, 'title': opts['title'], 'parent_number': parent_number,
+                }) if created_item.get('found') else 'Projects から状態を読み直せなかった'
+            )
+        except GhError as exc:
+            print(f'  着手できるかを確かめられなかった: {exc}')
+            return 0
         if reason:
             print(f'  いまは着手できない: {reason}')
         else:

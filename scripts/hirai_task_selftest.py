@@ -1687,6 +1687,125 @@ def main() -> int:
             _set_in_progress_only_from_review_or_later,
         )
 
+        NOT_IN_PROGRESS_STATUSES = (
+            gh_task.PENDING_STATUS, gh_task.JUDGMENT_STATUS, gh_task.DEP_STATUS,
+            gh_task.HOLD_STATUS, gh_task.READY_STATUS, '',
+        )
+
+        def _expect_refused_without_write(fn, record: list, label: str) -> str:
+            try:
+                fn()
+            except gh_task.GhError as exc:
+                assert exc.code == 2, f'{label}: exit {exc.code}（期待 2）: {exc}'
+                assert record == [], f'{label}: 断ったのに書いた: {record}'
+                return str(exc)
+            raise AssertionError(f'{label}: 断るべきなのに通った')
+
+        def _set_review_or_done_only_from_in_progress_or_later() -> None:
+            # (a) set レビュー中・完了は、承認待ち・判断待ち・依存待ち・保留・着手可・空から exit 2。
+            for status in NOT_IN_PROGRESS_STATUSES:
+                for value in (gh_task.REVIEW_STATUS, gh_task.DONE_STATUS):
+                    record: list = []
+                    gh_task.run_gh = make_write_gh(
+                        {801: dict(title='task', status=status, kind='task', parent_number=802),
+                         802: dict(title='feature', status=gh_task.READY_STATUS, kind='feature')},
+                        record=record,
+                    )
+                    message = _expect_refused_without_write(
+                        lambda: gh_task.cmd_set(801, 'Status', value), record, f'{status}→{value}',
+                    )
+                    assert '進行中の task からだけ書ける' in message and 'start を使う' in message, message
+            # (d) 進行中・レビュー中・完了からは、レビュー中・完了を書ける。
+            for status in (gh_task.IN_PROGRESS_STATUS, gh_task.REVIEW_STATUS, gh_task.DONE_STATUS):
+                for value in (gh_task.REVIEW_STATUS, gh_task.DONE_STATUS):
+                    record = []
+                    gh_task.run_gh = make_write_gh(
+                        {803: dict(title='task', status=status, kind='task')}, record=record,
+                    )
+                    with redirect_stdout(io.StringIO()):
+                        assert gh_task.cmd_set(803, 'Status', value) == 0, (status, value)
+                    assert record == [('F_Status', f'O_Status_{value}')], (status, value, record)
+
+        t(
+            'set は承認待ち・判断待ち・依存待ち・保留・着手可・空から、レビュー中・完了を書かない。進行中・レビュー中・完了からは書ける',
+            _set_review_or_done_only_from_in_progress_or_later,
+        )
+
+        def _review_only_from_in_progress_or_later() -> None:
+            # (b) review も承認待ちなどから exit 2。(c) 進行中からは通る。
+            for status in NOT_IN_PROGRESS_STATUSES:
+                record: list = []
+                gh_task.run_gh = make_write_gh(
+                    {804: dict(title='task', status=status, kind='task')}, record=record,
+                )
+                _expect_refused_without_write(lambda: gh_task.cmd_review(804), record, f'review（{status}）')
+            for status in (gh_task.IN_PROGRESS_STATUS, gh_task.REVIEW_STATUS, gh_task.DONE_STATUS):
+                record = []
+                gh_task.run_gh = make_write_gh(
+                    {805: dict(title='task', status=status, kind='task')}, record=record,
+                )
+                with redirect_stdout(io.StringIO()):
+                    assert gh_task.cmd_review(805) == 0, status
+                assert record == [('F_Status', 'O_Status_レビュー中')], (status, record)
+
+        t('review は承認待ち・判断待ち・依存待ち・保留・着手可・空から exit 2。進行中からは通る', _review_only_from_in_progress_or_later)
+
+        def _operation_mark_cannot_reach_in_progress_in_two_steps() -> None:
+            # (e) [操作] の承認待ち → set レビュー中 → set 進行中 の 2 手は、1 手目で止まる
+            # （2 手目は Status が変わらないので、同じく止まる）。done・reopen は今のまま。
+            record: list = []
+            gh_task.run_gh = make_write_gh(
+                {806: dict(title=f'{gh_task.OPERATION_MARK} task', status=gh_task.PENDING_STATUS,
+                           kind='task', parent_number=807),
+                 807: dict(title='feature', status=gh_task.READY_STATUS, kind='feature')},
+                record=record,
+            )
+            _expect_refused_without_write(
+                lambda: gh_task.cmd_set(806, 'Status', gh_task.REVIEW_STATUS), record, '1 手目',
+            )
+            message = _expect_refused_without_write(
+                lambda: gh_task.cmd_set(806, 'Status', gh_task.IN_PROGRESS_STATUS), record, '2 手目',
+            )
+            assert 'start --approved' in message, message
+            record = []
+            gh_task.run_gh = make_write_gh(
+                {808: dict(title='task', status=gh_task.PENDING_STATUS, kind='task')}, record=record,
+                rest_handler=lambda m, p, b: {},
+            )
+            with redirect_stdout(io.StringIO()):
+                assert gh_task.cmd_done(808, None) == 0  # done は今の Status を問わない
+            assert record == [('F_Status', 'O_Status_完了')], record
+            for target in (gh_task.REVIEW_STATUS, gh_task.DONE_STATUS):
+                record = []
+                gh_task.run_gh = make_write_gh(
+                    {809: dict(title='task', status=gh_task.DEP_STATUS, kind='task', state='CLOSED')},
+                    record=record, rest_handler=lambda m, p, b: {},
+                )
+                with redirect_stdout(io.StringIO()):
+                    assert gh_task.cmd_reopen(809, target) == 0, target  # reopen も今のまま
+                assert record == [('F_Status', f'O_Status_{target}')], (target, record)
+
+        t(
+            '[操作] の承認待ちから、set レビュー中 → set 進行中 の 2 手で進行中にできない（1 手目で止まる）。done・reopen は変わらない',
+            _operation_mark_cannot_reach_in_progress_in_two_steps,
+        )
+
+        def _user_mark_in_progress_message_does_not_point_to_start() -> None:
+            # (4) [User] の task へ set 進行中: start を案内せず、道具では進行中にしないと出す。
+            for status in (gh_task.PENDING_STATUS, gh_task.READY_STATUS):
+                record: list = []
+                gh_task.run_gh = make_write_gh(
+                    {810: dict(title=f'{gh_task.USER_MARK} 手作業', status=status, kind='task')},
+                    record=record,
+                )
+                message = _expect_refused_without_write(
+                    lambda: gh_task.cmd_set(810, 'Status', gh_task.IN_PROGRESS_STATUS), record, status,
+                )
+                assert '道具では進行中にしない（ユーザーの手作業の task）' in message, message
+                assert 'start' not in message, message
+
+        t('set は [User] の task を進行中にせず、start ではなく「道具では進行中にしない」と案内する', _user_mark_in_progress_message_does_not_point_to_start)
+
         def _decision_rejects_non_task_kind_child() -> None:
             # 種別が設計メモの子は、align が動かさないので、start・set も通さない。
             for status in (gh_task.PENDING_STATUS, gh_task.HOLD_STATUS):
@@ -3582,6 +3701,75 @@ def main() -> int:
             assert fetched >= 1 and verdict == 'refused', (fetched, verdict)
 
         t('着手の判定は、先祖の wave を止める wave が無いときだけ全件を引かずに通す', _wave_lookup_is_light_only_without_blocking_wave)
+
+        def _new_survives_failing_hint_reads() -> None:
+            # 全件の取得だけが落ちても、issue はできているので new は exit 0。1 行だけ出す。
+            items, extras, bodies = _board(prior='exited')
+            base = make_command_gh(items, bodies=bodies, extras=extras)
+            posted: list = []
+
+            def fake(args, input_text=None):
+                if args[:4] == ['api', '-X', 'POST', f'repos/{gh_task.REPO}/issues']:
+                    posted.append(1)
+                    return 0, json.dumps({'number': CHILD, 'id': 424242, 'node_id': 'X'}), ''
+                if 'items(first:' in ' '.join(args):
+                    return 1, '', 'HTTP 502 (simulated)'
+                return base(args, input_text)
+
+            gh_task.run_gh = fake
+            out = io.StringIO()
+            with redirect_stdout(out):
+                assert gh_task.cmd_new(['task', '--parent', str(FEAT)]) == 0
+            text = out.getvalue()
+            assert len(posted) == 1, f'issue を {len(posted)} 回作った'
+            assert f'#{CHILD} task' in text, text
+            assert '着手できるかを確かめられなかった: ' in text and 'HTTP 502' in text, text
+            assert 'で着手できる' not in text and 'いまは着手できない' not in text, text
+
+        t('new は issue を作ったあと、着手の案内の読み取りが落ちても exit 0 で、確かめられなかった旨を 1 行出す', _new_survives_failing_hint_reads)
+
+        def _wave_is_read_once() -> None:
+            # 祖先をたどる関数が wave の行も返すので、wave を 2 回引かない。
+            items, extras, bodies = _board(prior='exited')
+            base = make_command_gh(items, bodies=bodies, extras=extras)
+            reads: list = []
+
+            def counting(args, input_text=None):
+                if 'issue(number:$number) {' in ' '.join(args):
+                    reads.append(int(_extract_flag(args, 'number')))
+                return base(args, input_text)
+
+            gh_task.run_gh = counting
+            assert _verdict(lambda: gh_task.cmd_start(CHILD, None)) == 'ok'
+            assert reads.count(W2) == 1, f'wave #{W2} を {reads.count(W2)} 回読んだ: {reads}'
+
+        t('着手の判定は、先祖の wave を 1 回だけ読む', _wave_is_read_once)
+
+        def _unresolvable_wave_blocker_number_is_not_a_wave() -> None:
+            # wave の blocked by に、この repo で issue として引けない番号（別 repo の blocked by が
+            # 同じ番号の PR に当たる等）が混じっても落ちず、wave でない番号として先へ進む。
+            UNRESOLVABLE = 777
+
+            def run(prior: str) -> str:
+                items, extras, bodies = _board(prior=prior)
+                key = 'blocked_by_closed_numbers' if prior == 'exited' else 'blocked_by_open_numbers'
+                extras[W2] = {key: list(extras.get(W2, {}).get(key, [])) + [UNRESOLVABLE]}
+                base = make_command_gh(items, bodies=bodies, extras=extras)
+
+                def fake(args, input_text=None):
+                    if ('issue(number:$number) {' in ' '.join(args)
+                            and _extract_flag(args, 'number') == str(UNRESOLVABLE)):
+                        return 1, '', f'Could not resolve to an Issue with the number of {UNRESOLVABLE}.'
+                    return base(args, input_text)
+
+                gh_task.run_gh = fake
+                return _verdict(lambda: gh_task.cmd_start(CHILD, None))
+
+            assert run('none') == 'ok'            # 引けない番号だけ: 止める wave は無い
+            assert run('exited') == 'ok'          # 本物の先の wave が出ていれば通る
+            assert run('unfinished') == 'refused'  # 本物の先の wave が出ていなければ、引けない番号があっても断る
+
+        t('wave の blocked by に、issue として引けない番号が混じっても、wave でない番号として先へ進む', _unresolvable_wave_blocker_number_is_not_a_wave)
 
         def _align_skips_closed_and_non_task_children() -> None:
             feature = {

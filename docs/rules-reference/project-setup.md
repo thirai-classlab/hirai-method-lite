@@ -47,7 +47,7 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 | 完了 | PR を merge したとき | 自動（Item closed） |
 | 保留 | 止めると決めたとき | AI |
 
-- AI は feature の「承認待ち → 着手可」を自分で動かさない。着手可の feature の子の task（目印なし・あとから足したものも）は、`hirai-task align`（today が回す）が着手可へ（blocked by か先の wave が済んでいなければ依存待ちへ）動かす。`set`（→ 着手可）・`start`（承認待ち → 進行中）も、align が「着手可へ」と出す子だけを通す。`set` で進行中を書けるのはレビュー中・進行中・完了からだけ（承認待ち・判断待ち・依存待ち・保留・着手可・空からは `start` を使う）。`[操作]`・`[User]` の task は align も set も動かさず、`[操作]` は `start --approved` で進める
+- AI は feature の「承認待ち → 着手可」を自分で動かさない。着手可の feature の子の task（目印なし・あとから足したものも）は、`hirai-task align`（today が回す）が着手可へ（blocked by か先の wave が済んでいなければ依存待ちへ）動かす。`set`（→ 着手可）・`start`（承認待ち → 進行中）も、align が「着手可へ」と出す子だけを通す。`set` で進行中を書けるのはレビュー中・進行中・完了からだけ（承認待ち・判断待ち・依存待ち・保留・着手可・空からは `start` を使う）。レビュー中・完了を `set`・`review` で書けるのも、進行中・レビュー中・完了の task からだけ（そのほかからは exit 2。2 手で進行中に回れない。閉じる `done` と開き直す `reopen` は別）。`[操作]`・`[User]` の task は align も set も動かさず、`[操作]` は `start --approved` で進める
 - 依存待ち・判断待ち・保留が解けた task は、親 feature の Status に合わせて戻す（着手可なら着手可、承認待ちなら承認待ち）
 
 ## 5. wave と feature の作り方
