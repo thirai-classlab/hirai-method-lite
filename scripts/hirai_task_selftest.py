@@ -3771,6 +3771,31 @@ def main() -> int:
 
         t('wave の blocked by に、issue として引けない番号が混じっても、wave でない番号として先へ進む', _unresolvable_wave_blocker_number_is_not_a_wave)
 
+        def _transient_failure_on_wave_blocker_lookup_is_not_a_wave() -> None:
+            # 引けない番号以外の失敗（502・レート制限）は「wave でない」にせず、start を通さない。
+            FLAKY = 778
+            items, extras, bodies = _board(prior='unfinished')
+            extras[W2] = {'blocked_by_open_numbers': list(extras.get(W2, {}).get('blocked_by_open_numbers', [])) + [FLAKY]}
+            log: list = []
+            base = make_command_gh(items, bodies=bodies, extras=extras, write_log=log)
+
+            def fake(args, input_text=None):
+                if ('issue(number:$number) {' in ' '.join(args)
+                        and _extract_flag(args, 'number') == str(FLAKY)):
+                    return 1, '', 'HTTP 502 (simulated)'
+                return base(args, input_text)
+
+            gh_task.run_gh = fake
+            try:
+                gh_task.cmd_start(CHILD, None)
+            except gh_task.GhError as exc:
+                assert 'HTTP 502' in str(exc), exc
+            else:
+                raise AssertionError('通信の失敗なのに start が通った')
+            assert log == [], f'進行中への書き込みが {len(log)} 件ある: {log}'
+
+        t('wave の blocked by の番号の取得が通信の失敗で落ちたら、wave でないとせず start を通さない', _transient_failure_on_wave_blocker_lookup_is_not_a_wave)
+
         def _align_skips_closed_and_non_task_children() -> None:
             feature = {
                 'number': 250, 'kind': gh_task.FEATURE_KIND, 'status': gh_task.READY_STATUS,

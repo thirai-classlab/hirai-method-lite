@@ -1467,14 +1467,20 @@ def _wave_ancestor_of_feature(project_number: int, feature: dict) -> tuple[int, 
     return None
 
 
+# GitHub が「その番号はこの repo の issue として引けない」と答えたときの文言（gh の stderr・errors の message に入る）。
+_NOT_AN_ISSUE_MESSAGE = 'Could not resolve to an Issue'
+
+
 def _is_wave_number(project_number: int, number: int) -> bool:
-    """number が（この repo の）種別 wave の issue か。この repo の issue として引けない番号
-    （別 repo の blocked by の番号が同じ番号の PR に当たる等）は、align と同じく wave では
-    ないものとして扱う。"""
+    """number が（この repo の）種別 wave の issue か。GitHub が「この repo の issue として引けない」
+    と答えた番号（別 repo の blocked by の番号が同じ番号の PR に当たる等）だけを、align と同じく
+    wave ではないものとして扱う。レート制限・502 などの通信の失敗は上げる（着手を通す側に倒さない）。"""
     try:
         item = fetch_write_item(project_number, number)
-    except GhError:
-        return False
+    except GhError as exc:
+        if _NOT_AN_ISSUE_MESSAGE in str(exc):
+            return False
+        raise
     return item.get('fields', {}).get(KIND_FIELD, '') == WAVE_KIND
 
 
