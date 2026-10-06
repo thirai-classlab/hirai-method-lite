@@ -87,16 +87,16 @@ P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&
 cat "$P/templates/settings.json"   # 素材。差分提示の元にする
 if [ -e "$D/settings.json" ]; then echo "kept   $D/settings.json (下記手順で差分を提示する)"; else
   cp "$P/templates/settings.json" "$D/settings.json" && echo "placed $D/settings.json"
-  [ "$ULTRA" = off ] && python3 -c 'import json,sys;p=sys.argv[1];d=json.load(open(p));[d.pop(k,None) for k in ("ultracode","workflowSizeGuideline")];json.dump(d,open(p,"w"),ensure_ascii=False,indent=2)' "$D/settings.json" && echo "removed ultracode / workflowSizeGuideline"
+  [ "$ULTRA" = off ] && python3 -c 'import json,sys;p=sys.argv[1];d=json.load(open(p));[d.pop(k,None) for k in ("ultracode",)];json.dump(d,open(p,"w"),ensure_ascii=False,indent=2)' "$D/settings.json" && echo "removed ultracode"
   [ "$D" = .claude ] || python3 -c 'import json,os,sys;p=sys.argv[1];d=json.load(open(p));d["statusLine"]={"type":"command","command":"bash \""+os.path.expanduser("~/.claude/statusline.sh")+"\""};json.dump(d,open(p,"w"),ensure_ascii=False,indent=2)' "$D/settings.json"
 fi
 python3 -m json.tool "$D/settings.json" >/dev/null && echo "settings.json は妥当な JSON"
 ```
 
-- 無かった場合は上の `cp` で配置済み。素材は `"ultracode": true` を含み、**xhigh 推論と自動 workflow オーケストレーションが有効になってトークン消費が増える**。だから手順 1 の質問 2 で先に聞く。`off` を選ばれたときは上の `python3` が `ultracode` と `workflowSizeGuideline` の 2 キーを落とす (`permissions` と `statusLine` は残る)。
+- 無かった場合は上の `cp` で配置済み。素材は `"ultracode": true` を含み、**xhigh 推論と自動 workflow オーケストレーションが有効になってトークン消費が増える**。だから手順 1 の質問 2 で先に聞く。`off` を選ばれたときは上の `python3` が `ultracode` だけを落とす (`workflowSizeGuideline`・`permissions`・`statusLine` は残る)。
 - **`user` 指定時だけ** `statusLine.command` を `$HOME` を展開した絶対パス (`bash "/…/.claude/statusline.sh"`) に書き換える。素材の `${CLAUDE_PROJECT_DIR}` は開くプロジェクトごとに変わるため、全プロジェクト共通の設定からは使えない。既存 settings.json に差分提示する場合も、`user` 指定時は同じ絶対パスの形で提案する。
 - あった場合は **上書きしない**。素材と突き合わせて差分だけを提示し、承認された分だけ既存 JSON へ追加する。`permissions` キーが無ければ素材の `permissions` をそのまま**新設してよい**。`permissions.deny` / `permissions.ask` があるときは素材にしかないエントリを一覧で出し「この N 件を追記しますか?」と聞き、承認分だけ配列末尾に足す。
-  - **既存の `permissions.allow` は 1 件も削らず、並び順も変えない** (素材に `allow` は無いのでそのまま残す)。`deny` / `ask` の既存エントリも同じく保全する。top-level の `ultracode` / `workflowSizeGuideline` / `statusLine` も同じく差分として提示し、**`ultracode` は利用量が増えるキーなので差分に含まれるときは「入れますか」と必ず聞く。** `hooks` / `env` など素材に無いキーには触れない。
+  - **既存の `permissions.allow` は 1 件も削らず、並び順も変えない** (素材に `allow` は無いのでそのまま残す)。`deny` / `ask` の既存エントリも同じく保全する。top-level の `ultracode` / `workflowSizeGuideline` / `statusLine` も同じく差分として提示し（素材の `workflowSizeGuideline` は `medium`。導入先が `medium` のときは差分が出ない。素材が `unrestricted` のままだと、/init の回し直しで承認ひとつで `unrestricted` に戻る）、**`ultracode` は利用量が増えるキーなので差分に含まれるときは「入れますか」と必ず聞く。** `hooks` / `env` など素材に無いキーには触れない。
   - 差分の反映を求めるのは**承認**なので、**判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル）。
 - マージ後は必ず `python3 -m json.tool "$D/settings.json" >/dev/null` を再実行し、exit 0 を確認する。0 以外なら編集前の内容へ戻す。
 
@@ -280,7 +280,7 @@ echo "== 既存の書類 =="; find docs -name '*.md' 2>/dev/null | head -20; ech
 次の 4 つが揃った時点で完了。**大前提として、手順 1 の `AskUserQuestion` を呼んで返事を得てから手順 2 以降を実行していること** (質問を全部省ける条件に当てはまった場合は、`AskUserQuestion` を呼ばずその 1 行を伝えてから実行したこと)。揃ったことを確認したうえで、手順 9 の型で報告する (`$D` は手順 2 で決めた配置先)。
 
 - `ls "$D"/rules/*.md` が 5 件返し、手順 3 の層判定が T0 2 本 / T1 3 本になる。
-- `python3 -m json.tool "$D/settings.json"` が exit 0。質問 2 で「有効にしない」を選ばれた場合は加えて `grep -c 'ultracode\|workflowSizeGuideline' "$D/settings.json"` が 0。
+- `python3 -m json.tool "$D/settings.json"` が exit 0。質問 2 で「有効にしない」を選ばれた場合は加えて `grep -c '"ultracode"' "$D/settings.json"` が 0。
 - `ls "$D/rules-archive/.gitkeep" "$D/statusline.sh"` が exit 0。進め方は `ls "$MF"` が exit 0 で `grep -c '^mode: \(normal\|loop\)$' "$MF"` が 1 (質問 3 で選ばれた値、既存を残したときはその値のまま)。**`$MF` がホーム側だったときは `.claude/mode.yml` が作られていないこと** (`ls .claude/mode.yml` が exit 1)。CLAUDE.md も置き場に在る (`ls CLAUDE.md`、`user` 指定なら `ls "$HOME/.claude/CLAUDE.md"`)。このプロジェクトに入れたときは加えて `ls -d docs` と手順 7 の最終行 (incidents / 承認の型 / draft dir の 3 パス) も exit 0 (手順 7 が `skip 旧レイアウト` だった場合を除く)。
 - 手順 8 を実行済み。警告が出た場合は報告に転記済み。
 

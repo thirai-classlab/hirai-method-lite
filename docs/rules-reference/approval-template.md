@@ -125,7 +125,7 @@
 ### 提案: ultracode（深く考えて自動で手分けする）を有効にする
 
 **何をしたいか**: `.claude/settings.json` に `"ultracode": true` を足します（戻すときは
-  `ultracode` と `workflowSizeGuideline` の 2 つを外します）。
+  `ultracode` を外します。`workflowSizeGuideline` は ultracode と別の設定なので残します）。
 **なぜ**: このセッションで、複数ファイルにまたがる調査を 3 回手作業で分けました。
 **しないとどうなる**: 手分けを毎回こちらで指示することになります。品質が下がるとは限りません。
 **トレードオフ**: 得る = 手分けが自動になる。

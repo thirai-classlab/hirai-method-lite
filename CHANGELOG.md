@@ -4,6 +4,19 @@
 
 更新のしかたは [README の「更新する」](README.md#更新する既定では自動で新しくなりません)。**既定では自動更新しない**（v1.13.0 から opt-in で自動にできる）。
 
+## v2.2.1
+
+レビューに立てるエージェントの数の素材と説明を、導入先の規範（観点 2〜3 本・同じ指摘をまとめる・HIGH 以上の行にだけ反証。rmp-app の #915）にそろえた。`workflowSizeGuideline` は 1 本の Workflow の総数の目安で、同時数には効かず、ultracode の付属でもない。`bin/hirai-task` と selftest は変えていない。
+
+- `templates/settings.json`: `workflowSizeGuideline` を `unrestricted` から `medium`（10 本未満の目安）へ。
+- `rules/core.md`: 「同時起動は 2 件まで」を「Workflow ツール内部の同時数はランタイムに、総数は `workflowSizeGuideline` の目安に任せ」へ。「レビューは並列で立てる」を「2 本以上」から「報告に名の無い観点で 2〜3 本・同じ指摘を 1 行にまとめて最も重い重さを付ける・HIGH 以上の行にだけ反証を 1 本ずつ・ultracode でも同じ」へ（rmp-app の全文）。
+- `docs/rules-reference/subagent-operations.md`: (c) の「上限を設けない」を、同時数はランタイムが `min(16, max(2, CPU 数−2))` で抑え、`workflowSizeGuideline` は総数の目安（既定 `medium`）と書き換えた。
+- `README.md`: ultracode の節で、無効にするとき外すのは `ultracode` だけ（`workflowSizeGuideline` は残す）。`unrestricted` の段落を `medium` の説明へ書き換え（2026-08-21 の stall の実測は残した）。`agents/` の節の「2 本以上」を「2〜3 本」へ。
+- `commands/config.md`・`docs/rules-reference/approval-template.md`: ultracode を無効に戻すときは `ultracode` だけを外す。
+- `commands/init.md`: 「有効にしない」のとき落とすキーを `ultracode` だけにし、検査を `grep -c '"ultracode"'` が 0 に変えた。素材との差分の注記（素材が `unrestricted` のままだと /init の回し直しで戻る）を足した。
+- `commands/start-task.md`: `[User]` の task は「道具が着手可にしない。ユーザーがボードで着手可にしたものは `start` が通る」の向きに直した（2.2.0 の `cmd_start` の実体に合わせる）。
+- **導入先で要る操作。** `.claude/settings.json` の `workflowSizeGuideline` を `medium` にする（`/update` は settings.json を上書きしない）。`rules/core.md` の 2 行（同時起動は 2 件まで・レビューは並列で立てる）を手で直す（`/update` は rules を上書きしない）。rmp-app は #915 で済んでいる。
+
 ## v2.2.0
 
 着手可（承認済み）の feature の子の task は、あとから足したものも着手できる。task を着手可・進行中にしてよい条件は「目印（`[操作]`・`[User]`）が無く、親の feature が着手可で、未完了の blocked by（自分と親の feature）が無く、先祖の wave を止める wave が出ている」の 1 本になり、いつ子になったかは問わない。判定は 1 つの関数（`task_not_startable_reason`）にまとめ、`align` が「着手可へ」と出す子だけを通し、「依存待ちへ」と出す子は断る。
