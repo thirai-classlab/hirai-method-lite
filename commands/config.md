@@ -98,14 +98,14 @@ grep -c '^mode: \(normal\|loop\)$' "$f"
 **`loop`（自動で進む）の間の振る舞い。** 作り方の選び方・branch 名・commit の件名・ビルドが通るまでの試行錯誤は聞かずに決める。止まるのは 3 つだけ（「stop」と言われた / やることが終わった / 続けられないエラー）。ただし新しい設計を足すとき・決めた内容から外れるとき・元に戻せない操作（`main` への push / PR の取り込み / 本番反映 / DB の作り替え / 秘密情報）は自動でも必ず確認を取る。作業を任せた相手を待つ間は別の作業を進め、会話の使用量が 50% に達したら `/hirai-lite:state save` を実行する。
 
 ### 2. ultracode（深く考えて自動で手分けする。利用量が増える）
-`$D/settings.json` の `ultracode` を切り替える。**有効にすると利用量（費用）が増える。** 無効にするときは `ultracode` と `workflowSizeGuideline` の 2 つを外す。書き換えたら `python3 -m json.tool "$D/settings.json"` を通し、失敗したら編集前へ戻す。
+`$D/settings.json` の `ultracode` を切り替える。**有効にすると利用量（費用）が増える。** 無効にするときは `ultracode` だけを外す（`workflowSizeGuideline` は ultracode と別の設定で、on・off のどちらでも効く）。書き換えたら `python3 -m json.tool "$D/settings.json"` を通し、失敗したら編集前へ戻す。
 
 **費用に影響するので、有効にする前に承認を求める。** 本文に **何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか** の 5 点をこの語で示してから `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）を出す。5 項目は本文に書き、選択肢の説明文に詰め込まない。型と記入例は `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル）。**無効に戻すとき（費用が減る方向）と、利用者が自分から「有効にして」と言ったときは、この確認は要らない。** 実際に出す文面の例:
 
 ```
 ### 提案: ultracode（深く考えて自動で手分けする）を有効にする
 **何をしたいか**: `.claude/settings.json` に `"ultracode": true` を足します（戻すときは
-  `ultracode` と `workflowSizeGuideline` の 2 つを外します）。
+  `ultracode` を外します。`workflowSizeGuideline` は ultracode と別の設定なので残します）。
 **なぜ**: このセッションで、複数ファイルにまたがる調査を 3 回手作業で分けました。
 **しないとどうなる**: 手分けを毎回こちらで指示することになります。品質が下がるとは限りません。
 **トレードオフ**: 得る = 手分けが自動になる ／ 失う = **利用量（費用）が増えます**

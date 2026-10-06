@@ -273,9 +273,9 @@ Claude Code 2.1.247 で実際に確かめたところ、この表示が出てい
 
 `templates/settings.json` は `"ultracode": true` を含む。ultracode は xhigh 推論と、タスクごとの自動 workflow オーケストレーションを常時 on にする設定で、**通常運用よりトークン消費が大きい**。従量課金で使う場合はコスト増を見込むこと。
 
-**v1.4.0 から、`/hirai-lite:init` は配置する前にこれを有効にしてよいか尋ねる**（既定は「有効にする」。v1.6.0 から Claude Code 標準の選択 UI で尋ね、既定の選択肢に `(推奨)` が付く）。「有効にしない」と答えると、`ultracode` と `workflowSizeGuideline` の 2 キーを外した settings.json を配置する（安全設定 `permissions` と画面下部の表示 `statusLine` は残る）。あとから変えるときは、導入先の `.claude/settings.json` の `ultracode` キーを削除するか `false` にする。プラグイン側の素材を編集する必要はない。
+**v1.4.0 から、`/hirai-lite:init` は配置する前にこれを有効にしてよいか尋ねる**（既定は「有効にする」。v1.6.0 から Claude Code 標準の選択 UI で尋ね、既定の選択肢に `(推奨)` が付く）。「有効にしない」と答えると、`ultracode` を外した settings.json を配置する（`workflowSizeGuideline` は残す。安全設定 `permissions` と画面下部の表示 `statusLine` は残る）。あとから変えるときは、導入先の `.claude/settings.json` の `ultracode` キーを削除するか `false` にする。プラグイン側の素材を編集する必要はない。
 
-併せて `"workflowSizeGuideline": "unrestricted"` を置き、1 workflow 内部のエージェント数には既定の上限を設けていない。公式仕様（Claude Code Docs "Set a size guideline"）では、段階的にエージェント数を絞る他の選択肢に対し `unrestricted` だけが「上限を示さず Claude がタスクに応じて決める」で、既定はそれより絞った段階（Pro プランではさらに絞った段階）。いずれも Claude への助言であり強制上限ではない（ランタイム自体が課す別枠の上限はこの設定より優先してかかる）。根拠は実測（2026-08-21）。**メインエージェントが Agent tool で手動で** 4 subagent を同時起動した際、3 件が 600 秒無進捗で stall し 1 件が API 接続断となり成果物はゼロだった。同時 2 件へ落としたところ 5 件連続で成功した（`rules/core.md` の「同時起動は 2 件まで」の根拠）。この事故は**メインが手で並べて起動する場合**の話であり、Workflow ツール内部の並列実行は Workflow ランタイム自身が制御するため別問題（同じ制約を負わない）と切り分け、`workflowSizeGuideline` では上限を設けない。ただし `unrestricted` は 1 run が肥大しやすく、一定のエージェント数・見積りトークン数を超えると `Large workflow` 警告が出る水準までトークン消費が増えうる（閾値は公式ドキュメント参照）。**小さいスライスで試してから本番実行する**、大きな監査は既定より絞った段階へ一時的に落とす、が対処になる。
+併せて `"workflowSizeGuideline": "medium"`（10 本未満の目安）を置く。この値は 1 本の Workflow の総数の助言で、同時数はランタイムが別に抑える（強制上限ではなく、ultracode の付属でもない。on・off のどちらでも効く）。ultracode が on のあいだは「Large workflow」の警告が出ないので、この目安と、レビューの規範（`rules/core.md` の「レビューは並列で立てる」: 観点 2〜3 本・HIGH 以上の行にだけ反証）が歯止めになる。手動起動の同時数の根拠は実測（2026-08-21）。**メインエージェントが Agent tool で手動で** 4 subagent を同時起動した際、3 件が 600 秒無進捗で stall し 1 件が API 接続断となり成果物はゼロだった。同時 2 件へ落としたところ 5 件連続で成功した（`rules/core.md` の「同時起動は 2 件まで」の根拠）。この事故は**メインが手で並べて起動する場合**の話であり、Workflow ツール内部の並列実行は Workflow ランタイム自身が制御するため別問題（同じ制約を負わない）。小さいスライスで試してから本番実行する、大きな監査は目安を `small` などへ絞る、が肥大への対処になる。
 
 ## statusline について
 
@@ -389,7 +389,7 @@ claude plugins install mattpocock-skills
 
 ## 同梱しているエージェント
 
-`agents/` に 3 つ。`rules/code.md` のレビュー規範（「観点の異なる reviewer を 2 本以上並列起動する」）が名指しする相手を実体として配るためのもの。
+`agents/` に 3 つ。`rules/code.md` のレビュー規範（「実装の担当の報告に名の無い異なる観点の reviewer を 2〜3 本並列起動する」）が名指しする相手を実体として配るためのもの。
 
 | 名前 | 役割 |
 |---|---|

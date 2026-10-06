@@ -42,7 +42,7 @@
 
 上記の同時 2 件は 2 つの対象にかかる。**(a) メインが Agent tool で直接起動する subagent**（この節の実測が直接の根拠）と、**(b) メインが Workflow ツールを起動する本数**（同時に走らせる Workflow 自体を 2 本までにする）。
 
-一方、**(c) 1 つの Workflow が内部で `parallel()` / `pipeline()` によって同時に走らせるエージェント数には上限を設けない**（`templates/settings.json` の `workflowSizeGuideline: "unrestricted"` が対応）。(a)/(b) と (c) が別枠なのは、原因が違うため: (a)/(b) はメインが手で tool 呼び出しを並べる形で行われ、tool-call の markup 崩れや API 接続の不安定さがそのまま stall に出る（この節の観測がその実例）。(c) は Claude が書いた script を Workflow ランタイムが実行し、同時実行数やリトライをランタイム自身が管理する。上記の実測はメインが手で並べた場合のものであり、Workflow ランタイムが管理する並列実行の安定性を測ったものではない。
+一方、**(c) 1 つの Workflow が内部で `parallel()` / `pipeline()` によって同時に走らせる数は、Workflow ランタイムが `min(16, max(2, CPU 数−2))` で抑える。** `templates/settings.json` の `workflowSizeGuideline` は 1 本の Workflow の**総数**の目安で、同時数には効かない（既定は `medium`・10 本未満）。(a)/(b) と (c) が別枠なのは、原因が違うため: (a)/(b) はメインが手で tool 呼び出しを並べる形で行われ、tool-call の markup 崩れや API 接続の不安定さがそのまま stall に出る（この節の観測がその実例）。(c) は Claude が書いた script を Workflow ランタイムが実行し、同時実行数やリトライをランタイム自身が管理する。上記の実測はメインが手で並べた場合のものであり、Workflow ランタイムが管理する並列実行の安定性を測ったものではない。
 
 ---
 
