@@ -47,7 +47,7 @@ git status --porcelain            # 出力が空、または意図的に残し�
 
 以下は user が承認するまで実行しない。**承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル）。
 
-- `main` への push (`git push origin main`)
+- 既定ブランチ（`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` で引く）への push (`git push origin <既定ブランチ>`)
 - `gh pr merge`
 - `git push --force` と `git reset --hard`
 - `git commit --amend` で push 済 commit を書き換えること

@@ -4,6 +4,17 @@
 
 更新のしかたは [README の「更新する」](README.md#更新する既定では自動で新しくなりません)。**既定では自動更新しない**（v1.13.0 から opt-in で自動にできる）。
 
+## v2.2.2
+
+`today` の wave-holds が、出る条件が人の判断の wave を毎日出さなくなり、merged-designs が既定の branch へ merge した設計 PR を拾うようになった（rmp-app の #796・#873）。
+
+- `bin/hirai-task`: 本文に `- 出る条件のコマンド: なし（人の判断）` の行を持つ wave は wave-holds に出さず、「出た」とも数えない（後続を止める `preceding_wave_unresolved` は今のまま「満たさない」）。子の条件の判定は変えていない。`_HUMAN_JUDGMENT_LINE_RE` を足し、`wave_hold_rows` がこの行を持つ wave を飛ばす。
+- `bin/hirai-task`: `merged_design_rows` が `GET repos/{REPO}` の `default_branch` を 1 回だけ引いて `base=<branch>` で設計 PR を引く。引けなければ `base=` を付けずに引き、絞れなかったことを 1 行出す（`base=main` 固定をやめた）。
+- `commands/finish-task.md`・`commands/commit.md`: 既定の branch の例（`main`）を `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` で引く書き方に替えた。
+- `docs/rules-reference/project-setup.md`: wave の「出る条件の行」の書き方を足した。
+- selftest: 「人の判断の行を持つ wave は wave-holds に出ず、出たとも数えない」「default_branch が stg のとき、stg へ merge した設計 PR を拾う（引けなければ base 無しで引いて 1 行出す）」の 2 本。
+- **導入先で要る操作。** プラグインを上げて新しい会話を開く（`/hirai-lite:update`）。出る条件が人の判断の wave の本文に上の行を 1 行足す（rmp-app は #635）。`gh-merged-designs-since.json` の since を、既定の branch を切り替えた日（rmp-app は 2026-10-05）に戻して拾い直す。
+
 ## v2.2.1
 
 レビューに立てるエージェントの数の素材と説明を、導入先の規範（観点 2〜3 本・同じ指摘をまとめる・HIGH 以上の行にだけ反証。rmp-app の #915）にそろえた。`workflowSizeGuideline` は 1 本の Workflow の総数の目安で、同時数には効かず、ultracode の付属でもない。`bin/hirai-task` と selftest は変えていない。
