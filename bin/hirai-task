@@ -147,7 +147,7 @@ memos / today / after-merge）:
       ・stuck: ready_warnings と同じ 3 種 + 「着手可なのに親の feature が承認待ち」
       ・wave-holds: OPEN の wave だけを見る。子孫が 1 件以上あり、子の条件は満たしたが、
         本文に「出る条件のコマンド」の行が無い wave（子孫 0 件の新しい wave は
-        「満たした」に数えない）
+        「満たした」に数えない。「- 出る条件のコマンド: なし（人の判断）」の行を持つ wave は出さない）
       ・merged-designs: main へ merge された、本文に DESIGN_PR_MARKER の印がある PR のうち、
         gh-merged-designs-since.json の since 以降のもの（簡易版。「起票済みか」までは
         判定しない。診断のための一覧であり、判断は人が行う）
@@ -269,6 +269,9 @@ PERMANENT_MARK = '- 常設: はい'  # wave の本文。close-parents はこの 
 NO_TODAY_MARK = '- today は書かない: はい'  # `[操作]` の open issue の本文。
 # 「出る条件のコマンド: exit 0（<日付>・<commit>）」の行。
 _EXIT_LINE_RE = re.compile(r'^- 出る条件のコマンド: exit 0', re.MULTILINE)
+# 「出る条件のコマンド: なし（人の判断）」の行。出る条件が人の判断で回す命令が無い wave に書く。
+# この行を持つ wave は wave-holds に出さず、「出た」とも数えない（後続は止めたまま）。
+_HUMAN_JUDGMENT_LINE_RE = re.compile(r'^- 出る条件のコマンド: なし（人の判断）', re.MULTILINE)
 DESIGN_PR_MARKER = 'pr-template-design-v1'  # 設計 PR の本文の印（PR の雛形に置く）。
 
 # False にすると align・close-parents は
@@ -2489,13 +2492,15 @@ def stuck_rows(items: list[dict], extras: dict[int, dict]) -> list[str]:
 def wave_hold_rows(items: list[dict], bodies: dict[int, str]) -> list[str]:
     """wave-holds: OPEN の wave だけを見る（閉じた wave・子が 0 件の新しい
     wave は対象にしない）。子の条件は満たしたが、出る条件のコマンドの
-    行が無い wave。"""
+    行が無い wave（「なし（人の判断）」の行を持つ wave は出さない）。"""
     items_by_number, children_of = _board_index(items)
     lines = []
     for i in items:
         if i.get('kind') != WAVE_KIND or i.get('state') != 'OPEN':
             continue
         met, has_line = wave_has_exited(i['number'], items_by_number, children_of, bodies)
+        if _HUMAN_JUDGMENT_LINE_RE.search(bodies.get(i['number'], '') or ''):
+            continue
         if met and not has_line:
             lines.append(
                 f"  出る条件のコマンドの行が無い: #{i['number']} {(i.get('title') or '')[:50]}"

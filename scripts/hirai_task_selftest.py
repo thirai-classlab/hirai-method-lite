@@ -4262,6 +4262,44 @@ def main() -> int:
             _wave_hold_rows_flags_missing_command_line,
         )
 
+        def _wave_with_human_judgment_line_is_not_held_nor_exited() -> None:
+            # 出る条件が人の判断で回す命令が無い wave（rmp-app の #796）。
+            human_line = '- 出る条件のコマンド: なし（人の判断）\n'
+            items = [
+                {
+                    'number': 330, 'kind': gh_task.WAVE_KIND, 'status': '', 'state': 'OPEN',
+                    'title': 'P1', 'parent_number': None,
+                },
+                {
+                    'number': 331, 'type': 'Issue', 'kind': 'task', 'status': gh_task.HOLD_STATUS,
+                    'state': 'OPEN', 'title': 't', 'parent_number': 330,
+                },
+                {
+                    'number': 332, 'kind': gh_task.WAVE_KIND, 'status': '', 'state': 'OPEN',
+                    'title': 'P2', 'parent_number': None,
+                },
+            ]
+            lines = gh_task.wave_hold_rows(items, {330: human_line})
+            assert lines == [], f'人の判断の行を持つ wave が wave-holds に出た: {lines}'
+            items_by_number, children_of = gh_task._board_index(items)
+            met, has_line = gh_task.wave_has_exited(330, items_by_number, children_of, {330: human_line})
+            assert met is True and has_line is False, (
+                f'人の判断の行を「出た」と数えた: met={met} has_line={has_line}'
+            )
+            extras = {332: {'blocked_by_open_numbers': [], 'blocked_by_numbers': [330]}}
+            assert gh_task.preceding_wave_unresolved(
+                332, items_by_number, children_of, {330: human_line}, extras,
+            ) is True, '人の判断の行を持つ先の wave が、後続を止めなくなった'
+            # 行が無い wave は、従来どおり wave-holds に出る。
+            assert any('#330' in line for line in gh_task.wave_hold_rows(items, {})), (
+                '行が無い wave が wave-holds に出なくなった'
+            )
+
+        t(
+            '人の判断の行を持つ wave は wave-holds に出ず、出たとも数えない',
+            _wave_with_human_judgment_line_is_not_held_nor_exited,
+        )
+
         def _wave_hold_rows_ignores_closed_and_empty_waves() -> None:
             items = [
                 {
