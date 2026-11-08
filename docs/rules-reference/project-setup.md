@@ -53,6 +53,7 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 ## 5. wave と feature の作り方
 
 - **wave**: 種別 wave の issue。Project の中での行の並び順が wave の並び（ボードで行を並べ替える）。終わりの無い仕事は常設の wave に置く
+  - **出る条件の行**: wave の本文に `- 出る条件のコマンド: exit 0（<日付>・<commit>）` を書くと「出た」になる（行が無く子の条件だけ満たした wave は `today` の wave-holds に出る）。出る条件が人の判断で回す命令が無い wave には `- 出る条件のコマンド: なし（人の判断）` と書く。wave-holds に出ず、「出た」とも数えない（後続の wave は止めたまま。人が判断したら行を `exit 0` に書き換える）
 - **feature**: 種別 feature の issue。wave の sub-issue にする（wave × 機能）
 - **task**: 種別 task の issue。feature の sub-issue にする。起票は `/hirai-lite:new-task`（`hirai-task new`）が種別と親を付けて Project に入れる
 - **期日**: Milestone は期日のある出す段だけに付ける

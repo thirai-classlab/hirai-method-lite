@@ -4262,6 +4262,95 @@ def main() -> int:
             _wave_hold_rows_flags_missing_command_line,
         )
 
+        def _merged_designs_follow_the_default_branch() -> None:
+            # 既定の branch が stg のとき、stg へ merge した設計 PR を拾う（rmp-app の #873）。
+            import contextlib
+            design = {
+                'number': 901, 'title': '設計', 'merged_at': '2999-01-01T00:00:00Z',
+                'body': f'<!-- {gh_task.DESIGN_PR_MARKER} -->\n本文',
+            }
+            calls: list[str] = []
+
+            def make_fake(default_branch_rc: int):
+                def fake(args, input_text=None):
+                    path = args[3] if len(args) > 3 and args[0] == 'api' else ''
+                    calls.append(path)
+                    if path == f'repos/{gh_task.REPO}':
+                        if default_branch_rc:
+                            return default_branch_rc, '', 'boom'
+                        return 0, json.dumps({'default_branch': 'stg'}), ''
+                    if '/pulls?' in path:
+                        # base を付けたときは、その branch へ merge した PR だけを返す。
+                        if 'base=main' in path:
+                            return 0, '[]', ''
+                        return 0, json.dumps([design]), ''
+                    return 1, '', f'unhandled: {path}'
+                return fake
+
+            orig = gh_task.run_gh
+            try:
+                gh_task.run_gh = make_fake(0)
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    rows, _ = gh_task.merged_design_rows('2000-01-01T00:00:00Z')
+                assert [r['number'] for r in rows] == [901], f'stg の設計 PR を拾えない: {rows}'
+                assert any('base=stg' in c for c in calls), f'base=stg で引いていない: {calls}'
+                assert sum(1 for c in calls if c == f'repos/{gh_task.REPO}') == 1, calls
+                # 引けなかったときは base を付けずに引き、1 行出す。
+                calls.clear()
+                gh_task.run_gh = make_fake(1)
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    rows, _ = gh_task.merged_design_rows('2000-01-01T00:00:00Z')
+                assert [r['number'] for r in rows] == [901], f'引けないときに PR を拾えない: {rows}'
+                assert not any('base=' in c for c in calls), f'base= を付けて引いた: {calls}'
+                assert len([ln for ln in buf.getvalue().splitlines() if ln.strip()]) == 1, buf.getvalue()
+            finally:
+                gh_task.run_gh = orig
+
+        t(
+            'default_branch が stg のとき、stg へ merge した設計 PR を拾う（引けなければ base を付けずに引いて 1 行出す）',
+            _merged_designs_follow_the_default_branch,
+        )
+
+        def _wave_with_human_judgment_line_is_not_held_nor_exited() -> None:
+            # 出る条件が人の判断で回す命令が無い wave（rmp-app の #796）。
+            human_line = '- 出る条件のコマンド: なし（人の判断）\n'
+            items = [
+                {
+                    'number': 330, 'kind': gh_task.WAVE_KIND, 'status': '', 'state': 'OPEN',
+                    'title': 'P1', 'parent_number': None,
+                },
+                {
+                    'number': 331, 'type': 'Issue', 'kind': 'task', 'status': gh_task.HOLD_STATUS,
+                    'state': 'OPEN', 'title': 't', 'parent_number': 330,
+                },
+                {
+                    'number': 332, 'kind': gh_task.WAVE_KIND, 'status': '', 'state': 'OPEN',
+                    'title': 'P2', 'parent_number': None,
+                },
+            ]
+            lines = gh_task.wave_hold_rows(items, {330: human_line})
+            assert lines == [], f'人の判断の行を持つ wave が wave-holds に出た: {lines}'
+            items_by_number, children_of = gh_task._board_index(items)
+            met, has_line = gh_task.wave_has_exited(330, items_by_number, children_of, {330: human_line})
+            assert met is True and has_line is False, (
+                f'人の判断の行を「出た」と数えた: met={met} has_line={has_line}'
+            )
+            extras = {332: {'blocked_by_open_numbers': [], 'blocked_by_numbers': [330]}}
+            assert gh_task.preceding_wave_unresolved(
+                332, items_by_number, children_of, {330: human_line}, extras,
+            ) is True, '人の判断の行を持つ先の wave が、後続を止めなくなった'
+            # 行が無い wave は、従来どおり wave-holds に出る。
+            assert any('#330' in line for line in gh_task.wave_hold_rows(items, {})), (
+                '行が無い wave が wave-holds に出なくなった'
+            )
+
+        t(
+            '人の判断の行を持つ wave は wave-holds に出ず、出たとも数えない',
+            _wave_with_human_judgment_line_is_not_held_nor_exited,
+        )
+
         def _wave_hold_rows_ignores_closed_and_empty_waves() -> None:
             items = [
                 {
