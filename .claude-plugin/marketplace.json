@@ -10,7 +10,11 @@
   "plugins": [
     {
       "name": "hirai-lite",
-      "source": { "source": "github", "repo": "thirai-classlab/hirai-method-lite", "ref": "main" },
+      "source": {
+        "source": "github",
+        "repo": "thirai-classlab/hirai-method-lite",
+        "ref": "main"
+      },
       "description": "常時ロードされるコンテキストに予算を置き、ルールの追加を 6 工程パイプラインで通す rules 3 層構造の軽量ハーネス。",
       "version": "1.16.0",
       "author": {
@@ -27,9 +31,13 @@
     },
     {
       "name": "hirai-lite-v2",
-      "source": { "source": "github", "repo": "thirai-classlab/hirai-method-lite", "ref": "v2" },
+      "source": {
+        "source": "github",
+        "repo": "thirai-classlab/hirai-method-lite",
+        "ref": "v2"
+      },
       "description": "rules 3 層とルール追加パイプラインを備えた軽量ハーネスの 2.x。台帳（docs/tasks/）に加えて、リポに紐づく GitHub Project でタスクを管理する形を持つ。",
-      "version": "2.2.1",
+      "version": "2.2.2",
       "author": {
         "name": "thirai-classlab"
       },
