@@ -2977,6 +2977,101 @@ def main() -> int:
 
         t('未承認の draft を読む（new --from-draft が断る。メッセージも見る）', _new_from_draft_requires_approval)
 
+        # ── new --from-table（設計の task の表から起票する） ──
+        def _table_draft(name: str, *, status: str = '承認', approvals: str = '要件=PR #9 設計=PR #9 task=PR #9') -> str:
+            text = (
+                '# 表の試験\n\n'
+                'id_prefix: TBL\nkind: ハーネス・進め方\ndomain: —\nstatus: ' + status + '\n'
+                'approvals: ' + approvals + '\napproved_at: 2026-10-01（PR #9 の merge で承認）\n\n'
+                '## 1. 問題\n\n## 10. 完了条件\n\n## 11. task\n\n### 11-1. 位置と前後\n\n### 11-3. 表\n\n'
+                '| id | kind | stream | 題名 | 親 | 止める依存 | 要件 | 完了条件 |\n|---|---|---|---|---|---|---|---|\n'
+                '| TBL-01 | task | Infra | 土台を書く | feature #900 | — | TBL-R1 | テストが通る |\n'
+                '| TBL-02 | task | Infra | 命名を決める [要判断: TBL-Q1] | feature #900 | — | TBL-R2 | — |\n'
+                '| TBL-03 | task | Infra | [操作] 本番へ出す | feature #900 | TBL-01, この draft の承認 | TBL-R1 | exit 0 |\n\n'
+                '## 12. 履歴\n'
+            )
+            return _draft_path(name, text)
+
+        def _from_table(path: str, *extra: str) -> tuple[int, str]:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = gh_task.cmd_new(['--from-table', path, *extra])
+            return rc, buf.getvalue()
+
+        def _from_table_dry_run_lists_rows() -> None:
+            rc, out = _from_table(_table_draft('tbl-ok.md'), '--dry-run')
+            assert rc == 0, f'exit {rc}\n{out}'
+            assert '起票する 2 件' in out, out
+            assert 'TBL-01' in out and 'TBL-03' in out, out
+            assert '親=#900' in out, f'親が出ていない: {out}'
+            assert '目印=[操作]' in out, f'目印が出ていない: {out}'
+            assert 'blocked by=TBL-01' in out, f'blocked by が出ていない: {out}'
+            assert '起票しない 1 件' in out and 'TBL-02' in out and '[要判断]' in out, f'飛ばした理由が出ていない: {out}'
+
+        t('new --from-table --dry-run: 表 3 行（[要判断] 1・blocked by 1）→ 起票 2 件と、飛ばした理由', _from_table_dry_run_lists_rows)
+
+        def _from_table_files_in_order_with_blockers() -> None:
+            calls: list[dict] = []
+            orig_new_issue, orig_existing = gh_task.new_issue, gh_task.existing_table_marks
+
+            def fake_new_issue(opts: dict) -> int:
+                calls.append(opts)
+                return 500 + len(calls)
+
+            gh_task.new_issue = fake_new_issue
+            gh_task.existing_table_marks = lambda slug: {}
+            try:
+                rc, out = _from_table(_table_draft('tbl-run.md'))
+            finally:
+                gh_task.new_issue, gh_task.existing_table_marks = orig_new_issue, orig_existing
+            assert rc == 0, f'exit {rc}\n{out}'
+            assert [c['title'] for c in calls] == ['土台を書く', '[操作] 本番へ出す'], [c['title'] for c in calls]
+            assert calls[0]['parent'] == 900 and calls[0].get('blocked_by') in (None, []), calls[0]
+            assert calls[1]['blocked_by'] == [501], f'blocked by が起票した番号になっていない: {calls[1]}'
+            assert calls[0]['body'].startswith('<!-- rmp-task: id=TBL-01 '), calls[0]['body']
+            assert 'src=tbl-run@PR9' in calls[0]['body'] and 'reqs=TBL-R1' in calls[0]['body'], calls[0]['body']
+
+        t('new --from-table: 起票は 2 件・blocked by は起票した番号・本文の先頭に目印', _from_table_files_in_order_with_blockers)
+
+        def _from_table_skips_existing_marks() -> None:
+            calls: list[dict] = []
+            orig_new_issue, orig_existing = gh_task.new_issue, gh_task.existing_table_marks
+            gh_task.new_issue = lambda opts: calls.append(opts) or 600 + len(calls)
+            gh_task.existing_table_marks = lambda slug: {'TBL-01': 321}
+            try:
+                rc, out = _from_table(_table_draft('tbl-dup.md'))
+            finally:
+                gh_task.new_issue, gh_task.existing_table_marks = orig_new_issue, orig_existing
+            assert rc == 0 and [c['title'] for c in calls] == ['[操作] 本番へ出す'], (rc, calls, out)
+            assert calls[0]['blocked_by'] == [321], f'既にある行の番号を blocked by に使っていない: {calls[0]}'
+            assert '#321' in out, out
+
+        t('new --from-table: 同じ slug と id の目印が既にある行は飛ばし、その番号を blocked by に使う', _from_table_skips_existing_marks)
+
+        def _from_table_refuses_unapproved_stage() -> None:
+            for label, path in (
+                ('status が起案', _table_draft('tbl-draft.md', status='起案')),
+                ('approvals に task の段が無い', _table_draft('tbl-nostage.md', approvals='要件=PR #9 設計=PR #9')),
+            ):
+                calls: list[dict] = []
+                orig_new_issue = gh_task.new_issue
+                gh_task.new_issue = lambda opts: calls.append(opts) or 1
+                try:
+                    rc, out = _from_table(path)
+                finally:
+                    gh_task.new_issue = orig_new_issue
+                assert rc == 2 and not calls, f'{label}: exit {rc}・起票 {len(calls)} 件\n{out}'
+                assert '起票 0 件' in out and 'task の段' in out and '「完了条件」「task」' in out, f'{label}: 理由が出ていない: {out}'
+
+        t('new --from-table: task の段が未承認なら 0 件で、段と節の名前つきの理由', _from_table_refuses_unapproved_stage)
+
+        def _from_table_refuses_old_form() -> None:
+            old = _draft_path('tbl-old.md', '# 旧\n\nstatus: 承認\napproved_at: 2026-09-01\n\n## 8. タスク分解\n')
+            rc, out = _from_table(old, '--dry-run')
+            assert rc == 2 and '新しい形' in out, f'exit {rc}\n{out}'
+
+        t('new --from-table: 新しい形（id_prefix: と 11-3 の表）でない draft は断る', _from_table_refuses_old_form)
+
         # ── draft_approved_at ──
         def _draft_approved_table_form() -> None:
             approved = gh_task.draft_approved_at(_draft_path('table.md', '# 設計\n\n| approved | 2026-09-04 |\n'))

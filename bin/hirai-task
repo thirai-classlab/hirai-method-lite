@@ -1952,7 +1952,14 @@ def _validate_parent(project_number: int, parent_number: int, kind: str) -> dict
 
 
 def cmd_new(argv: list[str]) -> int:
-    opts = _parse_new_args(argv)
+    if '--from-table' in argv:
+        return cmd_new_from_table(argv)
+    new_issue(_parse_new_args(argv))
+    return 0
+
+
+def new_issue(opts: dict) -> int:
+    """issue を 1 つ起こして Projects に載せ、その番号を返す（`new` と `new --from-table` の共通の経路）。"""
     kind = opts.get('kind') or TASK_KIND
     # 値と親を、issue を作る前に確かめる（途中で止まると半端な issue が残るため。
     # ここまでは REST の POST を 1 つも呼ばない）。
@@ -2057,11 +2064,263 @@ def cmd_new(argv: list[str]) -> int:
             )
         except GhError as exc:
             print(f'  着手できるかを確かめられなかった: {exc}')
-            return 0
+            return number
         if reason:
             print(f'  いまは着手できない: {reason}')
         else:
             print(f'  親 #{parent_number} は着手可。`hirai-task start {number}` で着手できる')
+    return number
+
+
+# ── new --from-table（設計の task の表から起票する） ───────────────────
+# 表は提案（新しい形）の「## 11. task」の「### 11-3. 表」。列の意味は rmp-app の
+# docs/harness/doc-formats.md §7 の 5 と design-structure §4（DS-05）に従う。
+TABLE_HEADING = '### 11-3. 表'
+TABLE_MARK = 'rmp-task'
+UNDECIDED_MARK = '[要判断'
+# 節の名前 → 承認の段（design-structure §2 の DS-R7）。表を持つ節の名前で、どの段の承認を見るかを決める。
+STAGE_SECTIONS = {
+    '要件': ('問題', '目指す状態'),
+    '設計': ('変える上の層の現在形', '先行例', '案', '採用', '範囲', 'リスク', '出し方と戻し方'),
+    'task': ('完了条件', 'task'),
+}
+_STAGE_KEYS = ('要件', '設計', 'task')
+_APPROVAL_STATUS = '承認'
+_BLOCKER_SATISFIED_BY_APPROVAL = 'この draft の承認'
+_TABLE_ID_RE = re.compile(r'^[A-Z][A-Z0-9]*(?:-[A-Za-z0-9.]+)+$')
+_TABLE_NUMBER_RE = re.compile(r'#(\d+)')
+_TABLE_PR_RE = re.compile(r'PR\s*#(\d+)')
+_TABLE_SECTION_RE = re.compile(r'^##\s+(?:\d+\.\s*)?(.+?)\s*(?:（.*）)?\s*$')
+_TABLE_FROM_ARGS = '使い方: hirai-task new --from-table <draft の path> [--dry-run]'
+
+
+def parse_table_args(argv: list[str]) -> dict:
+    opts: dict = {'dry_run': False}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == '--from-table':
+            i += 1
+            if i >= len(argv):
+                die(_TABLE_FROM_ARGS, 2)
+            opts['path'] = argv[i]
+        elif a == '--dry-run':
+            opts['dry_run'] = True
+        else:
+            die(f'未知の引数: {a}\n{_TABLE_FROM_ARGS}', 2)
+        i += 1
+    if not opts.get('path'):
+        die(_TABLE_FROM_ARGS, 2)
+    return opts
+
+
+def _draft_header(lines: list[str]) -> dict[str, str]:
+    """H1 のあと最初の `## ` までの `項目: 値` の行。"""
+    header: dict[str, str] = {}
+    for line in lines:
+        if line.startswith('## '):
+            break
+        match = re.match(r'^([a-z_]+):\s*(.*?)\s*$', line)
+        if match:
+            header[match.group(1)] = match.group(2)
+    return header
+
+
+def _table_section_and_rows(lines: list[str]) -> tuple[str, list[dict[str, str]]] | None:
+    """「### 11-3. 表」を持つ節の名前と、表の行（列名 → 値）。表が無ければ None。"""
+    section = ''
+    in_fence = False
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith(('```', '~~~')):
+            in_fence = not in_fence
+        if in_fence:
+            continue
+        found = _TABLE_SECTION_RE.match(line) if line.startswith('## ') else None
+        if found:
+            section = found.group(1)
+        if line.strip() != TABLE_HEADING:
+            continue
+        rows: list[list[str]] = []
+        for row in lines[index + 1:]:
+            stripped = row.strip()
+            if stripped.startswith('|'):
+                rows.append([c.strip() for c in stripped.strip('|').split('|')])
+            elif rows:
+                break
+        if len(rows) < 2:
+            return None
+        head = rows[0]
+        return section, [dict(zip(head, r)) for r in rows[2:] if len(r) == len(head)]
+    return None
+
+
+def _stage_of(section: str) -> str | None:
+    return next((stage for stage, names in STAGE_SECTIONS.items() if section in names), None)
+
+
+def _stage_approval(header: dict[str, str], stage: str) -> tuple[bool, str]:
+    """段の承認を (承認されているか, 出どころ or 理由) で返す。
+    status が「承認」で approved_at が日付か PR で始まり、approvals に段の指定が無ければ（既定）全段が承認。
+    approvals に段の指定があるときは、その段の `<段>=PR #n` が要る。"""
+    names = '・'.join(STAGE_SECTIONS[stage])
+    if not header.get('status', '').startswith(_APPROVAL_STATUS):
+        return False, f'status が「{header.get("status") or "空"}」（承認ではない）'
+    approved_at = header.get('approved_at', '')
+    if not (re.match(r'^\d{4}-\d{2}-\d{2}', approved_at) or approved_at.startswith('PR')):
+        return False, f'approved_at が空か、承認の書き方でない（{approved_at or "空"}）'
+    approvals = header.get('approvals', '')
+    staged = [k for k in _STAGE_KEYS if k + '=' in approvals]
+    if not staged:
+        pr = _TABLE_PR_RE.search(approved_at)
+        return True, f'PR #{pr.group(1)}' if pr else approved_at
+    match = re.search(rf'{stage}=(PR\s*#\d+)', approvals)
+    if not match:
+        return False, f'approvals に {stage} の段の承認（{stage}=PR #n）が無い（「{names}」の節の段）'
+    return True, match.group(1)
+
+
+def _resolve_table_ref(cell: str, known: dict[str, str], prefixes: tuple[str, ...] = ()) -> tuple[str, str]:
+    """セルを `#番号` か、起票する（または既にある）行の id へ解く。(参照, 解けない理由)。"""
+    text = cell.strip()
+    for prefix in prefixes:
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+            break
+    number = _TABLE_NUMBER_RE.fullmatch(text)
+    if number:
+        return f'#{number.group(1)}', ''
+    if _TABLE_ID_RE.match(text):
+        if text in known:
+            return known[text], ''
+        return '', f'{text} はこの表で先に起票される行にない（起票しない行か、表の後ろの行か、表に無い）'
+    return '', f'「{text}」は `#番号` でも表の id でもない'
+
+
+def plan_table_rows(rows: list[dict[str, str]], existing: dict[str, int]) -> tuple[list[dict], list[tuple[str, str]]]:
+    """表の行を (起票する行, 起票しない行と理由) に分ける。親と blocked by は、表の id か `#番号` で解く。
+    起票しない行を指す行は、その行も起票しない。existing は既にある行の id → issue 番号。"""
+    fileable: list[dict] = []
+    skipped: list[tuple[str, str]] = []
+    known: dict[str, str] = {k: f'#{v}' for k, v in existing.items()}  # id → '#番号'（既にある）か id（起票する）
+    for row in rows:
+        row_id, kind, title = row.get('id', ''), row.get('kind', ''), row.get('題名', '')
+        if row_id in existing:
+            skipped.append((row_id, f'すでに起票済み（#{existing[row_id]}）'))
+            continue
+        if UNDECIDED_MARK in ' '.join(row.values()):
+            skipped.append((row_id, f'{UNDECIDED_MARK}] の行は起票しない（裁定のあと表を直す）'))
+            continue
+        if kind not in ('feature', 'task'):
+            skipped.append((row_id, f'kind「{kind}」は表から起票しない（feature と task だけ）'))
+            continue
+        parent, why = _resolve_table_ref(row.get('親', ''), known, ('wave', 'feature'))
+        if why or not parent:
+            skipped.append((row_id, f'親を解けない: {why or "親の列が空"}'))
+            continue
+        blockers: list[str] = []
+        unresolved = ''
+        for token in re.split(r'[,、]', row.get('止める依存', '')):
+            token = token.strip()
+            if token in ('', '—', '-') or token.startswith(_BLOCKER_SATISFIED_BY_APPROVAL):
+                continue
+            ref, why = _resolve_table_ref(token, known)
+            if why:
+                unresolved = why
+                break
+            blockers.append(ref)
+        if unresolved:
+            skipped.append((row_id, f'止める依存を解けない: {unresolved}'))
+            continue
+        fileable.append({
+            'id': row_id, 'kind': kind, 'title': title, 'stream': row.get('stream', ''),
+            'parent': parent, 'blockers': blockers, 'reqs': row.get('要件', ''),
+            'done': row.get('完了条件', ''),
+            'marks': [m for m in MARKS if has_mark(title, m)],
+        })
+        known[row_id] = row_id
+    return fileable, skipped
+
+
+def table_issue_body(row: dict, slug: str, src_pr: str, domain: str) -> str:
+    fields = [f'id={row["id"]}', 'rev=1', f'stream={row["stream"]}', f'src={slug}@{src_pr}' if src_pr else f'src={slug}']
+    if domain and domain != '—':
+        fields.append(f'domain={domain}')
+    reqs = ','.join(r.strip() for r in re.split(r'[,、]', row['reqs']) if r.strip() and r.strip() != '—')
+    if reqs:
+        fields.append(f'reqs={reqs}')
+    done = row['done'] if row['done'] not in ('', '—') else '（設計の表に完了条件なし）'
+    return (
+        f'<!-- {TABLE_MARK}: {" ".join(fields)} -->\n\n'
+        f'## 完了条件\n{done}\n\n'
+        f'## 出どころ\n設計 `{slug}` の「11-3. 表」の {row["id"]}。手順は設計の該当節に従う。\n'
+    )
+
+
+def existing_table_marks(slug: str) -> dict[str, int]:
+    """Projects の issue の本文の先頭の目印（`rmp-task: id=… src=<slug>@…`）から、既にある行の id → 番号。"""
+    project_number = discover_project_number()
+    numbers = [i['number'] for i in fetch_all_items(project_number) if i.get('type') == 'Issue']
+    pattern = re.compile(rf'^\s*<!--\s*{TABLE_MARK}:\s*id=(\S+)\s[^>]*?src={re.escape(slug)}@')
+    found: dict[str, int] = {}
+    for number, body in fetch_bodies(numbers).items():
+        match = pattern.match(body)
+        if match:
+            found[match.group(1)] = number
+    return found
+
+
+def cmd_new_from_table(argv: list[str]) -> int:
+    opts = parse_table_args(argv)
+    path = opts['path']
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().splitlines()
+    except OSError as exc:
+        die(f'{path} を読めなかった: {exc}', 2)
+    header = _draft_header(lines)
+    table = _table_section_and_rows(lines)
+    slug = os.path.splitext(os.path.basename(path))[0]
+    if 'id_prefix' not in header or table is None or slug == 'design-structure':
+        print(f'起票 0 件: {path} は新しい形の提案（先頭に id_prefix: があり、「{TABLE_HEADING}」を持つ。design-structure.md は対象外）でない')
+        return 2
+    section, rows = table
+    stage = _stage_of(section)
+    if stage is None:
+        print(f'起票 0 件: 表を持つ節「{section}」がどの段（要件・設計・task）にも当たらない')
+        return 2
+    approved, detail = _stage_approval(header, stage)
+    if not approved:
+        names = '」「'.join(STAGE_SECTIONS[stage])
+        print(f'起票 0 件: {stage} の段（「{names}」）が承認されていない: {detail}')
+        return 2
+    pr = _TABLE_PR_RE.search(detail)
+    src_pr = f'PR{pr.group(1)}' if pr else ''
+    existing = {} if opts['dry_run'] else existing_table_marks(slug)
+    fileable, skipped = plan_table_rows(rows, existing)
+
+    print(f'draft: {path}（slug: {slug}・{stage}の段: 承認 {detail}）')
+    print(f'起票する {len(fileable)} 件:')
+    for r in fileable:
+        blockers = ','.join(r['blockers']) or '—'
+        print(f'  {r["id"]} / {r["kind"]} / 親={r["parent"]} / blocked by={blockers} / 目印={"".join(r["marks"]) or "—"} / {r["title"]}')
+    print(f'起票しない {len(skipped)} 件:')
+    for row_id, reason in skipped:
+        print(f'  {row_id}: {reason}')
+    if opts['dry_run']:
+        print('（--dry-run: issue は作っていない）')
+        return 0
+
+    created: dict[str, int] = dict(existing)
+
+    def number_of(ref: str) -> int:
+        return int(ref[1:]) if ref.startswith('#') else created[ref]
+
+    for r in fileable:
+        created[r['id']] = new_issue({
+            'title': r['title'], 'kind': r['kind'], 'parent': number_of(r['parent']),
+            'blocked_by': [number_of(b) for b in r['blockers']],
+            'body': table_issue_body(r, slug, src_pr, header.get('domain', '')),
+        })
     return 0
 
 
@@ -2069,7 +2328,8 @@ def _parse_new_args(argv: list[str]) -> dict:
     if not argv:
         die('使い方: hirai-task new <title> --parent N [--kind task|feature|wave|設計メモ] '
             '[--body テキスト] [--body-file パス] [--blocked-by N,N,...] '
-            '[--label-bug] [--from-draft パス] [--milestone N]', 2)
+            '[--label-bug] [--from-draft パス] [--milestone N]\n'
+            '       hirai-task new --from-table <draft の path> [--dry-run]', 2)
     opts: dict = {'title': argv[0]}
     rest_args = argv[1:]
     i = 0
@@ -2887,6 +3147,7 @@ def main(argv: list[str]) -> int:
     usage = (
         'hirai-task ready|pending|blocked|show <issue>\n'
         '           new <title> --parent N [--kind ...] ...\n'
+        '           new --from-table <draft の path> [--dry-run]\n'
         '           add <issue> | approve <issue> | start <issue> [--approved <出どころ>]\n'
         '           review <issue> | done <issue> [--not-planned <理由>] | reopen <issue> <status>\n'
         '           set <issue> <field> <value> | sync\n'
