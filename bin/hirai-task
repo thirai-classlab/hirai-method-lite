@@ -148,7 +148,7 @@ memos / today / after-merge）:
       ・wave-holds: OPEN の wave だけを見る。子孫が 1 件以上あり、子の条件は満たしたが、
         本文に「出る条件のコマンド」の行が無い wave（子孫 0 件の新しい wave は
         「満たした」に数えない。「- 出る条件のコマンド: なし（人の判断）」の行を持つ wave は出さない）
-      ・merged-designs: main へ merge された、本文に DESIGN_PR_MARKER の印がある PR のうち、
+      ・merged-designs: 既定の branch（`GET repos/{REPO}` の default_branch）へ merge された、本文に DESIGN_PR_MARKER の印がある PR のうち、
         gh-merged-designs-since.json の since 以降のもの（簡易版。「起票済みか」までは
         判定しない。診断のための一覧であり、判断は人が行う）
       ・user-actions: open の `[User]` の task を番号で出す（ready・align から
@@ -2537,7 +2537,7 @@ def _save_since_cache(path: str, namespace: str, value: str) -> None:
 
 
 def merged_design_rows(since: str | None) -> tuple[list[dict], str]:
-    """merged-designs: main へ merge された、本文に DESIGN_PR_MARKER の印が
+    """merged-designs: 既定の branch へ merge された、本文に DESIGN_PR_MARKER の印が
     ある PR のうち since 以降のもの。簡易版（直近の closed PR 100 件までを見る。
     「起票済みか」までは判定しない。診断のための一覧で、判断は人が行う）。"""
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -2545,7 +2545,15 @@ def merged_design_rows(since: str | None) -> tuple[list[dict], str]:
         now - datetime.timedelta(days=_MERGED_DESIGNS_LOOKBACK_DAYS)
     ).strftime('%Y-%m-%dT%H:%M:%SZ')
     rows = []
-    prs = rest('GET', f'repos/{REPO}/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100')
+    # 既定の branch を 1 回だけ引いて base に使う。引けなければ base を付けずに引く。
+    repo_info = rest('GET', f'repos/{REPO}', ok_fail=True)
+    default_branch = repo_info.get('default_branch') if isinstance(repo_info, dict) else None
+    if default_branch:
+        base_query = f'&base={default_branch}'
+    else:
+        base_query = ''
+        print('merged-designs: 既定の branch を引けなかったので、base を絞らずに引いた')
+    prs = rest('GET', f'repos/{REPO}/pulls?state=closed{base_query}&sort=updated&direction=desc&per_page=100')
     for pr in (prs if isinstance(prs, list) else []):
         merged_at = pr.get('merged_at')
         if not merged_at or merged_at < query_since:
