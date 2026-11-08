@@ -4,6 +4,16 @@
 
 更新のしかたは [README の「更新する」](README.md#更新する既定では自動で新しくなりません)。**既定では自動更新しない**（v1.13.0 から opt-in で自動にできる）。
 
+## v2.3.0
+設計の task の表から issue を起こせるようになり、設計の雛形を新しい 12 節の形に書き直した（rmp-app の design-structure の DS-04・DS-05。#814・#815）。
+
+- `hirai-task new --from-table <draft> [--dry-run]`（新規）: 提案（新しい形。先頭に `id_prefix:`）の「### 11-3. 表」を読み、行ごとに `new` と同じ経路で feature・task を起こす。本文の先頭に `rmp-task` の目印（id・rev・stream・src・domain・reqs）を書く。題の `[操作]`・`[User]` はそのまま残る。`[要判断]` の行、親や止める依存を解けない行は起票せず理由を出す。止める依存は表の id か `#番号`。同じ slug と id の目印がある行は飛ばす。
+- 段の承認は節の名前で見る（要件 =「問題」「目指す状態」、設計 =「変える上の層の現在形」〜「出し方と戻し方」、task =「完了条件」「task」）。`status` が承認で、`approvals:` に task の段があるとき（無ければ既定で全段）だけ起票し、未承認は 0 件で理由を出して exit 2。`design-structure.md` と旧い形の draft は対象外。`--dry-run` は題・親・blocked by・目印を表で出すだけで GitHub を引かない。
+- `templates/draft.md`: 12 節（問題・目指す状態・変える上の層の現在形・先行例・案・採用・範囲・リスク・出し方と戻し方・完了条件・task・履歴）と先頭 13 項目に書き直した。「問題」に判断材料 5 項目、「task」に 11-1・11-2・11-3。
+- `commands/new-draft.md`: 雛形を持たず `templates/draft.md` を読む。層（0〜4）と領域を聞いて design-structure §4-3・4-4 の節を読む。読む束に `docs/harness/doc-formats.md` を足した。
+- **導入先で要る操作。** rmp-app の `scripts/gh-task.sh` の `new` に `--from-table` を `hirai-task new` へ通す行を足す（メインの作業）。プラグインを上げ、新しい会話を開く（`/hirai-lite:update`）。`templates/draft.md` は update で既存の draft を書き換えない。
+- **selftest。** `new --from-table` の 5 case（dry-run で起票 2・飛ばした理由、blocked by が起票した番号になること、既存の目印の行を飛ばすこと、段が未承認なら 0 件、新しい形でない draft を断ること）。
+
 ## v2.2.2
 
 `today` の wave-holds が、出る条件が人の判断の wave を毎日出さなくなり、merged-designs が既定の branch へ merge した設計 PR を拾うようになった（rmp-app の #796・#873）。
