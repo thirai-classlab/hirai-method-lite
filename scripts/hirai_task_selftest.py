@@ -3518,6 +3518,27 @@ def main() -> int:
 
         t('ready: 偽の gh は問い合わせに body があるときだけ body を返し、ready は body を問い合わせる', _ready_fake_returns_body_only_when_queried)
 
+        # -- 進行中の task をもう一度 start したとき（#829・裁定 4） --
+        def _start_in_progress_notes_other_conversation() -> None:
+            hint = '別の会話が進行中の可能性。続きなら show 750 で読む束を出す'
+            for status, expect_hint in ((gh_task.IN_PROGRESS_STATUS, True), (gh_task.REVIEW_STATUS, False),
+                                        (gh_task.DEP_STATUS, False), ('', False)):
+                record: list = []
+                gh_task.run_gh = make_write_gh(
+                    {750: dict(title='task', status=status, kind='task', body=_mark('TBL-01', 'tbl@PR9'))}, record=record)
+                message = ''
+                with redirect_stdout(io.StringIO()) as buf:
+                    try:
+                        gh_task.cmd_start(750, None)
+                    except gh_task.GhError as exc:
+                        assert exc.code == 2, exc.code
+                        message = str(exc)
+                assert '着手可でも' in message, (status, message)  # 今までの断りの文は残す
+                assert (hint in message) == expect_hint, (status, message)
+                assert record == [] and buf.getvalue() == '', (status, record, buf.getvalue())
+
+        t('start: 進行中の task は exit 2 で断り、「別の会話が進行中の可能性。続きなら show <n> で読む束を出す」を添える', _start_in_progress_notes_other_conversation)
+
         # -- coverage（#816・DS-R2.3） --
         def _cov_draft(status: str, rows: str, *, history: str = '- 2026-10-01 PR #9 の merge で承認', heading: str = '### 11-3. 表',
                        pr: int = 9, header_row: str | None = None, approvals: str | None = None) -> str:

@@ -105,7 +105,8 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
     （見るのは自分の未完了の blocked by だけ。2.1.0 のまま。ただし未完了の blocker がすべて同じ親 feature の
     子で Status が進行中・レビュー中なら通す。依存待ちの task もこの場合は進められる。前の task が承認待ち・
     着手可・依存待ち、または別の feature の blocker は完了まで止める。branch の commit は見ない。2.5.0・#829）。承認待ちの task は、この判定を
-    通るときだけ進行中へ進める（目印つきは start --approved を案内）。ほかの Status は exit 2。
+    通るときだけ進行中へ進める（目印つきは start --approved を案内）。ほかの Status は exit 2
+    （進行中の task には「別の会話が進行中の可能性。続きなら show <n> で読む束を出す」を添える。#829）。
     目印の rev の差に加え、読む束の検出（DS-R8.2・#829）でも Status を書く前に exit 2 で「着手不可: …」と断る:
     reads= がある issue は束の各 path の file に `[要判断: …]` の印がある／先頭の status が失効・取り込み済み。
     reads= が無い issue は目印の src= の提案（docs/draft/<slug>.md）の status が失効・取り込み済みのときだけ。
@@ -1735,10 +1736,14 @@ def cmd_start(number: int, approved: str | None) -> int:
         if reason:
             die(f'#{number} は承認待ちのまま start では進めない: {reason}', 2)
     elif status != READY_STATUS and not (status == DEP_STATUS and waived):
+        in_progress_hint = (
+            f'。別の会話が進行中の可能性。続きなら show {number} で読む束を出す'
+            if status == IN_PROGRESS_STATUS else ''
+        )
         die(
             f'#{number} の Status は「{status or "空"}」で、着手可でも、承認待ち（目印なし・'
             f'親の feature が着手可）でもない（{OPERATION_MARK} の task はチャットの承認のあと'
-            ' start --approved <出どころ> を使う）', 2,
+            f' start --approved <出どころ> を使う）{in_progress_hint}', 2,
         )
     write_single_select_rest(project_number, number, 'Status', IN_PROGRESS_STATUS)
     print(f'#{number} Status={IN_PROGRESS_STATUS}')
