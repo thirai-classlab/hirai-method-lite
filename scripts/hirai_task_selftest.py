@@ -3298,6 +3298,7 @@ def main() -> int:
         CHAT_BOUNDARY = 'docs/4-domains/chat/README.md#3-境界'
         L2_OPS = 'docs/2-architecture/ops.md#ログと監査'
         L2_SEC = 'docs/2-architecture/security.md#多テナントの分離'
+        GLOSSARY = 'docs/1-requirements/glossary.md#募集提案マッチ相談する'
 
         def _build(reqs: str, domain: str = 'chat', files: dict[str, str] | None = None) -> list[str]:
             root = _ds_tree(BUNDLE_FILES if files is None else files)
@@ -3311,17 +3312,18 @@ def main() -> int:
                 L2_OPS, L2_SEC,
                 'docs/1-requirements/features.md:5',
                 'docs/1-requirements/use-cases/UC-06-consult.md',
+                GLOSSARY,
             ], reads
             assert len(reads) == len(set(reads)), reads  # 再掲のリンクは 1 件
 
-        t('reads: 束の 5 段の順（要件の節 → 部品 → 層 2 → FR と UC）で、同じ path は 1 件', _bundle_five_stage_order_without_duplicates)
+        t('reads: 束の 5 段の順（要件の節 → 部品 → 層 2 → FR と UC → 用語集）で、同じ path は 1 件', _bundle_five_stage_order_without_duplicates)
 
         def _bundle_layer2_only_sectioned_links() -> None:
             reads = _build('CHAT-R2')
             assert [r for r in reads if r.startswith('docs/2-architecture/')] == [L2_OPS, L2_SEC], reads
-            assert not any(r.endswith('/data.md') or r.startswith('docs/1-requirements/glossary') for r in reads), reads
+            assert not any(r.endswith('/data.md') for r in reads), reads
 
-        t('reads: 層 2 は README の節付きリンクだけ（file だけのリンク・用語集のリンクは入れない）', _bundle_layer2_only_sectioned_links)
+        t('reads: 層 2 は README の節付きリンクだけ（file だけのリンクは入れない）', _bundle_layer2_only_sectioned_links)
 
         def _bundle_parts_narrowed_by_id_prefix() -> None:
             parts = lambda reads: [r for r in reads if r.startswith('docs/3-shared/')]
@@ -3422,7 +3424,7 @@ def main() -> int:
             root = _ds_tree(BUNDLE_FILES)
             body = _with_root(root, lambda: gh_task.table_issue_body(row, 'tbl', 'PR9', 'chat'))
             mark = gh_task.parse_task_mark(body)
-            assert mark['reads'].split(',')[0] == CHAT_R1 and len(mark['reads'].split(',')) == 8, mark
+            assert mark['reads'].split(',')[0] == CHAT_R1 and len(mark['reads'].split(',')) == 9, mark
             assert mark['reqs'] == 'CHAT-R1' and mark['domain'] == 'chat', mark
             # 束が空のとき（domain —・FR も無い）は reads= を書かない
             bare = _with_root(root, lambda: gh_task.table_issue_body(dict(row, reqs='TBL-R1'), 'tbl', 'PR9', '—'))
@@ -3436,7 +3438,7 @@ def main() -> int:
             path = _draft_path('tbl-bundle2.md', draft)
             root = _ds_tree(BUNDLE_FILES)
             rc, out = _with_root(root, lambda: _from_table(path, '--dry-run'))
-            assert rc == 0 and '読む束=8 件' in out, out
+            assert rc == 0 and '読む束=9 件' in out, out
 
         t('new --from-table --dry-run: 行ごとに読む束の件数を出す', _dry_run_prints_bundle_size)
 
@@ -3457,6 +3459,131 @@ def main() -> int:
             assert rc == 0 and '警告' not in out, out
 
         t('new --from-table: reqs の ID が README の要件に無いとき「要件の節が見つからない」と警告する', _warns_when_requirement_is_only_in_the_proposal)
+
+        # -- 提案側の要件 ID と用語集（#1617 の裁定 2 点。偽の提案は docs/draft/doc-formats.md・agent-favorites.md の形を写す） --
+        FAV_HEADING_PROPOSAL = (
+            '# 営業のお気に入り\n\nid_prefix: FAV\nkind: 製品の機能\ndomain: chat\nstatus: 承認\n\n'
+            '## 1. 問題\n\n## 2. 目指す状態\n\n### 追加された要件\n\n'
+            '### 要件 FAV-R1: 入居者が印を置いたとき、システムは印を保存する\n\n'
+            '- FAV-R1.1 Given 認証 When 置く Then 保存する（FR-CHT-001・UC-06・JOB-30）\n\n'
+            '### 要件 FAV-R2: 入居者が一覧を開いたとき、システムは印の付いた営業だけを返す\n\n'
+            '- FAV-R2.1 Given 印 When 開く Then 返す（FR-CHT-002）\n\n'
+            '### 変更された要件\n\n'
+            '### 要件 CHAT-R2: 一覧は印の付いた営業を先頭に出す（JOB-99）\n\n'
+            '### 削除された要件\n\nなし。\n\n## 3. 変える上の層の現在形\n\n### 要件 FAV-R9: 節の外の見出し\n'
+        )
+        FAV_TABLE_PROPOSAL = (
+            '# 営業のお気に入り\n\nid_prefix: FAV\nkind: 製品の機能\ndomain: chat\nstatus: 承認\n\n'
+            '## 1. 問題\n\n## 2. 目指す状態\n\n### 追加された要件\n\n| ID | 〜のとき、システムは〜する | 確かめ |\n|---|---|---|\n'
+            '| FAV-R1 | 印を置いたとき、保存する（FR-CHT-001・UC-06） | JOB-30 の単体 |\n'
+            '| FAV-R2 | 一覧を開いたとき、印の付いた営業だけを返す | 単体 |\n\n'
+            '### 削除された要件\n\nなし。\n\n## 3. 変える上の層の現在形\n'
+        )
+        FAV_REL = 'docs/draft/fav.md'
+
+        def _build_fav(reqs: str, proposal: str, domain: str = 'chat') -> list[str]:
+            root = _ds_tree({**BUNDLE_FILES, FAV_REL: proposal})
+            return gh_task.build_reads(reqs, domain, root, slug='fav')
+
+        def _notes_fav(reqs: str, proposal: str | None, domain: str = 'chat') -> list[str]:
+            root = _ds_tree({**BUNDLE_FILES, **({FAV_REL: proposal} if proposal is not None else {})})
+            return _with_root(root, lambda: gh_task._unresolved_notes(reqs, domain, 'fav'))
+
+        def _proposal_requirement_section_heads_the_bundle() -> None:
+            reads = _build_fav('FAV-R1', FAV_HEADING_PROPOSAL)
+            assert reads[0] == 'docs/draft/fav.md#要件-fav-r1', reads
+            assert reads[1:3] == [CHAT_CONCEPT, CHAT_BOUNDARY], reads  # README の概念と規則・境界はそのあと
+            assert not any('#要件-chat' in r for r in reads), reads
+            root = _ds_tree({**BUNDLE_FILES, FAV_REL: FAV_HEADING_PROPOSAL})
+            # 束の anchor は start 側（_read_scope_span）で提案の節に当たり、見出しなしで止まらない
+            assert gh_task.bundle_stops({'reqs': 'FAV-R1', 'reads': ','.join(reads), 'src': 'fav@PR9'}, root) == []
+
+        t('reads: reqs が提案の要件 ID のとき、提案の「目指す状態」の要件の節が (1) の先頭に入る', _proposal_requirement_section_heads_the_bundle)
+
+        def _proposal_body_narrows_parts_and_feeds_layer1() -> None:
+            parts = lambda reads: [r for r in reads if r.startswith('docs/3-shared/')]
+            reads = _build_fav('FAV-R1', FAV_HEADING_PROPOSAL)
+            assert parts(reads) == ['docs/3-shared/jobs-and-files.md'], reads  # 受入の JOB-30（README の要件には無い）
+            assert 'docs/1-requirements/features.md:5' in reads and 'docs/1-requirements/use-cases/UC-06-consult.md' in reads, reads
+            # 別の要件の節の ID（R2 の FR-CHT-002）は混ざらない。層 3 の ID が無ければ表の全行
+            r2 = _build_fav('FAV-R2', FAV_HEADING_PROPOSAL)
+            assert len(parts(r2)) == 3 and 'docs/1-requirements/features.md:6' in r2 and 'docs/1-requirements/features.md:5' not in r2, r2
+
+        t('reads: 提案の要件の節の本文と受入で部品を絞り、FR・UC を (4) に入れる', _proposal_body_narrows_parts_and_feeds_layer1)
+
+        def _mixed_readme_and_proposal_ids() -> None:
+            reads = _build_fav('FAV-R1,CHAT-R1', FAV_HEADING_PROPOSAL)
+            assert reads[:2] == ['docs/draft/fav.md#要件-fav-r1', CHAT_R1], reads  # 提案の節が先頭・README の ID は README から
+            # 変更された要件（README の ID でもある CHAT-R2）は README の節を使い、提案の節は入れない
+            changed = _build_fav('CHAT-R2', FAV_HEADING_PROPOSAL)
+            assert changed[0] == 'docs/4-domains/chat/README.md#要件-chat-r2' and not any(r.startswith('docs/draft/') for r in changed), changed
+            # 節の外（3 節）の見出しは提案の要件に数えない
+            assert _build_fav('FAV-R9', FAV_HEADING_PROPOSAL)[0] != 'docs/draft/fav.md#要件-fav-r9'
+
+        t('reads: README の ID と提案の ID が混ざる reqs（README の ID は README から・提案の節は目指す状態の中だけ）', _mixed_readme_and_proposal_ids)
+
+        def _table_form_proposal_takes_whole_section_and_warns() -> None:
+            reads = _build_fav('FAV-R1', FAV_TABLE_PROPOSAL)
+            assert reads[0] == 'docs/draft/fav.md#2-目指す状態', reads
+            assert [r for r in reads if r.startswith('docs/3-shared/')] == ['docs/3-shared/jobs-and-files.md'], reads  # 表の FAV-R1 の行の JOB-30
+            assert 'docs/1-requirements/features.md:5' in reads and 'docs/1-requirements/features.md:6' not in reads, reads
+            root = _ds_tree({**BUNDLE_FILES, FAV_REL: FAV_TABLE_PROPOSAL})
+            assert gh_task.bundle_stops({'reqs': 'FAV-R1', 'reads': ','.join(reads)}, root) == []
+            notes = _notes_fav('FAV-R1', FAV_TABLE_PROPOSAL)
+            assert len(notes) == 1 and notes[0].startswith('提案の要件が見出しで見つからない: FAV-R1'), notes
+
+        t('reads: 提案の要件が表の形（### 要件 の見出しが無い）なら節全体を入れ、「提案の要件が見出しで見つからない」と警告する', _table_form_proposal_takes_whole_section_and_warns)
+
+        def _missing_warning_only_when_neither_has_it() -> None:
+            assert _notes_fav('FAV-R1', FAV_HEADING_PROPOSAL) == []
+            assert _notes_fav('CHAT-R1', FAV_HEADING_PROPOSAL) == []
+            assert _notes_fav('FAV-R1,CHAT-R1', FAV_HEADING_PROPOSAL) == []
+            missing = _notes_fav('FAV-R1,FAV-R7', FAV_HEADING_PROPOSAL)
+            assert len(missing) == 1 and missing[0].startswith('要件の節が見つからない: FAV-R7') and 'FAV-R1' not in missing[0], missing
+            assert _notes_fav('FAV-R1', None)[0].startswith('要件の節が見つからない: FAV-R1')  # 提案の file が無い
+            assert _notes_fav('FAV-R1', FAV_TABLE_PROPOSAL.replace('FAV-R1', 'FAV-R0'))[0].startswith('要件の節が見つからない: FAV-R1')
+
+        t('reads: 「要件の節が見つからない」は README にも提案にも無いときだけ出す', _missing_warning_only_when_neither_has_it)
+
+        def _glossary_sectioned_links_enter_stage5() -> None:
+            readme = BUNDLE_README.replace('## 5. 非機能', '用語は [提案](../../1-requirements/glossary.md#募集提案マッチ相談する)・[マッチ](../../1-requirements/glossary.md#マッチ)・'
+                                           '[全体](../../1-requirements/glossary.md)。\n\n## 5. 非機能')
+            files = {**BUNDLE_FILES, 'docs/4-domains/chat/README.md': readme}
+            reads = _build('CHAT-R2', 'chat', files)
+            glossary = [r for r in reads if r.startswith('docs/1-requirements/glossary')]
+            assert glossary == [GLOSSARY, 'docs/1-requirements/glossary.md#マッチ'], reads  # 同じ節の再掲は 1 件・file だけのリンクは入れない
+            assert reads[-2:] == glossary, reads  # 最後の段
+            assert not [r for r in _build('CHAT-R2', 'chat', {**BUNDLE_FILES, 'docs/4-domains/chat/README.md': BUNDLE_README.replace('glossary.md#', 'glossary.md?')})
+                        if r.startswith('docs/1-requirements/glossary')]
+            # domain が — は README を読まないので入れない
+            assert not [r for r in _build('CHAT-R2', '—', files) if 'glossary' in r]
+
+        t('reads: (5) 用語集は README の本文の節付きリンクだけ（file だけのリンクは入れない・domain が — なら入れない）', _glossary_sectioned_links_enter_stage5)
+
+        def _dry_run_uses_the_proposal_itself() -> None:
+            def draft(section2: str, name: str) -> str:
+                text = (
+                    '# 営業のお気に入り\n\nid_prefix: FAV\nkind: 製品の機能\ndomain: chat\nstatus: 承認\n'
+                    'approvals: 要件=PR #9 設計=PR #9 task=PR #9\napproved_at: 2026-10-01（PR #9 の merge で承認）\n\n'
+                    '## 1. 問題\n\n' + section2 + '## 10. 完了条件\n\n## 11. task\n\n### 11-1. 位置と前後\n\n### 11-3. 表\n\n'
+                    '| id | kind | stream | 題名 | 親 | 止める依存 | 要件 | 完了条件 |\n|---|---|---|---|---|---|---|---|\n'
+                    '| FAV-T1 | task | Infra | 印を保存する | feature #900 | — | FAV-R1 | テストが通る |\n\n## 12. 履歴\n'
+                )
+                return _draft_path(name, text)
+
+            root = _ds_tree(BUNDLE_FILES)
+            heading = FAV_HEADING_PROPOSAL.split('## 1. 問題\n\n', 1)[1].split('## 3.', 1)[0]
+            rc, out = _with_root(root, lambda: _from_table(draft(heading, 'fav.md'), '--dry-run'))
+            assert rc == 0 and '警告' not in out and '読む束=' in out, out
+            rows = lambda text: int(re.search(r'読む束=(\d+) 件', text).group(1))
+            rc2, out2 = _with_root(root, lambda: _from_table(draft(FAV_TABLE_PROPOSAL.split('## 1. 問題\n\n', 1)[1].split('## 3.', 1)[0], 'fav.md'), '--dry-run'))
+            assert rc2 == 0 and '警告: 提案の要件が見出しで見つからない: FAV-R1' in out2 and '要件の節が見つからない' not in out2, out2
+            assert rows(out) == len(_build_fav('FAV-R1', FAV_HEADING_PROPOSAL)), (out, rows(out))
+            # 起票の本文の目印にも提案の節が先頭に入る
+            body = _with_root(root, lambda: gh_task.table_issue_body(dict(id='FAV-T1', stream='Infra', reqs='FAV-R1', done='ok'), 'fav', 'PR9', 'chat', FAV_HEADING_PROPOSAL.splitlines()))
+            assert gh_task.parse_task_mark(body)['reads'].split(',')[0] == 'docs/draft/fav.md#要件-fav-r1', body
+
+        t('new --from-table: 提案の要件の節を束の先頭に入れ、表の形は警告する（--dry-run・目印の reads=）', _dry_run_uses_the_proposal_itself)
 
         def _rev_drift_compares_per_domain() -> None:
             root = _rev_tree(4)
