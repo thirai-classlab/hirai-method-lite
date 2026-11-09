@@ -3487,11 +3487,12 @@ def main() -> int:
 
         def _start_stops_for_bundle_docs() -> None:
             readme = 'docs/4-domains/chat/README.md'
+            CLEAN_README = _readme(4) + '\n## 7. 要件と受入\n印の無い節。\n'
             reads = f'{readme}#7.-要件と受入,docs/draft/tbl.md:3-9'
             stops = {
                 '束の文書に [要判断: #n]': ({readme: README_WITH_OPEN, 'docs/draft/tbl.md': _draft_file('承認')}, '[要判断]'),
-                '束の提案が失効': ({readme: _readme(4), 'docs/draft/tbl.md': _draft_file('失効')}, '失効'),
-                '束の提案が取り込み済み': ({readme: _readme(4), 'docs/draft/tbl.md': _draft_file('取り込み済み')}, '取り込み済み'),
+                '束の提案が失効': ({readme: CLEAN_README, 'docs/draft/tbl.md': _draft_file('失効')}, '失効'),
+                '束の提案が取り込み済み': ({readme: CLEAN_README, 'docs/draft/tbl.md': _draft_file('取り込み済み')}, '取り込み済み'),
             }
             for label, (files, word) in stops.items():
                 rc, message, out, record = _start_in_tree(files, _mark('TBL-01', 'tbl@PR9', reads).replace('rev=1 ', ''))
@@ -3499,9 +3500,9 @@ def main() -> int:
                 assert record == [] and '読む束（' not in out, (label, record, out)  # Status を書かず、束も出さない
             # 通る: 印も失効も無い束・無い file・失効した提案が束の外にある・[要判断] は本文の参照の path にだけある
             passes = {
-                '印の無い束': ({readme: _readme(4), 'docs/draft/tbl.md': _draft_file('承認')}, reads),
+                '印の無い束': ({readme: CLEAN_README, 'docs/draft/tbl.md': _draft_file('承認')}, reads),
                 '束の file が無い': ({}, reads),
-                '失効した src は束に入っていない': ({readme: _readme(4), 'docs/draft/tbl.md': _draft_file('失効')}, readme),
+                '失効した src は束に入っていない': ({readme: CLEAN_README, 'docs/draft/tbl.md': _draft_file('失効')}, readme),
             }
             for label, (files, bundle) in passes.items():
                 rc, message, out, record = _start_in_tree(files, _mark('TBL-01', 'tbl@PR9', bundle).replace('rev=1 ', ''))
@@ -3525,6 +3526,41 @@ def main() -> int:
                 assert rc == 2 and '[要判断]' in message and record == [], (label, rc, message)
 
         t('start: 読む束の範囲だけを見る（#見出しはその節・:行はその行）。束の外の節の [要判断] と、書き方の説明の [要判断: <ID>] では止まらない', _start_bundle_scope_is_the_section)
+
+        def _start_bundle_github_anchor_forms() -> None:
+            readme = 'docs/4-domains/chat/README.md'
+            body = (
+                _readme(4)
+                + '\n### STG の通し確認（LINE）\n印の無い節。\n'
+                + '\n### 要件 CHAT-R14: 登録（NFR-SEC-003）\n印の無い要件。\n'
+                + '\n### 画面\n1 つ目。\n'
+                + '\n### 画面\n2 つ目。 `[要判断: #800]`\n'
+                + '\n### 未決\n`[要判断: #801]`\n'
+            )
+            files = {readme: body}
+            lines = body.splitlines()
+            plain_line = next(i for i, ln in enumerate(lines, 1) if ln == '印の無い節。')
+            open_line = next(i for i, ln in enumerate(lines, 1) if '#801' in ln)
+            passes = {
+                'GitHub の slug（括弧・全角記号を落とす）': f'{readme}#stg-の通し確認line',
+                '要件の見出し（: ・（）を含む）': f'{readme}#要件-chat-r14-登録nfr-sec-003',
+                '重複見出しの最初': f'{readme}#画面',
+                '行 anchor #L': f'{readme}#L{plain_line}',
+            }
+            for label, bundle in passes.items():
+                rc, message, _out, record = _start_in_tree(files, _mark('TBL-01', 'tbl@PR9', bundle).replace('rev=1 ', ''))
+                assert rc == 0 and record == [('F_Status', 'O_Status_進行中')], (label, rc, message, record)
+            stops = {
+                '重複見出しの 2 つ目 (-1)': (f'{readme}#画面-1', '[要判断]'),
+                '行 anchor の範囲 #La-Lb': (f'{readme}#L{open_line - 1}-L{open_line}', '[要判断]'),
+                '見出しが見つからない': (f'{readme}#存在しない見出し', '見出しが見つからない'),
+            }
+            for label, (bundle, word) in stops.items():
+                rc, message, _out, record = _start_in_tree(files, _mark('TBL-01', 'tbl@PR9', bundle).replace('rev=1 ', ''))
+                assert rc == 2 and word in message and record == [], (label, rc, message, record)
+                assert '範囲に' not in message or word == '[要判断]', message
+
+        t('start: 読む束の #anchor は GitHub の slug・重複 -1・#L 行でも当たる。見つからない見出しは理由を分けて止める', _start_bundle_github_anchor_forms)
 
         def _start_without_reads_checks_only_src_draft() -> None:
             readme = 'docs/4-domains/chat/README.md'

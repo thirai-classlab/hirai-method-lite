@@ -2414,20 +2414,46 @@ def _heading_slug(text: str) -> str:
     return slug
 
 
-def _read_scope_lines(lines: list[str], read: str) -> list[str]:
-    """reads= の 1 件（`path`・`path#見出し`・`path:a-b`）が指す範囲の行。path だけは file 全体。
-    `#見出し` はその見出しから、同じ深さか浅い次の見出しの前まで（見出しが見つからないときは
-    範囲を決められないので file 全体 = 止める側）。`:a-b`（`:a`）はその行だけ。"""
+def _github_slug(text: str) -> str:
+    """GitHub の見出し anchor（小文字・文字/数字/空白/-/_ 以外を落とす・空白を - に）。"""
+    kept = ''.join(c for c in text.strip().lower() if c.isalnum() or c in ' -_')
+    return kept.replace(' ', '-')
+
+
+_ANCHOR_LINES_RE = re.compile(r'^L(\d+)(?:-L?(\d+))?$')
+
+
+def _read_scope_lines(lines: list[str], read: str) -> list[str] | None:
+    """reads= の 1 件（`path`・`path#見出し`・`path#L<a>(-L<b>)`・`path:a-b`）が指す範囲の行。
+    path だけは file 全体。`#見出し` はその見出しから、同じ深さか浅い次の見出しの前まで。見出しは
+    書かれた文（小文字・空白を -・`.` を落としても比べる）でも GitHub の slug（句読点・括弧を落とす。
+    重複は -1, -2）でも当てる。`#L<a>-L<b>` は行の範囲。`:a-b`（`:a`）はその行だけ。
+    見出しが見つからないときは None（範囲を決められない。呼び出し側が理由を分けて止める）。"""
     _, anchor_sep, rest = read.partition('#')
     if anchor_sep:
-        anchor = _heading_slug(re.split(r':\d', rest, maxsplit=1)[0])
+        raw = re.split(r':\d', rest, maxsplit=1)[0].strip()
+        line_span = _ANCHOR_LINES_RE.match(raw)
+        if line_span:
+            first = int(line_span.group(1))
+            last = int(line_span.group(2) or first)
+            return lines[max(first - 1, 0):last]
+        anchor = _heading_slug(raw)
         plain = anchor.replace('.', '')
+        seen: dict[str, int] = {}
+        in_fence = False
         for index, line in enumerate(lines):
-            match = _BUNDLE_HEADING_RE.match(line)
+            if line.lstrip().startswith(('```', '~~~')):
+                in_fence = not in_fence
+                continue
+            match = None if in_fence else _BUNDLE_HEADING_RE.match(line)
             if not match:
                 continue
             slug = _heading_slug(match.group(2))
-            if slug != anchor and slug.replace('.', '') != plain:
+            gh = _github_slug(match.group(2))
+            count = seen.get(gh, 0)
+            seen[gh] = count + 1
+            gh_unique = gh if count == 0 else f'{gh}-{count}'
+            if anchor not in (slug, gh_unique) and plain != slug.replace('.', ''):
                 continue
             depth = len(match.group(1))
             end = len(lines)
@@ -2437,7 +2463,7 @@ def _read_scope_lines(lines: list[str], read: str) -> list[str]:
                     end = later
                     break
             return lines[index:end]
-        return lines
+        return None
     _, line_sep, spec = read.partition(':')
     span = _READ_LINES_RE.match(spec.strip()) if line_sep else None
     if span:
@@ -2450,7 +2476,7 @@ def _read_scope_lines(lines: list[str], read: str) -> list[str]:
 def bundle_stop_reasons(mark: dict[str, str] | None, root: str | None = None) -> list[str]:
     """start が着手を断る読む束の理由（DS-R8.2。rev の差は rev_drift が別に見る）。
     reads= がある issue: 束の各 path の範囲（`#見出し` はその節、`:行` はその行、path だけは file 全体。
-    書き方の説明の `[要判断: <ID>]` は数えない）に `[要判断: …]` の印がある、
+    書き方の説明の `[要判断: <ID>]` は数えない。見出しが見つからないときも止める）に `[要判断: …]` の印がある、
     または file の先頭の `status:` が失効・取り込み済みの提案。reads= が無い issue: 目印の
     src=<slug> の提案（docs/draft/<slug>.md）の status が失効・取り込み済みのときだけ
     （本文の path の文書は見ない）。無い file は比べない。"""
@@ -2467,7 +2493,10 @@ def bundle_stop_reasons(mark: dict[str, str] | None, root: str | None = None) ->
             status = _draft_header(lines).get('status', '')
             if status in _STOP_DRAFT_STATUSES:
                 reasons.append(f'読む束の {path} は status: {status} の提案')
-            if _has_open_judgment(_read_scope_lines(lines, read)):
+            scope = _read_scope_lines(lines, read)
+            if scope is None:
+                reasons.append(f'読む束の {read} の見出しが見つからない')
+            elif _has_open_judgment(scope):
                 reasons.append(f'読む束の {read} の範囲に [要判断] の印がある')
         return reasons
     src = _SRC_RE.match(mark.get('src', ''))
