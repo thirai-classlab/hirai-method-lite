@@ -3545,6 +3545,43 @@ def main() -> int:
 
         t('reads: 「要件の節が見つからない」は README にも提案にも無いときだけ出す', _missing_warning_only_when_neither_has_it)
 
+        def _before_column_judgment_does_not_stop() -> None:
+            # 変更された要件の表の「前」は旧い README の文の引用（agent-templates.md:55 の形）。印は裁定のあとも残る
+            proposal = FAV_TABLE_PROPOSAL.replace(
+                '### 削除された要件', '### 変更された要件\n\n| ID | 前 | 後 |\n|---|---|---|\n'
+                '| PROP-R11.2 | 保存先 `[要判断: PROP-Q14]`・未実装 | FAV-R1〜R2 を満たす |\n\n### 削除された要件')
+            root = _ds_tree({**BUNDLE_FILES, FAV_REL: proposal})
+            reads = gh_task.build_reads('FAV-R1', 'chat', root, slug='fav')
+            mark = {'reqs': 'FAV-R1', 'reads': ','.join(reads)}
+            assert 'docs/draft/fav.md#2-目指す状態' in reads and gh_task.bundle_stops(mark, root) == []
+            assert gh_task.bundle_open_judgments(mark, root) == []  # 「前」の印は未決の一覧にも出さない
+            # 「後」の列の印は、その task の要件を含む行なら止める
+            after = proposal.replace('FAV-R1〜R2 を満たす', 'FAV-R1〜R2 を満たす `[要判断: FAV-Q1]`')
+            root2 = _ds_tree({**BUNDLE_FILES, FAV_REL: after})
+            assert [k for k, _t in gh_task.bundle_stops(mark, root2)] == ['judgment']
+
+        t('start: 提案の変更された要件の表の「前」の列にある [要判断] では止めない（「後」の列の印は止める）', _before_column_judgment_does_not_stop)
+
+        def _domain_dash_keeps_reqs_fr_and_uc_with_proposal_section() -> None:
+            reads = _build_fav('FAV-R1, FR-CHT-002, UC-06', FAV_HEADING_PROPOSAL.replace('FR-CHT-001・UC-06・', ''), '—')
+            assert reads[0] == 'docs/draft/fav.md#要件-fav-r1', reads
+            assert 'docs/1-requirements/features.md:6' in reads and 'docs/1-requirements/use-cases/UC-06-consult.md' in reads, reads
+
+        t('reads: domain が — の提案で提案の要件が混ざっても、reqs の FR・UC は (4) に残る', _domain_dash_keeps_reqs_fr_and_uc_with_proposal_section)
+
+        def _only_id_prefix_ids_are_proposal_requirements() -> None:
+            proposal = (FAV_HEADING_PROPOSAL.replace('JOB-30）', 'JOB-30・ERR-03）')
+                        .replace('Then 返す（', 'Then 返す `[要判断: 並び順]`（'))
+            reads = _build_fav('FAV-R1,ERR-03', proposal)
+            assert reads[0] == 'docs/draft/fav.md#要件-fav-r1' and 'docs/draft/fav.md#2-目指す状態' not in reads, reads
+            notes = _notes_fav('FAV-R1,ERR-01〜ERR-03', proposal)
+            assert not any('見出しで見つからない' in n for n in notes), notes
+            assert len(notes) == 1 and notes[0].startswith('要件の節が見つからない: ERR-01・ERR-02・ERR-03'), notes
+            root = _ds_tree({**BUNDLE_FILES, FAV_REL: proposal})
+            assert gh_task.bundle_open_judgments({'reqs': 'FAV-R1', 'reads': ','.join(reads)}, root) == []
+
+        t('reads: 提案の要件に数えるのは id_prefix の頭の ID だけ（受入に出る層 3 の ID で節全体を入れない）', _only_id_prefix_ids_are_proposal_requirements)
+
         def _glossary_sectioned_links_enter_stage5() -> None:
             readme = BUNDLE_README.replace('## 5. 非機能', '用語は [提案](../../1-requirements/glossary.md#募集提案マッチ相談する)・[マッチ](../../1-requirements/glossary.md#マッチ)・'
                                            '[全体](../../1-requirements/glossary.md)。\n\n## 5. 非機能')

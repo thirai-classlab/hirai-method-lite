@@ -2544,6 +2544,26 @@ def bundle_open_judgments(mark: dict[str, str] | None, root: str | None = None) 
     return _scan_bundle(mark, root)[1]
 
 
+_BEFORE_COLUMNS = ('前', 'いま')
+
+
+def _scan_text(lines: list[str], number: int, is_draft: bool) -> str:
+    """止める検査で読む行の文。提案（docs/draft/）の表の行は、見出し行が「前」「いま」の列を、その列の中身を落として読む
+    （変更された要件の表の「前」は旧い README の文の引用で、そこの [要判断] は裁定のあとも残る）。"""
+    line = lines[number]
+    if not is_draft or not line.lstrip().startswith('|'):
+        return line
+    start = number
+    while start > 0 and lines[start - 1].lstrip().startswith('|'):
+        start -= 1
+    header = [c.strip() for c in lines[start].strip().strip('|').split('|')]
+    skip = {i for i, c in enumerate(header) if c in _BEFORE_COLUMNS}
+    if not skip or start == number:
+        return line
+    cells = line.strip().strip('|').split('|')
+    return '|'.join('' if i in skip else c for i, c in enumerate(cells))
+
+
 def _scan_bundle(mark: dict[str, str] | None, root: str | None = None) -> tuple[list[tuple[str, str]], list[str]]:
     """start が着手を断る読む束の理由（DS-R8.2。rev の差は rev_drift が別に見る）と、止めない未決の `path:行`。
     reads= がある issue: 束の各 path の範囲（`#見出し` はその節、`:行` はその行、path だけは file 全体。
@@ -2576,11 +2596,13 @@ def _scan_bundle(mark: dict[str, str] | None, root: str | None = None) -> tuple[
                 reasons.append(('heading', f'読む束の {read} の見出しが見つからない'))
                 continue
             stopping: list[int] = []
+            is_draft = path.startswith(DRAFT_DIR_RELATIVE + '/')
             for number in range(span[0], span[1]):
-                if not _has_open_judgment([lines[number]]):
+                text = _scan_text(lines, number, is_draft)
+                if not _has_open_judgment([text]):
                     continue
                 is_heading = _BUNDLE_HEADING_RE.match(lines[number]) is not None
-                if _line_names_requirement(lines[number], reqs) or (is_heading and _line_names_requirement(lines[number], base_reqs)):
+                if _line_names_requirement(text, reqs) or (is_heading and _line_names_requirement(text, base_reqs)):
                     stopping.append(number + 1)
                 else:
                     open_notes.append(f'{path}:{number + 1}')
@@ -2788,10 +2810,17 @@ def _proposal_goal(lines: list[str]) -> tuple[int, int, str, list[str]] | None:
     return None
 
 
+def _proposal_prefix(proposal: list[str] | None) -> str | None:
+    """提案の先頭の `id_prefix:` の頭（行末の注は落とす）。無ければ None。"""
+    value = _draft_header(proposal).get('id_prefix', '') if proposal is not None else ''
+    return value.split()[0] if value.split() else None
+
+
 def _requirement_plan(reqs: list[str], readmes: list[list[str]], proposal: list[str] | None) -> dict:
     """reqs の要件 ID を、README の `### 要件`（今までどおり）→ 提案の「目指す状態」の `### 要件 <ID>:` の節
     → 提案の表の行（見出しが無い形）の順に探す。どこにも無い ID は missing（README が無い提案は比べない）。
-    README の ID と提案の ID が混ざる reqs は ID ごとに決める（README に見出しがある ID は README から）。"""
+    README の ID と提案の ID が混ざる reqs は ID ごとに決める（README に見出しがある ID は README から）。
+    提案の要件に数えるのは、頭が提案の `id_prefix:` + `-` の ID だけ（層 3 の ID が受入に出ても提案の要件にしない）。"""
     rest = [req for req in _base_requirements(reqs)
             if not any(_find_requirement_heading(lines, req) for lines in readmes)]
     plan: dict = {'sections': [], 'whole': None, 'table_ids': [], 'missing': []}
@@ -2802,7 +2831,12 @@ def _requirement_plan(reqs: list[str], readmes: list[list[str]], proposal: list[
     goal_lines = goal[3]
     goal_ids = set(_base_requirements(expand_ids('\n'.join(goal_lines))))
     seen: set[int] = set()
+    prefix = _proposal_prefix(proposal)
     for req in rest:
+        if prefix is not None and not req.startswith(f'{prefix}-'):
+            if readmes:
+                plan['missing'].append(req)
+            continue
         found = _find_requirement_heading(goal_lines, req)
         if found:
             if found[0] not in seen:
@@ -2837,7 +2871,7 @@ def build_reads(reqs_text: str, domain: str, root: str | None = None, slug: str 
     """目印の reads= に書く束（5 段の順・path は重複を除く）。reqs_text は表の「要件」の列、domain は提案の `domain:`。
     slug は提案（docs/draft/<slug>.md。proposal_lines があればその行）。reqs が提案側の要件 ID（README に未だ無い）のとき、
     (1) の先頭に提案の「## 2. 目指す状態」のその要件の節（表の形で見出しが無ければ節全体）を入れ、(2)(4) の拾い元にも使う。
-    domain が `—`（領域の README が無い）の提案は、reqs に書かれた FR・UC だけを (4) に入れる。"""
+    domain が `—`（領域の README が無い）の提案は、(1) に提案の要件の節（あれば）、(4) に reqs の文と提案の節の FR・UC を入れる。"""
     base = root if root is not None else _root()
     reqs = expand_ids(reqs_text)
     readmes, proposal = _load_requirement_docs(domain, base, slug, proposal_lines)
@@ -2865,9 +2899,7 @@ def build_reads(reqs_text: str, domain: str, root: str | None = None, slug: str 
     stage3 = [f'{LAYER2_DIR}/{file}#{anchor}'
               for _name, lines in readmes for file, anchor in _LAYER2_LINK_RE.findall('\n'.join(lines))]
     # (4) 層 1: 要件の見出しが指す FR とユースケース（README が無い提案は reqs の文に書かれたもの。提案の要件は節の本文と受入）
-    source = '\n'.join([text for _a, text, _b in sections] + [proposal_text])
-    if not readmes and not proposal_text:
-        source = reqs_text
+    source = '\n'.join([text for _a, text, _b in sections] + [proposal_text] + ([reqs_text] if not readmes else []))
     stage4 = _layer1_refs(source, base)
     # (5) 用語集: README の本文にある、用語集への節付きのリンクだけ（層 2 と同じ拾い方）
     stage5 = [f'{GLOSSARY_DOC}#{anchor}'
