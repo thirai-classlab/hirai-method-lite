@@ -3313,6 +3313,140 @@ def main() -> int:
 
         t('impact: 「位置と前後」の節が無い draft は exit 2', _impact_refuses_draft_without_section)
 
+        # -- design-merge（#818・DS-R3.2・DS-R3.3） --
+        README_BEFORE = (
+            '# チャット（chat）\n\nid_prefix: CHAT\ndomain: chat\nstatus: 現在形\nrev: 3\n\n## 1. 目的\n\nx\n\n'
+            '## 7. 要件と受入\n\n'
+            '### 要件 CHAT-R1: 部屋を 1 つ用意する\n- CHAT-R1.1 Given a When b Then c\n\n'
+            '### 要件 CHAT-R2: 一覧を返す\n- CHAT-R2.1 Given a When b Then c\n- CHAT-R2.2 Given d When e Then f\n\n'
+            '### 要件 CHAT-R3: 参加者を返す\n- CHAT-R3.1 Given a When b Then c\n\n'
+            '## 8. 上の層との差分\n\nなし\n')
+
+        def _merge_draft(delta: str, *, status: str = '承認', domain: str = 'chat') -> str:
+            return (
+                '# 添付\n\nid_prefix: ATT\nkind: 製品の機能\ndomain: ' + domain + '\nstatus: ' + status + '\n'
+                'approvals: 要件=PR #9 設計=PR #9 task=PR #9\napproved_at: 2026-10-01（PR #9 の merge で承認）\nmerged_into:\n\n'
+                '## 1. 問題\n\n## 2. 目指す状態\n\n' + delta + '\n## 3. 変える上の層の現在形\n\nx\n')
+
+        DELTA_OK = (
+            '### 追加された要件\n\n### 要件 ATT-R1: 入居者が添付を送るとき、システムは画像と PDF だけを受け付ける\n'
+            '- ATT-R1.1 Given JPEG When 送る Then 保存される\n- ATT-R1.2 Given exe When 送る Then 400\n\n'
+            '### 変更された要件\n\n### 要件 CHAT-R2: 一覧を開いたとき → 一覧を新しい順に返す\n'
+            '- CHAT-R2.1 Given x When y Then z\n\n'
+            '### 削除された要件\n\n- CHAT-R3（ATT-R1 に統合した）\n')
+
+        def _merge(draft_text: str, readme_text: str = README_BEFORE) -> tuple[str, str, str, str]:
+            root = _ds_tree({'docs/draft/att.md': draft_text, 'docs/4-domains/chat/README.md': readme_text})
+            draft = os.path.join(root, 'docs/draft/att.md')
+            readme = os.path.join(root, 'docs/4-domains/chat/README.md')
+            calls: list = []
+            gh_task.run_gh = make_ds_board_gh([], {}, calls=calls)  # design-merge が gh を呼んだら落とす
+            buf = io.StringIO()
+            try:
+                with redirect_stdout(buf):
+                    gh_task.cmd_design_merge([draft])
+            finally:
+                assert calls == [], f'design-merge が GitHub を引いた: {calls}'
+            return buf.getvalue(), _read(draft), _read(readme), root
+
+        def _design_merge_applies_delta() -> None:
+            out, draft, readme, _ = _merge(_merge_draft(DELTA_OK))
+            assert 'status: 取り込み済み' in draft and 'merged_into: docs/4-domains/chat/README.md' in draft, draft
+            assert 'status: 承認' not in draft, draft
+            assert '### 要件 ATT-R1: 入居者が添付を送るとき' in readme and '- ATT-R1.2 Given exe' in readme, readme
+            assert readme.index('ATT-R1:') < readme.index('## 8. 上の層との差分'), '追加が「## 8.」の前に入っていない'
+            assert '### 要件 CHAT-R2: 一覧を新しい順に返す' in readme and '- CHAT-R2.1 Given x When y Then z' in readme, readme
+            assert 'CHAT-R2.2' not in readme, '変更で書き直した受入に古い受入が残っている'
+            assert 'CHAT-R3' not in readme, '削除した要件が残っている'
+            assert 'CHAT-R1.1' in readme, '触れない要件が消えた'
+            assert 'rev: 4' in readme and 'rev: 3' not in readme, readme
+            assert '追加 1 件・変更 1 件・削除 1 件・rev: 3 → 4' in out and '+### 要件 ATT-R1' in out, out
+
+        t('design-merge: 追加・変更・削除を現在形に当て、rev を上げ、提案の先頭を取り込み済みにして差分を出す', _design_merge_applies_delta)
+
+        def _design_merge_keeps_old_acceptance_when_changed_has_none() -> None:
+            delta = '### 変更された要件\n\n### 要件 CHAT-R1: 部屋を 1 つ用意する → 部屋を 1 つだけ用意する\n'
+            _, _, readme, _ = _merge(_merge_draft(delta))
+            assert '### 要件 CHAT-R1: 部屋を 1 つだけ用意する' in readme and '- CHAT-R1.1 Given a When b Then c' in readme, readme
+
+        t('design-merge: 変更に受入が無ければ現在形の受入を残して文だけ替える', _design_merge_keeps_old_acceptance_when_changed_has_none)
+
+        def _assert_merge_refused(draft_text: str, code: int, needle: str, readme_text: str = README_BEFORE) -> None:
+            root = _ds_tree({'docs/draft/att.md': draft_text, 'docs/4-domains/chat/README.md': readme_text})
+            draft = os.path.join(root, 'docs/draft/att.md')
+            readme = os.path.join(root, 'docs/4-domains/chat/README.md')
+            before = (_read(draft), _read(readme))
+            try:
+                gh_task.cmd_design_merge([draft])
+            except gh_task.GhError as exc:
+                assert exc.code == code, f'exit {exc.code}（期待 {code}）: {exc}'
+                assert needle in str(exc), f'理由に「{needle}」が無い: {exc}'
+            else:
+                raise AssertionError('断るべきなのに通った')
+            assert (_read(draft), _read(readme)) == before, '断ったのに file を書いた'
+
+        def _design_merge_refuses_unappliable_without_writing() -> None:
+            missing_change = '### 変更された要件\n\n### 要件 CHAT-R9: a → b\n- CHAT-R9.1 Given a When b Then c\n'
+            _assert_merge_refused(_merge_draft(missing_change), 1, 'CHAT-R9')
+            missing_delete = '### 削除された要件\n\n- CHAT-R8（理由）\n'
+            _assert_merge_refused(_merge_draft(missing_delete), 1, 'CHAT-R8')
+            dup_add = '### 追加された要件\n\n### 要件 CHAT-R1: 重なる\n- CHAT-R1.1 Given a When b Then c\n'
+            _assert_merge_refused(_merge_draft(dup_add), 1, '既にある')
+            # 追加は通るが削除が当たらない → 追加も書かない（全部か何もか）
+            _assert_merge_refused(_merge_draft(DELTA_OK.replace('CHAT-R3（', 'CHAT-R7（')), 1, 'CHAT-R7')
+
+        t('design-merge: 変更先の要件 ID が現在形に無い・追加が重なる差分は、何も書かず exit 1（一部だけ当てない）', _design_merge_refuses_unappliable_without_writing)
+
+        def _design_merge_refuses_non_block_delta_and_empty() -> None:
+            table = '### 追加された要件\n\n| ID | 文 |\n|---|---|\n| ATT-R1 | x |\n'
+            _assert_merge_refused(_merge_draft(table), 1, '要件ブロック')
+            empty = '### 追加された要件\n\nなし\n\n### 変更された要件\n\nなし\n\n### 削除された要件\n\nなし\n'
+            _assert_merge_refused(_merge_draft(empty), 1, '差分が空')
+
+        t('design-merge: 表の形の差分と空の差分は何も書かず exit 1', _design_merge_refuses_non_block_delta_and_empty)
+
+        def _design_merge_refuses_wrong_state() -> None:
+            _assert_merge_refused(_merge_draft(DELTA_OK, status='起案'), 2, '承認済み')
+            _assert_merge_refused(_merge_draft(DELTA_OK, status='取り込み済み'), 2, '既に')
+            _assert_merge_refused(_merge_draft(DELTA_OK, domain='chat, agent'), 1, '領域を 1 つに')
+            _assert_merge_refused(_merge_draft(DELTA_OK).replace('要件=PR #9 ', '').replace('approvals: ', 'approvals: 設計=PR #9 '), 2, '要件の段')
+
+        t('design-merge: 起案・取り込み済み・領域が 1 つでない・要件の段が未承認は書かずに断る', _design_merge_refuses_wrong_state)
+
+        def _design_merge_is_not_repeatable() -> None:
+            root = _ds_tree({'docs/draft/att.md': _merge_draft(DELTA_OK), 'docs/4-domains/chat/README.md': README_BEFORE})
+            draft = os.path.join(root, 'docs/draft/att.md')
+            with redirect_stdout(io.StringIO()):
+                gh_task.cmd_design_merge([draft])
+            _expect_exit(lambda: gh_task.cmd_design_merge([draft]), 2)
+            assert _read(os.path.join(root, 'docs/4-domains/chat/README.md')).count('### 要件 ATT-R1') == 1
+
+        t('design-merge: 2 回目は取り込み済みで断り、要件を二重に足さない', _design_merge_is_not_repeatable)
+
+        def _coverage_drops_merged_draft_after_design_merge() -> None:
+            root = _ds_tree({'docs/draft/att.md': _cov_draft('承認', ROWS_ABC) + '', 'docs/4-domains/chat/README.md': README_BEFORE})
+            text = _read(os.path.join(root, 'docs/draft/att.md')).replace('domain: —', 'domain: chat').replace(
+                '## 1. 問題\n', '## 1. 問題\n\n## 2. 目指す状態\n\n### 追加された要件\n\n### 要件 TBL-R1: x\n- TBL-R1.1 Given a When b Then c\n\n', 1)
+            with open(os.path.join(root, 'docs/draft/att.md'), 'w', encoding='utf-8') as f:
+                f.write(text)
+            with redirect_stdout(io.StringIO()):
+                gh_task.cmd_design_merge([os.path.join(root, 'docs/draft/att.md')])
+            gh_task.run_gh = make_ds_board_gh([], {}, calls=[])
+            saved = os.environ.get('HIRAI_TASK_ROOT')
+            os.environ['HIRAI_TASK_ROOT'] = root
+            try:
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    gh_task.cmd_coverage()
+            finally:
+                if saved is None:
+                    os.environ.pop('HIRAI_TASK_ROOT', None)
+                else:
+                    os.environ['HIRAI_TASK_ROOT'] = saved
+            assert 'att: 起票漏れ' not in buf.getvalue(), buf.getvalue()
+
+        t('design-merge のあと、その提案は coverage の対象から外れる（DS-R3.3）', _coverage_drops_merged_draft_after_design_merge)
+
         # ── draft_approved_at ──
         def _draft_approved_table_form() -> None:
             approved = gh_task.draft_approved_at(_draft_path('table.md', '# 設計\n\n| approved | 2026-09-04 |\n'))

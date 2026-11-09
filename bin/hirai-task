@@ -4,7 +4,7 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
 
 サブコマンド:
   読む側: ready / pending / blocked / show <issue> / memos / unblocked / coverage / impact <draft>
-  書く側: new / add / set / start / review / done / reopen（approve は廃止）
+  書く側: new / add / set / start / review / done / reopen（approve は廃止）/ design-merge <draft>（file だけ書く）
   会話の最初と merge の直後: comments / close-parents / align / today / after-merge
   ほか: sync（field・option の id の取り直し）/ --selftest（gh を使わない自己検査）
 
@@ -2567,6 +2567,220 @@ def cmd_impact(argv: list[str]) -> int:
     return 0
 
 
+# ── design-merge（承認済みの提案の差分を層 4 の現在形に当てる）（DS-08） ────────────
+_REQ_HEADING_RE = re.compile(r'^###\s+要件\s+([A-Z][A-Z0-9]*-R\d+)\s*[:：]\s*(.*?)\s*$')
+_DELETED_ID_RE = re.compile(r'^[-*]\s+([A-Z][A-Z0-9]*-R\d+)')
+_DELTA_HEADINGS = {'### 追加された要件': 'added', '### 変更された要件': 'changed', '### 削除された要件': 'deleted'}
+_DESIGN_MERGE_ARGS = '使い方: hirai-task design-merge <draft の path>'
+_MERGEABLE_STATUSES = ('承認', '実装済み')  # 提案の一生: 承認／実装済み → 取り込み済み
+MERGED_STATUS = '取り込み済み'
+
+
+def _section_range(lines: list[str], pattern: re.Pattern[str]) -> tuple[int, int] | None:
+    """`## ` の節のうち見出しが pattern に当たるものの [開始, 終わり)。コードの囲みの中は見ない。"""
+    start = None
+    in_fence = False
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith(('```', '~~~')):
+            in_fence = not in_fence
+        if in_fence or not line.startswith('## '):
+            continue
+        if start is not None:
+            return start, index
+        if pattern.match(line):
+            start = index
+    return (start, len(lines)) if start is not None else None
+
+
+def parse_delta(lines: list[str]) -> dict:
+    """提案の「## 2. 目指す状態」の 3 区分を読む。要件ブロックは (ID, 見出しの文, 本文の行)。
+    ブロックの形でない中身（表など）は unreadable に区分の名前で入れる。"""
+    span = _section_range(lines, re.compile(r'^##\s+2\.\s'))
+    delta: dict = {'added': [], 'changed': [], 'deleted': [], 'unreadable': []}
+    if span is None:
+        delta['missing_section'] = True
+        return delta
+    mode = None
+    block: list | None = None
+    other: dict[str, list[str]] = {k: [] for k in ('added', 'changed', 'deleted')}
+
+    def close() -> None:
+        nonlocal block
+        if block is not None:
+            while block[2] and not block[2][-1].strip():
+                block[2].pop()
+            delta[mode].append((block[0], block[1], block[2]))
+        block = None
+
+    for line in lines[span[0] + 1:span[1]]:
+        stripped = line.strip()
+        if stripped in _DELTA_HEADINGS:
+            close()
+            mode = _DELTA_HEADINGS[stripped]
+            continue
+        heading = _REQ_HEADING_RE.match(stripped)
+        if mode in ('added', 'changed') and heading:
+            close()
+            block = (heading.group(1), heading.group(2), [])
+            continue
+        if mode is None:
+            continue
+        if mode == 'deleted':
+            found = _DELETED_ID_RE.match(stripped)
+            if found:
+                delta['deleted'].append((found.group(1), '', []))
+            elif stripped and stripped != 'なし':
+                other[mode].append(stripped)
+        elif block is not None:
+            block[2].append(line.rstrip())
+        elif stripped and stripped != 'なし':
+            other[mode].append(stripped)
+    close()
+    for key, rest in other.items():
+        if rest:
+            delta['unreadable'].append(key)
+    return delta
+
+
+def _new_sentence(heading_text: str) -> str:
+    """変更された要件の見出しの文（変更前の文 → 変更後の文）から、変更後の文を取る。→ が無ければ全体。"""
+    after = heading_text.rsplit('→', 1)[-1].strip()
+    return after.rstrip('）)').strip() if heading_text.startswith(('（', '(')) else after
+
+
+def _requirement_blocks(lines: list[str], span: tuple[int, int]) -> dict[str, tuple[int, int]]:
+    """現在形の「## 7. 要件と受入」の中の `### 要件 ID:` ブロック → [開始, 終わり)。"""
+    starts = [
+        (i, _REQ_HEADING_RE.match(lines[i].strip()).group(1)) for i in range(span[0] + 1, span[1])
+        if _REQ_HEADING_RE.match(lines[i].strip())
+    ]
+    blocks: dict[str, tuple[int, int]] = {}
+    for position, (start, req_id) in enumerate(starts):
+        end = starts[position + 1][0] if position + 1 < len(starts) else span[1]
+        blocks[req_id] = (start, end)
+    return blocks
+
+
+def _trim_trailing_blank(block: list[str]) -> list[str]:
+    end = len(block)
+    while end and not block[end - 1].strip():
+        end -= 1
+    return block[:end]
+
+
+def apply_delta(readme: list[str], delta: dict) -> tuple[list[str] | None, list[str]]:
+    """現在形（行）に差分を当てた新しい行と、当てられない理由の一覧。理由があれば行は None（何も書かない）。"""
+    span = _section_range(readme, re.compile(r'^##\s+7\.\s*要件と受入'))
+    if span is None:
+        return None, ['現在形に「## 7. 要件と受入」の節が無い']
+    blocks = _requirement_blocks(readme, span)
+    problems: list[str] = []
+    for req_id, _, _ in delta['added']:
+        if req_id in blocks:
+            problems.append(f'追加された要件 {req_id} は現在形に既にある')
+    for kind, label in (('changed', '変更された要件'), ('deleted', '削除された要件')):
+        for req_id, _, _ in delta[kind]:
+            if req_id not in blocks:
+                problems.append(f'{label} {req_id} が現在形に無い（変更先の要件 ID が無い）')
+    if problems:
+        return None, problems
+    replacements: dict[str, list[str] | None] = {}
+    for req_id, text, body in delta['changed']:
+        start, end = blocks[req_id]
+        kept = [ln for ln in readme[start + 1:end]] if not any(ln.strip() for ln in body) else body
+        replacements[req_id] = [f'### 要件 {req_id}: {_new_sentence(text)}'] + _trim_trailing_blank(kept) + ['']
+    for req_id, _, _ in delta['deleted']:
+        replacements[req_id] = None
+    result: list[str] = []
+    index = 0
+    for req_id, (start, end) in sorted(blocks.items(), key=lambda kv: kv[1][0]):
+        if req_id not in replacements:
+            continue
+        result += readme[index:start]
+        result += replacements[req_id] or []
+        index = end
+    result += readme[index:span[1]]
+    tail = _trim_trailing_blank(result)
+    additions: list[str] = []
+    for req_id, text, body in delta['added']:
+        additions += [''] + [f'### 要件 {req_id}: {text}'] + _trim_trailing_blank(body)
+    # 節の終わりの空行は 1 つにそろえてから、追加分を足す。
+    return tail + additions + [''] + readme[span[1]:], []
+
+
+def _with_header_value(lines: list[str], key: str, value: str) -> list[str]:
+    """先頭の項目（最初の `## ` まで）の `key: …` を value に替えた新しい行。無ければ status の次の行に足す。"""
+    pattern = re.compile(rf'^{key}:')
+    result = list(lines)
+    limit = next((i for i, ln in enumerate(result) if ln.startswith('## ')), len(result))
+    for index in range(limit):
+        if pattern.match(result[index]):
+            result[index] = f'{key}: {value}'.rstrip()
+            return result
+    anchor = next((i for i in range(limit) if result[i].startswith('status:')), limit - 1)
+    return result[:anchor + 1] + [f'{key}: {value}'] + result[anchor + 1:]
+
+
+def cmd_design_merge(argv: list[str]) -> int:
+    import difflib
+    if len(argv) != 1:
+        die(_DESIGN_MERGE_ARGS, 2)
+    path = argv[0]
+    lines = _read_draft(path)
+    header = _draft_header(lines)
+    if 'id_prefix' not in header:
+        die(f'{path} は新しい形の提案（先頭に id_prefix: がある）でない', 2)
+    status = header.get('status', '')
+    if status.startswith(MERGED_STATUS):
+        die(f'{path} は既に {MERGED_STATUS}（merged_into: {header.get("merged_into") or "空"}）', 2)
+    if not status.startswith(_MERGEABLE_STATUSES):
+        die(f'{path} の status が「{status or "空"}」で、承認済み（{"・".join(_MERGEABLE_STATUSES)}）でない', 2)
+    approved, detail = _stage_approval({**header, 'status': _APPROVAL_STATUS}, '要件')
+    if not approved:
+        die(f'{path} の要件の段が承認されていない: {detail}', 2)
+    domain = header.get('domain', '')
+    if not domain or domain == '—' or ',' in domain or '、' in domain:
+        die(
+            f'取り込み先の領域を 1 つに決められない（domain: {domain or "空"}）。'
+            '現在形 docs/4-domains/<領域>/README.md を 1 つ指す domain: が要る', 1,
+        )
+    docs_dir = os.path.dirname(os.path.dirname(os.path.abspath(path)))
+    readme_relative = os.path.join('docs', '4-domains', domain, 'README.md')
+    readme_path = os.path.join(docs_dir, '4-domains', domain, 'README.md')
+    readme = _read_draft(readme_path)
+    delta = parse_delta(lines)
+    if delta.get('missing_section'):
+        die(f'{path} に「## 2. 目指す状態」の節が無い', 1)
+    if delta['unreadable']:
+        die(
+            f'{path} の差分（{"・".join(delta["unreadable"])}）が要件ブロック（`### 要件 <ID>: …` と `- <ID>.<n> …`）の形でない。'
+            '何も書いていない', 1,
+        )
+    if not (delta['added'] or delta['changed'] or delta['deleted']):
+        die(f'{path} の差分が空（追加・変更・削除がすべて「なし」）で、当てるものが無い。何も書いていない', 1)
+    merged, problems = apply_delta(readme, delta)
+    if merged is None:
+        die('当てられない差分があるので何も書いていない:\n' + '\n'.join(f'  - {p}' for p in problems), 1)
+    rev_line = next((ln for ln in readme[:next((i for i, x in enumerate(readme) if x.startswith('## ')), len(readme))] if ln.startswith('rev:')), None)
+    rev_text = ''
+    if rev_line and rev_line.split(':', 1)[1].strip().isdigit():
+        old_rev = int(rev_line.split(':', 1)[1])
+        merged = _with_header_value(merged, 'rev', str(old_rev + 1))
+        rev_text = f'rev: {old_rev} → {old_rev + 1}'
+    new_draft = _with_header_value(_with_header_value(lines, 'status', MERGED_STATUS), 'merged_into', readme_relative)
+    for target, old, new in ((readme_path, readme, merged), (path, lines, new_draft)):
+        tmp = f'{target}.tmp{os.getpid()}'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(new) + '\n')
+        os.replace(tmp, target)
+    print(f'design-merge: {path} → {readme_relative}')
+    print(f'  追加 {len(delta["added"])} 件・変更 {len(delta["changed"])} 件・削除 {len(delta["deleted"])} 件' + (f'・{rev_text}' if rev_text else ''))
+    print(f'  提案の先頭: status: {status} → {MERGED_STATUS}・merged_into: {readme_relative}')
+    for line in difflib.unified_diff(readme, merged, readme_relative, readme_relative, lineterm='', n=1):
+        print(line)
+    return 0
+
+
 def _parse_new_args(argv: list[str]) -> dict:
     if not argv:
         die('使い方: hirai-task new <title> --parent N [--kind task|feature|wave|設計メモ] '
@@ -3404,7 +3618,7 @@ def main(argv: list[str]) -> int:
         '           add <issue> | approve <issue> | start <issue> [--approved <出どころ>]\n'
         '           review <issue> | done <issue> [--not-planned <理由>] | reopen <issue> <status>\n'
         '           set <issue> <field> <value> | sync\n'
-        '           coverage | impact <draft の path>\n'
+        '           coverage | impact <draft の path> | design-merge <draft の path>\n'
         '           comments | close-parents [--json] | align [--json] | unblocked | memos\n'
         '           today | after-merge <PR番号>'
     )
@@ -3413,6 +3627,8 @@ def main(argv: list[str]) -> int:
     sub, tail = argv[0], argv[1:]
     if sub == '--selftest':
         return _run_selftest()
+    if sub == 'design-merge':  # ローカルの file だけを書く。GitHub も repo の判定も要らない。
+        return cmd_design_merge(tail)
     if not REPO:
         die(
             'リポを決められない（git remote の origin が github.com を指していない）。'
