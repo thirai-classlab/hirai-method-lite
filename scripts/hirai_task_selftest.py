@@ -3337,7 +3337,7 @@ def main() -> int:
         DELTA_OK = (
             '### 追加された要件\n\n### 要件 ATT-R1: 入居者が添付を送るとき、システムは画像と PDF だけを受け付ける\n'
             '- ATT-R1.1 Given JPEG When 送る Then 保存される\n- ATT-R1.2 Given exe When 送る Then 400\n\n'
-            '### 変更された要件\n\n### 要件 CHAT-R2: 一覧を開いたとき → 一覧を新しい順に返す\n'
+            '### 変更された要件\n\n### 要件 CHAT-R2: 一覧を新しい順に返す\n'
             '- CHAT-R2.1 Given x When y Then z\n\n'
             '### 削除された要件\n\n- CHAT-R3（ATT-R1 に統合した）\n')
 
@@ -3362,7 +3362,8 @@ def main() -> int:
             assert '### 要件 ATT-R1: 入居者が添付を送るとき' in readme and '- ATT-R1.2 Given exe' in readme, readme
             assert readme.index('ATT-R1:') < readme.index('## 8. 上の層との差分'), '追加が「## 8.」の前に入っていない'
             assert '### 要件 CHAT-R2: 一覧を新しい順に返す' in readme and '- CHAT-R2.1 Given x When y Then z' in readme, readme
-            assert 'CHAT-R2.2' not in readme, '変更で書き直した受入に古い受入が残っている'
+            assert '- CHAT-R2.2 Given d When e Then f' in readme, '書かなかった受入 CHAT-R2.2 が消えた'
+            assert 'CHAT-R2.1 Given a' not in readme, '書いた受入 CHAT-R2.1 の古い行が残っている'
             assert 'CHAT-R3' not in readme, '削除した要件が残っている'
             assert 'CHAT-R1.1' in readme, '触れない要件が消えた'
             assert 'rev: 4' in readme and 'rev: 3' not in readme, readme
@@ -3371,7 +3372,7 @@ def main() -> int:
         t('design-merge: 追加・変更・削除を現在形に当て、rev を上げ、提案の先頭を取り込み済みにして差分を出す', _design_merge_applies_delta)
 
         def _design_merge_keeps_old_acceptance_when_changed_has_none() -> None:
-            delta = '### 変更された要件\n\n### 要件 CHAT-R1: 部屋を 1 つ用意する → 部屋を 1 つだけ用意する\n'
+            delta = '### 変更された要件\n\n### 要件 CHAT-R1: 部屋を 1 つだけ用意する\n'
             _, _, readme, _ = _merge(_merge_draft(delta))
             assert '### 要件 CHAT-R1: 部屋を 1 つだけ用意する' in readme and '- CHAT-R1.1 Given a When b Then c' in readme, readme
 
@@ -3392,7 +3393,7 @@ def main() -> int:
             assert (_read(draft), _read(readme)) == before, '断ったのに file を書いた'
 
         def _design_merge_refuses_unappliable_without_writing() -> None:
-            missing_change = '### 変更された要件\n\n### 要件 CHAT-R9: a → b\n- CHAT-R9.1 Given a When b Then c\n'
+            missing_change = '### 変更された要件\n\n### 要件 CHAT-R9: b\n- CHAT-R9.1 Given a When b Then c\n'
             _assert_merge_refused(_merge_draft(missing_change), 1, 'CHAT-R9')
             missing_delete = '### 削除された要件\n\n- CHAT-R8（理由）\n'
             _assert_merge_refused(_merge_draft(missing_delete), 1, 'CHAT-R8')
@@ -3528,14 +3529,69 @@ def main() -> int:
 
         t('impact: 節の終わりは見出し（# の後ろに空白）だけで、#番号 で始まる行では切れず、コードの囲みの中は読まない', _impact_section_end_is_heading_only)
 
-        def _design_merge_refuses_unit_delete() -> None:
-            # 指摘 1: 受入 1 つの削除を要件ブロック全体の削除として読まない
-            delta = '### 削除された要件\n\n- CHAT-R2.2（受入だけ消す）\n'
-            parsed = gh_task.parse_delta(_merge_draft(delta).splitlines())
-            assert parsed['deleted'] == [] and parsed['unreadable'] == ['deleted'], parsed
-            _assert_merge_refused(_merge_draft(delta), 1, '要件ブロック')
+        # 実物（rmp-app の docs/4-domains/chat/README.md）の形: 受入は行頭の「- ID.n …」・末尾に「／ 確かめ: …」・R1.1 と R1.10 が並ぶ
+        README_REAL = (
+            '# チャット（chat）\n\nid_prefix: CHAT\ndomain: chat\nstatus: 現在形\nrev: 3\n\n## 7. 要件と受入\n\n'
+            '### 要件 CHAT-R1: 入居者が会話を開いたとき、システムは部屋を 1 つだけ用意する（FR-MATCH-009）\n\n'
+            '- CHAT-R1.1 Given 部屋が無い When POST Then 201 ／ 確かめ: [`a.test.ts`](../../../a.test.ts)\n'
+            '- CHAT-R1.2 Given 部屋がある When POST Then 200 ／ 確かめ: なし\n'
+            '- CHAT-R1.10 Given 相談した When accept Then 続けて POST ／ 確かめ: 通し: [`b.test.tsx`](../../../b.test.tsx)\n'
+            '  （補足の続きの行）\n\n'
+            '### 要件 CHAT-R2: 一覧を返す\n\n- CHAT-R2.1 Given a When b Then c\n\n'
+            '## 8. 上の層との差分\n\nなし\n')
 
-        t('design-merge: 「- CHAT-R2.2（…）」の受入単位の削除は要件の削除と読まず、何も書かず exit 1', _design_merge_refuses_unit_delete)
+        def _design_merge_replaces_only_written_acceptance_ids() -> None:
+            # 4-B: 書いた ID の行だけ差し替え・無い ID は足し、書かない ID（R1.2・R1.10 と続きの行）は残す。R1.1 は R1.10 を巻き込まない
+            delta = ('### 変更された要件\n\n### 要件 CHAT-R1: 入居者が会話を開いたとき、システムは部屋を作る\n\n'
+                     '- CHAT-R1.1 Given 部屋が無い When POST Then 201 と部屋を返す\n'
+                     '- CHAT-R1.11 Given 見送り When POST Then 404\n')
+            _, _, readme, _ = _merge(_merge_draft(delta), README_REAL)
+            assert '### 要件 CHAT-R1: 入居者が会話を開いたとき、システムは部屋を作る\n' in readme, readme
+            assert '- CHAT-R1.1 Given 部屋が無い When POST Then 201 と部屋を返す\n' in readme and '確かめ: [`a.test.ts`]' not in readme, readme
+            assert '- CHAT-R1.2 Given 部屋がある When POST Then 200 ／ 確かめ: なし\n' in readme, '書かない R1.2 が消えた'
+            assert '- CHAT-R1.10 Given 相談した When accept Then 続けて POST' in readme and '  （補足の続きの行）\n' in readme, 'R1.10 が R1.1 に巻き込まれた'
+            assert '- CHAT-R1.11 Given 見送り When POST Then 404\n' in readme, '現在形に無い ID が足されていない'
+            assert readme.index('CHAT-R1.10') < readme.index('CHAT-R1.11') < readme.index('### 要件 CHAT-R2'), '足した受入が要件ブロックの末尾に入っていない'
+            assert '- CHAT-R2.1 Given a When b Then c' in readme
+
+        t('design-merge: 変更は書いた受入の ID の行だけ差し替え、現在形に無い ID は足し、書かない ID は残す（R1.1 が R1.10 を巻き込まない）', _design_merge_replaces_only_written_acceptance_ids)
+
+        def _design_merge_refuses_arrow_heading() -> None:
+            for heading in ('旧い文 → 新しい文', '（旧い文 → 新しい文）'):
+                delta = '### 変更された要件\n\n### 要件 CHAT-R2: ' + heading + '\n- CHAT-R2.1 Given x When y Then z\n'
+                _assert_merge_refused(_merge_draft(delta), 1, '変更後の文だけ')
+
+        t('design-merge: 変更の見出しに → があれば、何も書かず exit 1（見出しは変更後の文だけ）', _design_merge_refuses_arrow_heading)
+
+        def _design_merge_refuses_foreign_acceptance_id() -> None:
+            delta = '### 変更された要件\n\n### 要件 CHAT-R2: y\n- CHAT-R3.1 Given x When y Then z\n'
+            _assert_merge_refused(_merge_draft(delta), 1, 'CHAT-R3.1')
+
+        t('design-merge: 変更の要件に属さない受入の ID（CHAT-R2 の下の CHAT-R3.1）は何も書かず exit 1', _design_merge_refuses_foreign_acceptance_id)
+
+        def _design_merge_deletes_acceptance_unit_and_requirement_unit() -> None:
+            # 4-B: 「- ID.n」はその受入の行だけを消し（続きの行も）、「- ID」は要件ブロックを消す
+            delta = '### 削除された要件\n\n- CHAT-R1.10（統合した）\n- CHAT-R2（廃止）\n'
+            out, _, readme, _ = _merge(_merge_draft(delta), README_REAL)
+            assert 'CHAT-R1.10' not in readme and '補足の続きの行' not in readme, readme
+            assert 'CHAT-R1.1 ' in readme and 'CHAT-R1.2 ' in readme, '消す受入以外が消えた'
+            assert '### 要件 CHAT-R1:' in readme, '受入の単位の削除で要件ブロックまで消えた'
+            assert 'CHAT-R2' not in readme, '要件の単位の削除でブロックが残った'
+            parsed = gh_task.parse_delta(_merge_draft(delta).splitlines())
+            assert parsed['deleted'][0][0] == 'CHAT-R2' and parsed['unreadable'] == [], parsed
+            assert '削除 1 件' in out and '受入の削除 1 件' in out, out
+
+        t('design-merge: 削除の「- ID.n」はその受入の行だけを、「- ID」は要件ブロックを消す', _design_merge_deletes_acceptance_unit_and_requirement_unit)
+
+        def _design_merge_refuses_deleting_missing_acceptance() -> None:
+            _assert_merge_refused(_merge_draft('### 削除された要件\n\n- CHAT-R2.9（無い）\n'), 1, 'CHAT-R2.9')
+            _assert_merge_refused(_merge_draft('### 削除された要件\n\n- CHAT-R8.1（要件ごと無い）\n'), 1, 'CHAT-R8.1')
+            _assert_merge_refused(_merge_draft('### 削除された要件\n\n- CHAT-R2（x）\n- CHAT-R2.1（y）\n'), 1, '重複')
+            both = ('### 変更された要件\n\n### 要件 CHAT-R2: y\n- CHAT-R2.1 Given a When b Then c\n\n'
+                    '### 削除された要件\n\n- CHAT-R2.1（z）\n')
+            _assert_merge_refused(_merge_draft(both), 1, '重複')
+
+        t('design-merge: 現在形に無い受入・要件の削除、同じ ID を書き直しと削除の両方に書く差分は、何も書かず exit 1', _design_merge_refuses_deleting_missing_acceptance)
 
         def _design_merge_refuses_escaping_domain() -> None:
             # 指摘 2: domain を 1 つの段として検査し、docs/4-domains の外を書かない
@@ -3556,7 +3612,8 @@ def main() -> int:
         t('design-merge: domain が 1 つの段（英小文字・数字・ハイフン）でない・README の domain: と違うときは何も書かず exit 1', _design_merge_refuses_escaping_domain)
 
         def _design_merge_refuses_dash_domain() -> None:
-            _assert_merge_refused(_merge_draft(DELTA_OK, domain='—'), 1, '領域を 1 つに')
+            _assert_merge_refused(_merge_draft(DELTA_OK, domain='—'), 1, '手で当てる')
+            _assert_merge_refused(_merge_draft(DELTA_OK, domain='chat, agent'), 1, '手で当てる')
 
         t('design-merge: domain が「—」なら領域を 1 つに決められないと exit 1', _design_merge_refuses_dash_domain)
 
@@ -3569,19 +3626,9 @@ def main() -> int:
 
         t('design-merge: 「なし。」「なし（理由）。」は空の区分として通す', _design_merge_accepts_nashi_with_punctuation)
 
-        def _new_sentence_cases() -> None:
-            # 指摘 10(5)・12
-            assert gh_task._new_sentence('（旧 → 新） ') == '新'
-            assert gh_task._new_sentence('（a → b）') == 'b'
-            assert gh_task._new_sentence('旧 → お気に入り → 作成順で返す') == 'お気に入り → 作成順で返す'
-            assert gh_task._new_sentence('（旧 → 新しい順に返す（FR-1））') == '新しい順に返す（FR-1）'
-            assert gh_task._new_sentence('旧い文だけ') == '旧い文だけ'
-
-        t('design-merge: 変更後の文は最初の → の後ろ全部で、外側の括弧だけを 1 組外す', _new_sentence_cases)
-
         def _design_merge_refuses_stray_lines_and_duplicates() -> None:
             # 指摘 13
-            stray = ('### 変更された要件\n\n### 要件 CHAT-R2: x → y\n- CHAT-R2.1 z\n\n#### 補足\n本文\n')
+            stray = ('### 変更された要件\n\n### 要件 CHAT-R2: y\n- CHAT-R2.1 z\n\n#### 補足\n本文\n')
             _assert_merge_refused(_merge_draft(stray), 1, '要件ブロック')
             dup = ('### 追加された要件\n\n### 要件 ATT-R1: a\n- ATT-R1.1 Given a When b Then c\n\n'
                    '### 要件 ATT-R1: b\n- ATT-R1.1 Given a When b Then c\n')

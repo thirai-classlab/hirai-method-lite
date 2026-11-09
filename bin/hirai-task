@@ -2599,7 +2599,9 @@ def cmd_impact(argv: list[str]) -> int:
 # ── design-merge（承認済みの提案の差分を層 4 の現在形に当てる）（DS-08） ────────────
 _REQ_HEADING_RE = re.compile(r'^###\s+要件\s+([A-Z][A-Z0-9]*-R\d+)\s*[:：]\s*(.*?)\s*$')
 _DELETED_ID_RE = re.compile(r'^[-*]\s+([A-Z][A-Z0-9]*-R\d+)(?![.\d])')
+_DELETED_ACCEPTANCE_RE = re.compile(r'^[-*]\s+([A-Z][A-Z0-9]*-R\d+\.\d+)(?!\d)')
 _ACCEPTANCE_LINE_RE = re.compile(r'^-\s+[A-Z][A-Z0-9]*-R\d+\.\d+(?![\d])')
+_ACCEPTANCE_ID_RE = re.compile(r'^-\s+([A-Z][A-Z0-9]*-R\d+)\.(\d+)(?!\d)')
 _EMPTY_SECTION_RE = re.compile(r'^なし(?:[。.]|[（(].*[）)][。.]?)?$')
 _DELTA_HEADINGS = {'### 追加された要件': 'added', '### 変更された要件': 'changed', '### 削除された要件': 'deleted'}
 _DOMAIN_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')  # docs/4-domains/ の下の 1 つの段
@@ -2628,7 +2630,7 @@ def parse_delta(lines: list[str]) -> dict:
     """提案の「## 2. 目指す状態」の 3 区分を読む。要件ブロックは (ID, 見出しの文, 本文の行)。
     ブロックの形でない中身（表など）は unreadable に区分の名前で入れる。"""
     span = _section_range(lines, re.compile(r'^##\s+2\.\s'))
-    delta: dict = {'added': [], 'changed': [], 'deleted': [], 'unreadable': []}
+    delta: dict = {'added': [], 'changed': [], 'deleted': [], 'deleted_acceptance': [], 'unreadable': []}
     if span is None:
         delta['missing_section'] = True
         return delta
@@ -2659,8 +2661,11 @@ def parse_delta(lines: list[str]) -> dict:
             continue
         if mode == 'deleted':
             found = _DELETED_ID_RE.match(stripped)
+            found_acceptance = _DELETED_ACCEPTANCE_RE.match(stripped)
             if found:
                 delta['deleted'].append((found.group(1), '', []))
+            elif found_acceptance:
+                delta['deleted_acceptance'].append(found_acceptance.group(1))
             elif stripped and not _EMPTY_SECTION_RE.match(stripped):
                 other[mode].append(stripped)
         elif block is not None:
@@ -2677,15 +2682,52 @@ def parse_delta(lines: list[str]) -> dict:
     return delta
 
 
-def _new_sentence(heading_text: str) -> str:
-    """変更された要件の見出しの文（変更前の文 → 変更後の文）から、変更後の文を取る。→ が無ければ全体。"""
-    text = heading_text.strip()
-    if '→' not in text:
-        return text
-    after = text.split('→', 1)[1].strip()
-    if text.startswith(('（', '(')) and after.endswith(('）', ')')):
-        after = after[:-1]  # 先頭の「（」と対になる 1 個だけを外す
-    return after.strip()
+def _acceptance_units(lines: list[str]) -> list[tuple[str | None, list[str]]]:
+    """要件ブロックの本文を (受入の ID か None, 行) の単位に分ける。受入の行（行頭の `- <ID>.<n>`）とその続きの行
+    （字下げのある行）が 1 単位。ID の無い単位は受入の前後の行（空行・補足）。"""
+    units: list[tuple[str | None, list[str]]] = []
+    for line in lines:
+        found = _ACCEPTANCE_ID_RE.match(line)
+        if found:
+            units.append((f'{found.group(1)}.{found.group(2)}', [line]))
+        elif units and units[-1][0] is not None and line[:1].isspace() and line.strip():
+            units[-1][1].append(line)
+        else:
+            units.append((None, [line]))
+    return units
+
+
+def _merge_acceptances(
+    current: list[str], rewrites: list[str], removals: set[str],
+) -> list[str]:
+    """現在形の要件ブロックの本文（見出しの次の行から）に、書いた受入の行を差し替え・足し、消す受入を落とす。
+    書いていない受入は残す。足す受入は最後の受入の次（無ければ本文の末尾）に入れる。"""
+    units = _acceptance_units(current)
+    new_by_id: dict[str, list[str]] = {}
+    for line in rewrites:
+        found = _ACCEPTANCE_ID_RE.match(line)
+        if found:
+            new_by_id[f'{found.group(1)}.{found.group(2)}'] = [line]
+        elif line.strip() and new_by_id:
+            last = list(new_by_id)[-1]
+            new_by_id[last].append(line)
+    result: list[tuple[str | None, list[str]]] = []
+    for acceptance_id, unit in units:
+        if acceptance_id in removals:
+            continue
+        if acceptance_id in new_by_id:
+            result.append((acceptance_id, new_by_id.pop(acceptance_id)))
+        else:
+            result.append((acceptance_id, unit))
+    if new_by_id:
+        last_acceptance = max((i for i, (a, _) in enumerate(result) if a is not None), default=None)
+        added = [(k, v) for k, v in new_by_id.items()]
+        if last_acceptance is None:
+            body = _trim_trailing_blank([ln for _, u in result for ln in u])
+            result = [(None, body)] + added + [(None, [''])]
+        else:
+            result[last_acceptance + 1:last_acceptance + 1] = added
+    return [ln for _, unit in result for ln in unit]
 
 
 def _requirement_blocks(lines: list[str], span: tuple[int, int]) -> dict[str, tuple[int, int]]:
@@ -2727,13 +2769,47 @@ def apply_delta(readme: list[str], delta: dict) -> tuple[list[str] | None, list[
         for req_id, _, _ in delta[kind]:
             if req_id not in blocks:
                 problems.append(f'{label} {req_id} が現在形に無い（変更先の要件 ID が無い）')
+    rewrites: dict[str, list[str]] = {}
+    for req_id, text, body in delta['changed']:
+        if '→' in text:
+            problems.append(f'変更された要件 {req_id} の見出しに → がある。見出しは変更後の文だけを書く（変更前の文は §3 か PR に書く）')
+        written: set[str] = set()
+        for line in body:
+            found = _ACCEPTANCE_ID_RE.match(line)
+            if not found:
+                continue
+            acceptance_id = f'{found.group(1)}.{found.group(2)}'
+            if found.group(1) != req_id:
+                problems.append(f'変更された要件 {req_id} の下に、別の要件の受入 {acceptance_id} がある')
+            if acceptance_id in written:
+                problems.append(f'受入 {acceptance_id} が変更の中で重複している')
+            written.add(acceptance_id)
+        rewrites[req_id] = body
+    removals: dict[str, set[str]] = {}
+    deleted_requirements = {r for r, _, _ in delta['deleted']}
+    rewritten = {f'{m.group(1)}.{m.group(2)}' for body in rewrites.values() for m in map(_ACCEPTANCE_ID_RE.match, body) if m}
+    for acceptance_id in delta.get('deleted_acceptance', []):
+        req_id = acceptance_id.rsplit('.', 1)[0]
+        if acceptance_id in removals.get(req_id, set()):
+            problems.append(f'受入 {acceptance_id} が削除の中で重複している')
+        elif req_id in deleted_requirements:
+            problems.append(f'受入 {acceptance_id} は、要件 {req_id} ごと削除する差分の中で重複している')
+        elif acceptance_id in rewritten:
+            problems.append(f'受入 {acceptance_id} が変更と削除の両方に重複している')
+        elif req_id not in blocks:
+            problems.append(f'削除された受入 {acceptance_id} の要件 {req_id} が現在形に無い')
+        elif acceptance_id not in {a for a, _ in _acceptance_units(readme[blocks[req_id][0] + 1:blocks[req_id][1]]) if a}:
+            problems.append(f'削除された受入 {acceptance_id} が現在形に無い')
+        removals.setdefault(req_id, set()).add(acceptance_id)
     if problems:
         return None, problems
     replacements: dict[str, list[str] | None] = {}
-    for req_id, text, body in delta['changed']:
+    changed_text = {r: t for r, t, _ in delta['changed']}
+    for req_id in sorted(set(rewrites) | set(removals), key=lambda r: blocks[r][0]):
         start, end = blocks[req_id]
-        kept = [ln for ln in readme[start + 1:end]] if not any(ln.strip() for ln in body) else body
-        replacements[req_id] = [f'### 要件 {req_id}: {_new_sentence(text)}'] + _trim_trailing_blank(kept) + ['']
+        heading = f'### 要件 {req_id}: {changed_text[req_id].strip()}' if req_id in changed_text else readme[start]
+        body = _merge_acceptances(_trim_trailing_blank(readme[start + 1:end]), rewrites.get(req_id, []), removals.get(req_id, set()))
+        replacements[req_id] = [heading] + _trim_trailing_blank(body) + ['']
     for req_id, _, _ in delta['deleted']:
         replacements[req_id] = None
     result: list[str] = []
@@ -2787,7 +2863,7 @@ def cmd_design_merge(argv: list[str]) -> int:
     if not _DOMAIN_NAME_RE.match(domain):
         die(
             f'取り込み先の領域を 1 つに決められない（domain: {domain or "空"}）。'
-            '現在形 docs/4-domains/<領域>/README.md を 1 つ指す domain: が要る', 1,
+            '現在形 docs/4-domains/<領域>/README.md を 1 つ指す domain: が要る。領域が 2 つ以上・— の提案は手で当てる', 1,
         )
     docs_dir = os.path.dirname(os.path.dirname(os.path.abspath(path)))
     readme_relative = os.path.join('docs', '4-domains', domain, 'README.md')
@@ -2807,7 +2883,7 @@ def cmd_design_merge(argv: list[str]) -> int:
             f'{path} の差分（{"・".join(delta["unreadable"])}）が要件ブロック（`### 要件 <ID>: …` と `- <ID>.<n> …`）の形でない。'
             '何も書いていない', 1,
         )
-    if not (delta['added'] or delta['changed'] or delta['deleted']):
+    if not (delta['added'] or delta['changed'] or delta['deleted'] or delta['deleted_acceptance']):
         die(f'{path} の差分が空（追加・変更・削除がすべて「なし」）で、当てるものが無い。何も書いていない', 1)
     merged, problems = apply_delta(readme, delta)
     if merged is None:
@@ -2842,7 +2918,7 @@ def cmd_design_merge(argv: list[str]) -> int:
             if os.path.exists(tmp):
                 os.remove(tmp)
     print(f'design-merge: {path} → {readme_relative}')
-    print(f'  追加 {len(delta["added"])} 件・変更 {len(delta["changed"])} 件・削除 {len(delta["deleted"])} 件' + (f'・{rev_text}' if rev_text else ''))
+    print(f'  追加 {len(delta["added"])} 件・変更 {len(delta["changed"])} 件・削除 {len(delta["deleted"])} 件' + (f'・受入の削除 {len(delta["deleted_acceptance"])} 件' if delta['deleted_acceptance'] else '') + (f'・{rev_text}' if rev_text else ''))
     print(f'  提案の先頭: status: {status} → {MERGED_STATUS}・merged_into: {readme_relative}')
     for line in difflib.unified_diff(readme, merged, readme_relative, readme_relative, lineterm='', n=1):
         print(line)
