@@ -3562,6 +3562,32 @@ def main() -> int:
 
         t('start: 提案の変更された要件の表の「前」の列にある [要判断] では止めない（「後」の列の印は止める）', _before_column_judgment_does_not_stop)
 
+        def _other_before_headers_do_not_stop() -> None:
+            # 実在の提案の見出し: 変える前 | 変えた後 / 変更前 | 変更後 / 今 | 後 / 1 列の「変更前 → 後」
+            for header, row in (('| ID | 変える前 | 変えた後 |', '| PROP-R11.2 | 保存先 `[要判断: PROP-Q14]` | FAV-R1〜R2 を満たす |'),
+                                ('| ID | 変更前 | 変更後 |', '| PROP-R11.2 | 保存先 `[要判断: PROP-Q14]` | FAV-R1〜R2 を満たす |'),
+                                ('| ID | 今 | 後 |', '| PROP-R11.2 | 保存先 `[要判断: PROP-Q14]` | FAV-R1〜R2 を満たす |'),
+                                ('| ID | 変更前 → 後 |', '| PROP-R11.2 | 保存先 `[要判断: PROP-Q14]` → FAV-R1〜R2 を満たす |')):
+                proposal = FAV_TABLE_PROPOSAL.replace(
+                    '### 削除された要件', f'### 変更された要件\n\n{header}\n|---|---|---|\n{row}\n\n### 削除された要件')
+                root = _ds_tree({**BUNDLE_FILES, FAV_REL: proposal})
+                reads = gh_task.build_reads('FAV-R1', 'chat', root, slug='fav')
+                mark = {'reqs': 'FAV-R1', 'reads': ','.join(reads)}
+                assert gh_task.bundle_stops(mark, root) == [], header
+            after = proposal.replace('→ FAV-R1〜R2 を満たす', '→ FAV-R1〜R2 を満たす `[要判断: FAV-Q1]`')
+            root2 = _ds_tree({**BUNDLE_FILES, FAV_REL: after})
+            assert [k for k, _t in gh_task.bundle_stops(mark, root2)] == ['judgment']  # → のあとは止める
+
+        t('start: 「変える前」「変更前」「今」「変更前 → 後」の列の [要判断] でも止めない', _other_before_headers_do_not_stop)
+
+        def _bare_number_continues_only_right_after_id() -> None:
+            assert gh_task.expand_ids('NTFM-R8 | SMS を送るとき、8:00〜22:00 に') == ['NTFM-R8'], gh_task.expand_ids('NTFM-R8 | SMS を送るとき、8:00〜22:00 に')
+            assert gh_task.expand_ids('SAVED-R3 は 関東ほか1・〜12万円') == ['SAVED-R3']
+            assert gh_task.expand_ids('FAV-R1・R2〜R4・6') == ['FAV-R1', 'FAV-R2', 'FAV-R3', 'FAV-R4', 'FAV-R6']
+            assert gh_task.expand_ids('FAV-R1〜3') == ['FAV-R1', 'FAV-R2', 'FAV-R3']
+
+        t('reads: ID の頭を省いた数字は直前の ID に続くときだけ ID（時刻・金額の〜は ID にしない）', _bare_number_continues_only_right_after_id)
+
         def _domain_dash_keeps_reqs_fr_and_uc_with_proposal_section() -> None:
             reads = _build_fav('FAV-R1, FR-CHT-002, UC-06', FAV_HEADING_PROPOSAL.replace('FR-CHT-001・UC-06・', ''), '—')
             assert reads[0] == 'docs/draft/fav.md#要件-fav-r1', reads

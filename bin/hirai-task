@@ -2500,12 +2500,13 @@ def expand_ids(text: str) -> list[str]:
     枝つきのまま返す。"""
     found: list[str] = []
     prev: tuple[str, str] | None = None  # (頭, 数字の文字列)
+    prev_end = -1  # 直前の ID の終わりの位置
     for match in _ID_TOKEN_RE.finditer(text):
         if match.group('full') is not None:
             prefix, digits, sub = match.group('full'), match.group('n'), match.group('sub')
         else:
-            if prev is None:
-                continue
+            if prev is None or prev_end != match.start() - 1:
+                continue  # 「ID・R2」「ID〜12」のように直前の ID に続くものだけ（「8:00〜22:00」「〜12万円」は ID でない）
             prefix, digits, sub = prev[0], match.group('sn'), match.group('ssub')
         if match.start() > 0 and text[match.start() - 1] == '〜' and prev and prev[0] == prefix and not sub:
             first, last = int(prev[1]), int(digits)
@@ -2513,6 +2514,7 @@ def expand_ids(text: str) -> list[str]:
                 found.extend(f'{prefix}{number:0{len(digits)}d}' for number in range(first + 1, last))
         found.append(f'{prefix}{digits}{sub}')
         prev = (prefix, digits)
+        prev_end = match.end()
     return list(dict.fromkeys(found))
 
 
@@ -2544,11 +2546,11 @@ def bundle_open_judgments(mark: dict[str, str] | None, root: str | None = None) 
     return _scan_bundle(mark, root)[1]
 
 
-_BEFORE_COLUMNS = ('前', 'いま')
+_BEFORE_COLUMN_RE = re.compile(r'(?:変更|変える)?前|いま|今')
 
 
 def _scan_text(lines: list[str], number: int, is_draft: bool) -> str:
-    """止める検査で読む行の文。提案（docs/draft/）の表の行は、見出し行が「前」「いま」の列を、その列の中身を落として読む
+    """止める検査で読む行の文。提案（docs/draft/）の表の行は、見出し行が「前」「変更前」「変える前」「いま」「今」の列（「変更前 → 後」の 1 列は → より前の半分）を、その列の中身を落として読む
     （変更された要件の表の「前」は旧い README の文の引用で、そこの [要判断] は裁定のあとも残る）。"""
     line = lines[number]
     if not is_draft or not line.lstrip().startswith('|'):
@@ -2557,11 +2559,12 @@ def _scan_text(lines: list[str], number: int, is_draft: bool) -> str:
     while start > 0 and lines[start - 1].lstrip().startswith('|'):
         start -= 1
     header = [c.strip() for c in lines[start].strip().strip('|').split('|')]
-    skip = {i for i, c in enumerate(header) if c in _BEFORE_COLUMNS}
-    if not skip or start == number:
+    skip = {i for i, c in enumerate(header) if _BEFORE_COLUMN_RE.fullmatch(c)}
+    arrow = {i for i, c in enumerate(header) if '→' in c and c.split('→')[0].strip() and _BEFORE_COLUMN_RE.fullmatch(c.split('→')[0].strip())}
+    if (not skip and not arrow) or start == number:
         return line
     cells = line.strip().strip('|').split('|')
-    return '|'.join('' if i in skip else c for i, c in enumerate(cells))
+    return '|'.join('' if i in skip else (c.split('→', 1)[1] if i in arrow and '→' in c else c) for i, c in enumerate(cells))
 
 
 def _scan_bundle(mark: dict[str, str] | None, root: str | None = None) -> tuple[list[tuple[str, str]], list[str]]:
