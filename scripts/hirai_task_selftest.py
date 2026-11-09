@@ -3440,6 +3440,24 @@ def main() -> int:
 
         t('new --from-table --dry-run: 行ごとに読む束の件数を出す', _dry_run_prints_bundle_size)
 
+        def _warns_when_requirement_is_only_in_the_proposal() -> None:
+            root = _ds_tree(BUNDLE_FILES)
+            # 提案の ID（TBL-R1）は README の `### 要件` に無い。README の ID と、受入の ID は見つかる
+            assert gh_task.unresolved_requirements('TBL-R1・TBL-R2', 'chat', root) == ['TBL-R1', 'TBL-R2']
+            assert gh_task.unresolved_requirements('CHAT-R1, CHAT-R3.1, TBL-R9', 'chat', root) == ['TBL-R9']
+            assert gh_task.unresolved_requirements('TBL-R1', '—', root) == []  # README が無い提案は比べない
+            with open(_table_draft('tbl-bundle.md'), encoding='utf-8') as f:
+                draft = f.read().replace('domain: —', 'domain: chat')
+            path = _draft_path('tbl-bundle3.md', draft)
+            rc, out = _with_root(root, lambda: _from_table(path, '--dry-run'))
+            assert rc == 0 and '警告: 要件の節が見つからない: TBL-R1' in out, out
+            with open(_table_draft('tbl-bundle.md'), encoding='utf-8') as f:
+                ok = f.read().replace('domain: —', 'domain: chat').replace('TBL-R1', 'CHAT-R1')
+            rc, out = _with_root(root, lambda: _from_table(_draft_path('tbl-bundle4.md', ok), '--dry-run'))
+            assert rc == 0 and '警告' not in out, out
+
+        t('new --from-table: reqs の ID が README の要件に無いとき「要件の節が見つからない」と警告する', _warns_when_requirement_is_only_in_the_proposal)
+
         def _rev_drift_compares_per_domain() -> None:
             root = _rev_tree(4)
             drift = gh_task.rev_drift({'rev': 'chat:3,proposal:5'}, root)
@@ -3676,7 +3694,7 @@ def main() -> int:
             passes = {
                 '印の無い束': ({readme: CLEAN_README, 'docs/draft/tbl.md': _draft_file('承認')}, reads),
                 '束の file が無い': ({}, reads),
-                '失効した src は束に入っていない': ({readme: CLEAN_README, 'docs/draft/tbl.md': _draft_file('失効')}, readme),
+                '承認の src は束に入っていなくても通る': ({readme: CLEAN_README, 'docs/draft/tbl.md': _draft_file('承認')}, readme),
             }
             for label, (files, bundle) in passes.items():
                 rc, message, out, record = _start_in_tree(files, _mark('TBL-01', 'tbl@PR9', bundle).replace('rev=1 ', ''))
@@ -3893,6 +3911,30 @@ def main() -> int:
             assert rc == 0, msg
 
         t('start --reread: 取り込み済みの src の task は reread=<日付> を足して着手し、2 回目の start は止まらない', _reread_marks_merged_src)
+
+        def _start_checks_src_draft_even_with_reads() -> None:
+            # #1617 の前は reads= が無く src= の提案の status で止まっていた。reads= が付いても（提案が束に入らなくても）止める
+            readme = 'docs/4-domains/chat/README.md'
+            clean = _readme(4) + '\n## 7. 要件と受入\n印の無い節。\n'
+            for status, kind in (('失効', 'expired'), ('取り込み済み', 'merged')):
+                files = {readme: clean, 'docs/draft/tbl.md': _draft_file(status)}
+                body = _mark('TBL-01', 'tbl@PR9', f'{readme}#7.-要件と受入').replace('rev=1 ', '')
+                stops = gh_task.bundle_stops(gh_task.parse_task_mark(body), _ds_tree(files))
+                assert [k for k, _t in stops] == [kind], (status, stops)
+                rc, message, _out, record = _start_in_tree(files, body)
+                assert rc == 2 and '着手不可' in message and 'src=tbl' in message and status in message and record == [], (status, rc, message)
+            # 提案が束にも入っているときは理由を二重に出さない
+            both = _mark('TBL-01', 'tbl@PR9', f'{readme}#7.-要件と受入,docs/draft/tbl.md').replace('rev=1 ', '')
+            stops = gh_task.bundle_stops(gh_task.parse_task_mark(both), _ds_tree({readme: clean, 'docs/draft/tbl.md': _draft_file('失効')}))
+            assert len(stops) == 1, stops
+            # --reread で抜けられるのは取り込み済みだけ（失効は止めたまま）
+            body = _mark('TBL-01', 'tbl@PR9', f'{readme}#7.-要件と受入')
+            merged = _reread_run({readme: clean, 'docs/draft/tbl.md': _draft_file('取り込み済み')}, body)
+            assert merged['rc'] == 0 and 'reread=' in merged['patches'][0]['body'], merged
+            expired = _reread_run({readme: clean, 'docs/draft/tbl.md': _draft_file('失効')}, body)
+            assert expired['rc'] == 2 and expired['patches'] == [], expired
+
+        t('start: reads= と src= を両方持つ目印でも、src= の提案が失効なら止まり、取り込み済みなら止まって --reread で抜ける', _start_checks_src_draft_even_with_reads)
 
         def _reread_approved_operation_rewrites_mark_first() -> None:
             files = {'docs/4-domains/chat/README.md': _readme(4), 'docs/4-domains/proposal/README.md': _readme(5).replace('chat', 'proposal')}
