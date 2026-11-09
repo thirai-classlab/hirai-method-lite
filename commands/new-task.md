@@ -58,6 +58,10 @@ task と feature は親が必須。親は feature（task の場合）か wave（
 
 ラベル bug を付ける task（`--label-bug`）は、不具合の出た機能の、いま進んでいる wave の feature に付ける。親は bug でも必須。決められなければ作らず、候補を添えて人に聞く。親を無理にこじつけない。
 
+### 設計と issue の突き合わせ
+
+設計（新しい形の draft）から起票した task は、本文の先頭の `rmp-task` の目印で設計と結ばれている。起票のあとと設計 PR の merge のあとに `hirai-task coverage` を回すと、承認済みの提案の表にあって issue が無い行（起票漏れ）、提案の承認が進んだのに古い版を指している open の issue、失効した提案を指す open の issue が出る。設計の「位置と前後」（11-1）の `#番号` の状態は `hirai-task impact <draft>` で引く。設計が実装されたあと、差分を現在形（`docs/4-domains/<領域>/README.md`）に当てるのは `hirai-task design-merge <draft>`（承認は要らない。結果は PR で見える）。
+
 判定できる終了条件: `hirai-task new` が exit 0 で、作った issue 番号を報告できたこと。成立しなければ原因を 1 行で報告して停止する。
 
 ## 台帳の解決 (最初に 1 回)

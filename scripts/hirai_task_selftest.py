@@ -3072,6 +3072,725 @@ def main() -> int:
 
         t('new --from-table: 新しい形（id_prefix: と 11-3 の表）でない draft は断る', _from_table_refuses_old_form)
 
+        # ── start・show の読む束 / coverage / impact / design-merge（#816〜#818） ──
+        def _ds_tree(files: dict[str, str]) -> str:
+            root = os.path.realpath(tempfile.mkdtemp(dir=cache_tmp_dir))
+            for rel, text in files.items():
+                full = os.path.join(root, rel)
+                os.makedirs(os.path.dirname(full), exist_ok=True)
+                with open(full, 'w', encoding='utf-8') as f:
+                    f.write(text)
+            return root
+
+        def _read(path: str) -> str:
+            with open(path, encoding='utf-8') as f:
+                return f.read()
+
+        def make_ds_board_gh(rows: list[dict], bodies: dict[int, str], extras: dict[int, list[int]] | None = None, *, calls: list):
+            """Project の全件・本文の alias・blockedBy の alias に答える偽 gh。呼び出しを calls に控える。"""
+            extras = extras or {}
+
+            def fake_run_gh(args: list[str], input_text: str | None = None) -> tuple[int, str, str]:
+                joined = ' '.join(args)
+                calls.append(joined[:80])
+                if 'projectsV2' in joined and 'items(first:' not in joined:
+                    return _discovery_response()
+                if 'items(first:' in joined:
+                    nodes = [_fake_row(**row) for row in rows]
+                    body = {'data': {'repository': {'projectV2': {
+                        'items': {'pageInfo': {'hasNextPage': False, 'endCursor': None}, 'nodes': nodes}}}}}
+                    return 0, json.dumps(body), ''
+                numbers = [int(x) for x in re.findall(r'issue\(number:\s*(\d+)\)', joined)]
+                if re.search(r'\bi0:', joined) and 'blockedBy' in joined:
+                    data = {f'i{i}': {'issue': {'number': n, 'blockedBy': {
+                        'totalCount': len(extras.get(n, [])),
+                        'nodes': [{'number': b, 'state': 'OPEN'} for b in extras.get(n, [])]},
+                        'closedByPullRequestsReferences': {'nodes': []}}} for i, n in enumerate(numbers)}
+                    return 0, json.dumps({'data': data}), ''
+                if re.search(r'\bi0:', joined):
+                    data = {f'i{i}': {'issue': {'number': n, 'body': bodies.get(n, '')}} for i, n in enumerate(numbers)}
+                    return 0, json.dumps({'data': data}), ''
+                return 1, '', f'unhandled fake gh call: {joined[:120]}'
+
+            return fake_run_gh
+
+        def _mark(row_id: str, src: str, reads: str = '') -> str:
+            reads_part = f' reads={reads}' if reads else ''
+            return f'<!-- rmp-task: id={row_id} rev=1 stream=Infra src={src} reqs=TBL-R1{reads_part} -->\n\n## 完了条件\nx\n'
+
+        # -- 読む束（#816・DS-R1.1） --
+        READS = 'docs/4-domains/chat/README.md#7.-要件と受入,docs/3-shared/auth.md#境界'
+
+        def _bundle_lines_from_mark() -> None:
+            lines = gh_task.reading_bundle_lines(_mark('TBL-01', 'tbl@PR9', READS))
+            assert lines[0].startswith('読む束（2 件'), lines
+            assert lines[1].strip() == '1. docs/4-domains/chat/README.md#7.-要件と受入', lines
+            assert lines[2].strip() == '2. docs/3-shared/auth.md#境界', lines
+            assert gh_task.reading_bundle_lines('旧い本文\n') == ['読む束なし（旧い形）']
+            assert gh_task.reading_bundle_lines(_mark('TBL-01', 'tbl@PR9'))[0].startswith('読む束なし（目印に reads=')
+
+        t('読む束: 目印の reads= を 1 件 1 行で出し、目印が無ければ「読む束なし（旧い形）」', _bundle_lines_from_mark)
+
+        BODY_WITH_PATHS = (
+            '## 参照\n- docs/4-domains/chat/README.md:411-423 を読む\n- `docs/harness/doc-formats.md`（形式）\n'
+            '- 再掲 docs/4-domains/chat/README.md:411-423 と docs/4-domains/chat/README.md#7.-要件と受入\n'
+            '- ../other/docs/not-this.md と apps/docs/x.md は拾わない\n')
+
+        def _bundle_lists_body_paths_without_reads() -> None:
+            expect = ['docs/4-domains/chat/README.md:411-423', 'docs/harness/doc-formats.md', 'docs/4-domains/chat/README.md#7.-要件と受入']
+            tree = _ds_tree({'docs/4-domains/chat/README.md': 'x\n', 'docs/harness/doc-formats.md': 'x\n'})
+            for body in (_mark('TBL-01', 'tbl@PR9') + BODY_WITH_PATHS, '旧い本文\n' + BODY_WITH_PATHS):
+                lines = gh_task.reading_bundle_lines(body, tree)
+                assert lines[0].startswith('読む束なし') and '3 件' in lines[0], lines
+                assert [x.strip().lstrip('- ').strip() for x in lines[1:]] == expect, lines
+            # 指摘 2: 作業ツリーの根に無い path は「まだ無い」として分けて出す
+            lines = gh_task.reading_bundle_lines('旧い\ndocs/draft/new.md と docs/harness/doc-formats.md\n', tree)
+            assert lines[-1] == '  - docs/draft/new.md（まだ無い）' and '  - docs/harness/doc-formats.md' in lines, lines
+            # reads= があれば本文の path は出さない
+            with_reads = gh_task.reading_bundle_lines(_mark('TBL-01', 'tbl@PR9', READS) + BODY_WITH_PATHS)
+            assert with_reads[0].startswith('読む束（2 件') and not any('doc-formats' in x for x in with_reads), with_reads
+            # 本文に path が無ければ今の 1 行のまま
+            assert gh_task.reading_bundle_lines(_mark('TBL-01', 'tbl@PR9') + 'path なし\n') == ['読む束なし（目印に reads= が無い）']
+
+        t('読む束: reads= が無い issue（目印あり・なし）は本文の docs/ の path（path:line を含む）を重複なく一覧で出す', _bundle_lists_body_paths_without_reads)
+
+        def _start_prints_body_paths_without_reads() -> None:
+            gh_task.run_gh = make_write_gh(
+                {723: dict(title='task', status=gh_task.READY_STATUS, kind='task', body=_mark('T', 's@PR1') + BODY_WITH_PATHS)}, record=[])
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = gh_task.cmd_start(723, None)
+            assert rc == 0 and 'docs/4-domains/chat/README.md:411-423' in buf.getvalue(), buf.getvalue()
+
+        t('start: reads= が無い issue は本文の path の一覧を読む束として出す', _start_prints_body_paths_without_reads)
+
+        def _start_prints_bundle() -> None:
+            record: list = []
+            for body, expect in ((_mark('TBL-01', 'tbl@PR9', READS), '1. docs/4-domains/chat/README.md'), ('旧い', '読む束なし（旧い形）')):
+                gh_task.run_gh = make_write_gh(
+                    {720: dict(title='task', status=gh_task.READY_STATUS, kind='task', body=body)}, record=record)
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    rc = gh_task.cmd_start(720, None)
+                assert rc == 0 and expect in buf.getvalue(), buf.getvalue()
+                assert f'Status={gh_task.IN_PROGRESS_STATUS}' in buf.getvalue()
+
+        t('start: 着手したあとに読む束を出す（目印なしは「読む束なし（旧い形）」）', _start_prints_bundle)
+
+        def _start_refused_prints_no_bundle() -> None:
+            gh_task.run_gh = make_write_gh(
+                {721: dict(title='task', status=gh_task.PENDING_STATUS, kind='task', body=_mark('T', 's@PR1', READS))})
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                _expect_exit(lambda: gh_task.cmd_start(721, None), 2)
+            assert '読む束' not in buf.getvalue(), buf.getvalue()
+
+        t('start: 断った task には読む束を出さない', _start_refused_prints_no_bundle)
+
+        def _show_prints_bundle() -> None:
+            inner = make_show_gh(as_pr=False, number=722)
+
+            def with_body(args, *rest):
+                rc, out, err = inner(args)
+                payload = json.loads(out) if out else None
+                # 本物の GitHub は問い合わせた field だけ返す。Issue の枝に body を求めていなければ付けない。
+                asks_body = re.search(r'url\s+body\b', ' '.join(args)) is not None
+                if asks_body and payload and 'issueOrPullRequest' in payload.get('data', {}).get('repository', {}):
+                    payload['data']['repository']['issueOrPullRequest']['body'] = _mark('TBL-01', 'tbl@PR9', READS)
+                    out = json.dumps(payload)
+                return rc, out, err
+
+            gh_task.run_gh = with_body
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = gh_task.cmd_show(722)
+            assert rc == 0 and '2. docs/3-shared/auth.md#境界' in buf.getvalue(), buf.getvalue()
+
+        t('show: 本文の目印の reads= を読む束として出す', _show_prints_bundle)
+
+        # -- coverage（#816・DS-R2.3） --
+        def _cov_draft(status: str, rows: str, *, history: str = '- 2026-10-01 PR #9 の merge で承認', heading: str = '### 11-3. 表',
+                       pr: int = 9, header_row: str | None = None, approvals: str | None = None) -> str:
+            return (
+                '# 試験\n\nid_prefix: TBL\nkind: ハーネス・進め方\ndomain: —\nstatus: ' + status + '\n'
+                'approvals: ' + (approvals if approvals is not None else f'要件=PR #{pr} 設計=PR #{pr} task=PR #{pr}')
+                + f'\napproved_at: 2026-10-01（PR #{pr} の merge で承認）\n\n'
+                '## 1. 問題\n\n## 11. task\n\n' + heading + '\n\n'
+                + (header_row or '| id | kind | stream | 題名 | 親 | 止める依存 | 要件 | 完了条件 |\n|---|---|---|---|---|---|---|---|') + '\n'
+                + rows + '\n\n## 12. 履歴\n\n' + history + '\n')
+
+        ROWS_ABC = ('| TBL-01 | task | Infra | 土台 | feature #900 | — | TBL-R1 | ok |\n'
+                    '| TBL-02 | task | Infra | 命名 [要判断: TBL-Q1] | feature #900 | — | TBL-R2 | — |\n'
+                    '| TBL-03 | task | Infra | 仕上げ | feature #900 | TBL-01 | TBL-R1 | ok |')
+
+        def _run_coverage(files: dict[str, str], rows: list[dict], bodies: dict[int, str]) -> tuple[int, str, list]:
+            root = _ds_tree({f'docs/draft/{k}.md': v for k, v in files.items()})
+            calls: list = []
+            fake = make_ds_board_gh(rows, bodies, calls=calls)
+            gh_task.run_gh = fake
+            saved = os.environ.get('HIRAI_TASK_ROOT')
+            os.environ['HIRAI_TASK_ROOT'] = root
+            try:
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    rc = gh_task.cmd_coverage()
+            finally:
+                if saved is None:
+                    os.environ.pop('HIRAI_TASK_ROOT', None)
+                else:
+                    os.environ['HIRAI_TASK_ROOT'] = saved
+            assert gh_task.run_gh is fake and calls, '外へ出る呼び出しが偽の gh に向いていない'
+            return rc, buf.getvalue(), calls
+
+        def _coverage_reports_missing_stale_expired() -> None:
+            files = {
+                'cov-a': _cov_draft('承認', ROWS_ABC),
+                'cov-old': _cov_draft('承認', '| TBL-01 | task | Infra | x | feature #900 | — | TBL-R1 | ok |', pr=5,
+                                      history='- 2026-10-01 PR #5 の merge で承認\n- 2026-10-09 PR #9 の merge で承認（要件を足した）'),
+                'cov-exp': _cov_draft('失効', ROWS_ABC),
+                'cov-merged': _cov_draft('取り込み済み', ROWS_ABC),
+                'cov-draft': _cov_draft('起案', ROWS_ABC),
+            }
+            rows = [dict(number=n, status='承認待ち', kind='task') for n in (11, 12, 13)] + [
+                dict(number=14, status='完了', kind='task', state='CLOSED')]
+            bodies = {
+                11: _mark('TBL-01', 'cov-a@PR9'), 12: _mark('TBL-01', 'cov-old@PR5'),
+                13: _mark('TBL-01', 'cov-exp@PR3'), 14: _mark('TBL-01', 'cov-exp@PR3'),
+            }
+            rc, out, calls = _run_coverage(files, rows, bodies)
+            assert rc == 0, out
+            assert 'cov-a: 起票漏れ 1 件' in out and 'TBL-03' in out, out
+            assert '（起票しない行 TBL-02' in out and '[要判断' in out, f'飛ばした行の理由が無い: {out}'
+            assert 'cov-old: 起票漏れ 0 件' in out, out
+            assert '古い版を指す issue 1 件' in out and '#12' in out and 'PR #9' in out, out
+            assert '失効した提案を指す issue 1 件' in out and '#13' in out and '#14' not in out, f'閉じた issue は失効側に出さない: {out}'
+            for skipped in ('cov-exp:', 'cov-merged:', 'cov-draft:'):
+                assert skipped not in out, f'{skipped} は起票漏れの対象外のはず: {out}'
+            assert not any('mutation' in c for c in calls), calls
+
+        t('coverage: 起票漏れ・古い版・失効を指す issue を出し、取り込み済み・失効・起案は漏れの対象にしない', _coverage_reports_missing_stale_expired)
+
+        def _coverage_zero_missing_for_fully_filed_draft() -> None:
+            rows_one = '| TBL-01 | task | Infra | 土台 | feature #900 | — | TBL-R1 | ok |'
+            rc, out, _ = _run_coverage(
+                {'cov-ok': _cov_draft('承認', rows_one)},
+                [dict(number=21, status='完了', kind='task', state='CLOSED')], {21: _mark('TBL-01', 'cov-ok@PR9')})
+            assert rc == 0 and 'cov-ok: 起票漏れ 0 件' in out, out
+
+        t('coverage: 承認済みの提案 1 本の行がすべて起票済み（閉じた issue も数える）なら「起票漏れ 0 件」', _coverage_zero_missing_for_fully_filed_draft)
+
+        def _coverage_reads_old_form_table() -> None:
+            old = _cov_draft('承認', '| TBL-01 | task | Infra | x | wave #634 | — | TBL-R1 | ok |', heading='### 8-3. task の表').replace(
+                '## 11. task', '## 8. タスク分解')
+            others = {
+                f'cov-oldform-{label}': old.replace('status: 承認', f'status: {status}')
+                for label, status in (('draft', '起案'), ('merged', '取り込み済み'))
+            }
+            rc, out, _ = _run_coverage({'cov-oldform': old, **others}, [], {})
+            assert rc == 0 and 'cov-oldform: 照合できない（旧い形の表' in out, out
+            assert 'cov-oldform: 起票漏れ' not in out, f'目印で照合できない表の件数を出した: {out}'
+            assert 'cov-oldform-draft:' not in out and 'cov-oldform-merged:' not in out, f'起案・取り込み済みを数えた: {out}'
+
+        t('coverage: 旧い形の承認済みの提案の「### 8-3. task の表」は目印で照合できないと 1 行出し、件数は出さない（起案・取り込み済みは出さない）', _coverage_reads_old_form_table)
+
+        def _coverage_skips_unapproved_task_stage() -> None:
+            text = _cov_draft('承認', ROWS_ABC).replace('task=PR #9', '').replace('要件=PR #9 設計=PR #9 ', '要件=PR #9 設計=PR #9')
+            rc, out, _ = _run_coverage({'cov-nostage': text}, [], {})
+            assert rc == 0 and 'cov-nostage: 起票漏れ' not in out, f'task の段が未承認なのに起票漏れを数えた: {out}'
+            assert 'cov-nostage: 照合できない（' in out and 'task の段' in out, f'黙って飛ばした: {out}'
+
+        t('coverage: task の段が未承認の提案は起票漏れに数えず、照合できないと 1 行出す', _coverage_skips_unapproved_task_stage)
+
+        # -- impact（#817・DS-R-§8-2） --
+        IMPACT_DRAFT = (
+            '# 試験\n\nid_prefix: TBL\nstatus: 承認\n\n## 11. task\n\n### 11-1. 位置と前後\n\n'
+            '- 入る wave: #634 ハーネスの改善\n- 止める依存（既存）: #611、#999\n- この設計を待つ既存 task: #675 #634\n'
+            '- 変える既存 task: #700（閉じた）\n- 重なりを見る言葉: new-draft、from-table\n\n### 11-2. impact の出力\n\nここの #5 は読まない\n')
+        IMPACT_ROWS = [
+            dict(number=634, status='', kind='wave', title='ハーネスの改善', order=None),
+            dict(number=675, status='着手可', kind='feature', title='ハーネス', parent_number=634, order=3),
+            dict(number=611, status='承認待ち', kind='task', title='tasks.md へ', parent_number=675),
+            dict(number=612, status='保留', kind='task', title='hirai-task', parent_number=675),
+            dict(number=700, status='完了', kind='task', title='閉じた', state='CLOSED'),
+        ]
+
+        def _run_impact(text: str, rows: list[dict], extras: dict) -> tuple[int, str, list]:
+            path = _draft_path('impact-draft.md', text)
+            calls: list = []
+            fake = make_ds_board_gh(rows, {}, extras, calls=calls)
+            gh_task.run_gh = fake
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = gh_task.cmd_impact([path])
+            assert gh_task.run_gh is fake and calls, '外へ出る呼び出しが偽の gh に向いていない'
+            return rc, buf.getvalue(), calls
+
+        def _impact_annotates_numbers() -> None:
+            rc, out, _ = _run_impact(IMPACT_DRAFT, IMPACT_ROWS, {611: [610]})
+            assert rc == 0 and '位置と前後の #番号 5 件' in out, out
+            assert '#634 ハーネスの改善 — wave' in out, out
+            assert '#675 ハーネス — feature・着手可・着手順 3・親 #634・子 2（承認待ち 1・保留 1）' in out, out
+            assert '#611 tasks.md へ — task・承認待ち・親 #675・blocked by #610' in out, out
+            assert '#999 Projects に載っていない' in out, out
+            assert '#700 閉じた — task・完了・閉じた' in out, out
+            assert '警告: 閉じた・保留の番号 #700' in out, out
+            assert '#5 ' not in out, f'節（11-2）の外の番号まで拾った: {out}'
+
+        t('impact: 位置と前後の #番号に 種別・Status・着手順・親・子の内訳・blocked by・閉じた を注記し、盤にない番号と警告も出す', _impact_annotates_numbers)
+
+        def _impact_reads_old_form_and_clean_warning() -> None:
+            text = '# 旧\n\nstatus: 承認\n\n## 8. タスク分解\n\n### 8-1. 位置と前後（既存の issue）\n- 入る wave: #675\n\n### 8-2. impact の出力\n'
+            rc, out, _ = _run_impact(text, IMPACT_ROWS, {})
+            assert rc == 0 and '#675 ハーネス' in out and '警告: なし（閉じた・保留の番号 0 件）' in out, out
+
+        t('impact: 旧い形の「### 8-1. 位置と前後」も読み、閉じた・保留が無ければ「警告: なし」', _impact_reads_old_form_and_clean_warning)
+
+        def _impact_refuses_draft_without_section() -> None:
+            path = _draft_path('impact-none.md', '# x\n\n## 1. 問題\n')
+            gh_task.run_gh = make_ds_board_gh([], {}, calls=[])
+            _expect_exit(lambda: gh_task.cmd_impact([path]), 2)
+
+        t('impact: 「位置と前後」の節が無い draft は exit 2', _impact_refuses_draft_without_section)
+
+        # -- design-merge（#818・DS-R3.2・DS-R3.3） --
+        README_BEFORE = (
+            '# チャット（chat）\n\nid_prefix: CHAT\ndomain: chat\nstatus: 現在形\nrev: 3\n\n## 1. 目的\n\nx\n\n'
+            '## 7. 要件と受入\n\n'
+            '### 要件 CHAT-R1: 部屋を 1 つ用意する\n- CHAT-R1.1 Given a When b Then c\n\n'
+            '### 要件 CHAT-R2: 一覧を返す\n- CHAT-R2.1 Given a When b Then c\n- CHAT-R2.2 Given d When e Then f\n\n'
+            '### 要件 CHAT-R3: 参加者を返す\n- CHAT-R3.1 Given a When b Then c\n\n'
+            '## 8. 上の層との差分\n\nなし\n')
+
+        def _merge_draft(delta: str, *, status: str = '承認', domain: str = 'chat') -> str:
+            return (
+                '# 添付\n\nid_prefix: ATT\nkind: 製品の機能\ndomain: ' + domain + '\nstatus: ' + status + '\n'
+                'approvals: 要件=PR #9 設計=PR #9 task=PR #9\napproved_at: 2026-10-01（PR #9 の merge で承認）\nmerged_into:\n\n'
+                '## 1. 問題\n\n## 2. 目指す状態\n\n' + delta + '\n## 3. 変える上の層の現在形\n\nx\n')
+
+        DELTA_OK = (
+            '### 追加された要件\n\n### 要件 ATT-R1: 入居者が添付を送るとき、システムは画像と PDF だけを受け付ける\n'
+            '- ATT-R1.1 Given JPEG When 送る Then 保存される\n- ATT-R1.2 Given exe When 送る Then 400\n\n'
+            '### 変更された要件\n\n### 要件 CHAT-R2: 一覧を新しい順に返す\n'
+            '- CHAT-R2.1 Given x When y Then z\n\n'
+            '### 削除された要件\n\n- CHAT-R3（ATT-R1 に統合した）\n')
+
+        def _merge(draft_text: str, readme_text: str = README_BEFORE) -> tuple[str, str, str, str]:
+            root = _ds_tree({'docs/draft/att.md': draft_text, 'docs/4-domains/chat/README.md': readme_text})
+            draft = os.path.join(root, 'docs/draft/att.md')
+            readme = os.path.join(root, 'docs/4-domains/chat/README.md')
+            calls: list = []
+            gh_task.run_gh = make_ds_board_gh([], {}, calls=calls)  # design-merge が gh を呼んだら落とす
+            buf = io.StringIO()
+            try:
+                with redirect_stdout(buf):
+                    gh_task.cmd_design_merge([draft])
+            finally:
+                assert calls == [], f'design-merge が GitHub を引いた: {calls}'
+            return buf.getvalue(), _read(draft), _read(readme), root
+
+        def _design_merge_applies_delta() -> None:
+            out, draft, readme, _ = _merge(_merge_draft(DELTA_OK))
+            assert 'status: 取り込み済み' in draft and 'merged_into: docs/4-domains/chat/README.md' in draft, draft
+            assert 'status: 承認' not in draft, draft
+            assert '### 要件 ATT-R1: 入居者が添付を送るとき' in readme and '- ATT-R1.2 Given exe' in readme, readme
+            assert readme.index('ATT-R1:') < readme.index('## 8. 上の層との差分'), '追加が「## 8.」の前に入っていない'
+            assert '### 要件 CHAT-R2: 一覧を新しい順に返す' in readme and '- CHAT-R2.1 Given x When y Then z' in readme, readme
+            assert '- CHAT-R2.2 Given d When e Then f' in readme, '書かなかった受入 CHAT-R2.2 が消えた'
+            assert 'CHAT-R2.1 Given a' not in readme, '書いた受入 CHAT-R2.1 の古い行が残っている'
+            assert 'CHAT-R3' not in readme, '削除した要件が残っている'
+            assert 'CHAT-R1.1' in readme, '触れない要件が消えた'
+            assert 'rev: 4' in readme and 'rev: 3' not in readme, readme
+            assert '追加 1 件・変更 1 件・削除 1 件・rev: 3 → 4' in out and '+### 要件 ATT-R1' in out, out
+
+        t('design-merge: 追加・変更・削除を現在形に当て、rev を上げ、提案の先頭を取り込み済みにして差分を出す', _design_merge_applies_delta)
+
+        def _design_merge_keeps_old_acceptance_when_changed_has_none() -> None:
+            delta = '### 変更された要件\n\n### 要件 CHAT-R1: 部屋を 1 つだけ用意する\n'
+            _, _, readme, _ = _merge(_merge_draft(delta))
+            assert '### 要件 CHAT-R1: 部屋を 1 つだけ用意する' in readme and '- CHAT-R1.1 Given a When b Then c' in readme, readme
+
+        t('design-merge: 変更に受入が無ければ現在形の受入を残して文だけ替える', _design_merge_keeps_old_acceptance_when_changed_has_none)
+
+        def _assert_merge_refused(draft_text: str, code: int, needle: str, readme_text: str = README_BEFORE) -> None:
+            root = _ds_tree({'docs/draft/att.md': draft_text, 'docs/4-domains/chat/README.md': readme_text})
+            draft = os.path.join(root, 'docs/draft/att.md')
+            readme = os.path.join(root, 'docs/4-domains/chat/README.md')
+            before = (_read(draft), _read(readme))
+            try:
+                gh_task.cmd_design_merge([draft])
+            except gh_task.GhError as exc:
+                assert exc.code == code, f'exit {exc.code}（期待 {code}）: {exc}'
+                assert needle in str(exc), f'理由に「{needle}」が無い: {exc}'
+            else:
+                raise AssertionError('断るべきなのに通った')
+            assert (_read(draft), _read(readme)) == before, '断ったのに file を書いた'
+
+        def _design_merge_refuses_unappliable_without_writing() -> None:
+            missing_change = '### 変更された要件\n\n### 要件 CHAT-R9: b\n- CHAT-R9.1 Given a When b Then c\n'
+            _assert_merge_refused(_merge_draft(missing_change), 1, 'CHAT-R9')
+            missing_delete = '### 削除された要件\n\n- CHAT-R8（理由）\n'
+            _assert_merge_refused(_merge_draft(missing_delete), 1, 'CHAT-R8')
+            dup_add = '### 追加された要件\n\n### 要件 CHAT-R1: 重なる\n- CHAT-R1.1 Given a When b Then c\n'
+            _assert_merge_refused(_merge_draft(dup_add), 1, '既にある')
+            # 追加は通るが削除が当たらない → 追加も書かない（全部か何もか）
+            _assert_merge_refused(_merge_draft(DELTA_OK.replace('CHAT-R3（', 'CHAT-R7（')), 1, 'CHAT-R7')
+
+        t('design-merge: 変更先の要件 ID が現在形に無い・追加が重なる差分は、何も書かず exit 1（一部だけ当てない）', _design_merge_refuses_unappliable_without_writing)
+
+        def _design_merge_refuses_non_block_delta_and_empty() -> None:
+            table = '### 追加された要件\n\n| ID | 文 |\n|---|---|\n| ATT-R1 | x |\n'
+            _assert_merge_refused(_merge_draft(table), 1, '要件ブロック')
+            empty = '### 追加された要件\n\nなし\n\n### 変更された要件\n\nなし\n\n### 削除された要件\n\nなし\n'
+            _assert_merge_refused(_merge_draft(empty), 1, '差分が空')
+
+        t('design-merge: 表の形の差分と空の差分は何も書かず exit 1', _design_merge_refuses_non_block_delta_and_empty)
+
+        def _design_merge_refuses_wrong_state() -> None:
+            _assert_merge_refused(_merge_draft(DELTA_OK, status='起案'), 2, '承認済み')
+            _assert_merge_refused(_merge_draft(DELTA_OK, status='取り込み済み'), 2, '既に')
+            _assert_merge_refused(_merge_draft(DELTA_OK, domain='chat, agent'), 1, '領域を 1 つに')
+            _assert_merge_refused(_merge_draft(DELTA_OK).replace('要件=PR #9 ', '').replace('approvals: ', 'approvals: 設計=PR #9 '), 2, '要件の段')
+
+        t('design-merge: 起案・取り込み済み・領域が 1 つでない・要件の段が未承認は書かずに断る', _design_merge_refuses_wrong_state)
+
+        def _design_merge_is_not_repeatable() -> None:
+            root = _ds_tree({'docs/draft/att.md': _merge_draft(DELTA_OK), 'docs/4-domains/chat/README.md': README_BEFORE})
+            draft = os.path.join(root, 'docs/draft/att.md')
+            with redirect_stdout(io.StringIO()):
+                gh_task.cmd_design_merge([draft])
+            _expect_exit(lambda: gh_task.cmd_design_merge([draft]), 2)
+            assert _read(os.path.join(root, 'docs/4-domains/chat/README.md')).count('### 要件 ATT-R1') == 1
+
+        t('design-merge: 2 回目は取り込み済みで断り、要件を二重に足さない', _design_merge_is_not_repeatable)
+
+        def _coverage_drops_merged_draft_after_design_merge() -> None:
+            root = _ds_tree({'docs/draft/att.md': _cov_draft('承認', ROWS_ABC) + '', 'docs/4-domains/chat/README.md': README_BEFORE})
+            text = _read(os.path.join(root, 'docs/draft/att.md')).replace('domain: —', 'domain: chat').replace(
+                '## 1. 問題\n', '## 1. 問題\n\n## 2. 目指す状態\n\n### 追加された要件\n\n### 要件 TBL-R1: x\n- TBL-R1.1 Given a When b Then c\n\n', 1)
+            with open(os.path.join(root, 'docs/draft/att.md'), 'w', encoding='utf-8') as f:
+                f.write(text)
+            with redirect_stdout(io.StringIO()):
+                gh_task.cmd_design_merge([os.path.join(root, 'docs/draft/att.md')])
+            gh_task.run_gh = make_ds_board_gh([], {}, calls=[])
+            saved = os.environ.get('HIRAI_TASK_ROOT')
+            os.environ['HIRAI_TASK_ROOT'] = root
+            try:
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    gh_task.cmd_coverage()
+            finally:
+                if saved is None:
+                    os.environ.pop('HIRAI_TASK_ROOT', None)
+                else:
+                    os.environ['HIRAI_TASK_ROOT'] = saved
+            assert 'att: 起票漏れ' not in buf.getvalue(), buf.getvalue()
+
+        t('design-merge のあと、その提案は coverage の対象から外れる（DS-R3.3）', _coverage_drops_merged_draft_after_design_merge)
+
+
+        # -- レビューの直し（#816〜#818 の指摘） --
+        def _coverage_unmatched_marks_are_not_zero() -> None:
+            # 指摘 4: 表の issue に目印が無い（盤にあるが bodies に目印が無い）旧い形の表は、漏れ 1 と数えない
+            old = _cov_draft('承認', '| TBL-01 | task | Infra | x | wave #634 | — | TBL-R1 | ok |', heading='### 8-3. task の表').replace(
+                '## 11. task', '## 8. タスク分解')
+            rc, out, _ = _run_coverage({'cov-nomark': old}, [dict(number=31, status='承認待ち', kind='task')], {31: '目印なし\n'})
+            assert 'cov-nomark: 起票漏れ' not in out and 'cov-nomark: 照合できない' in out, out
+            # 指摘 4: 表で「既存 #723 を使う」と書いた行は漏れに出さない
+            row = '| TBL-01 | feature | Infra | メッセージ基盤（既存 #723 を使う） | wave #634 | — | TBL-R1 | ok |'
+            rc, out, _ = _run_coverage({'cov-use': _cov_draft('承認', row)}, [], {})
+            assert 'cov-use: 起票漏れ 0 件' in out, out
+
+        t('coverage: 目印の無い旧い形の表は漏れと数えず、「既存 #n を使う」行は起票漏れに出さない', _coverage_unmatched_marks_are_not_zero)
+
+        def _coverage_reports_unreadable_drafts() -> None:
+            # 指摘 5・7: 列の違う表と、PR 番号の無い承認は黙らず 1 行出す（偽の 0 を出さない）
+            narrow = _cov_draft('承認', '| TBL-01 | 土台 | feature #900 | ok |\n| TBL-02 | 命名 | feature #900 | ok |',
+                                header_row='| ID | 題 | 親 | 完了条件 |\n|---|---|---|---|')
+            hash_only = _cov_draft('承認', ROWS_ABC, approvals='要件=#1 設計=#1 task=#1532')
+            here = _cov_draft('承認', ROWS_ABC, approvals='要件=この PR 設計=この PR task=この PR')
+            rc, out, _ = _run_coverage({'cov-narrow': narrow, 'cov-hash': hash_only, 'cov-here': here}, [], {})
+            assert rc == 0, out
+            assert 'cov-narrow: 照合できない（表の列が new --from-table の形でない' in out, out
+            assert 'cov-narrow: 起票漏れ' not in out and '（起票しない行' not in out, f'偽の 0 か行ごとの飛ばしが出た: {out}'
+            assert 'cov-hash: 照合できない（' in out and 'task の段' in out, out
+            assert 'cov-here: 照合できない（' in out and 'task の段' in out, out
+
+        t('coverage: 列の違う表・task の段の承認が読めない提案は、起票漏れの件数を出さず「照合できない」を 1 行出す', _coverage_reports_unreadable_drafts)
+
+        def _coverage_stale_reads_history_and_ignores_noise() -> None:
+            # 指摘 9: 新しい承認が履歴だけにある → 古い版として拾う
+            old = _cov_draft('承認', ROWS_ABC, pr=5, history='- 2026-10-09 PR #9 の merge で承認（要件を足した）')
+            assert gh_task.latest_approval_pr(old.splitlines()) == 9, '履歴の承認を読んでいない'
+            # 指摘 11: 承認でない PR の言及は数えない
+            noisy = _cov_draft('承認', ROWS_ABC, pr=5, history=(
+                '- 2026-10-01 PR #5 の merge で承認\n'
+                '- PR #615 を merge した（移行）。同じ日にチャットの承認で #532 へ付け替えた\n'
+                '- 承認待ちに戻した PR #7\n- 承認不要の誤記直し PR #8\n'
+                '- 2026-10-12 承認（チャット。PR #11 の merge）'))
+            assert gh_task.latest_approval_pr(noisy.splitlines()) == 11, gh_task.latest_approval_pr(noisy.splitlines())
+            plain = _cov_draft('承認', ROWS_ABC, pr=5, history='- PR #615 を merge した。承認で #532 へ付け替えた\n- 承認待ちに戻した PR #7')
+            assert gh_task.latest_approval_pr(plain.splitlines()) == 5
+
+        t('coverage: 古い版の判定は履歴の承認の行だけを読み、承認でない PR 番号は数えない', _coverage_stale_reads_history_and_ignores_noise)
+
+        def _coverage_merged_unknown_boundaries() -> None:
+            files = {'cov-merged': _cov_draft('取り込み済み', ROWS_ABC)}
+            rows = [dict(number=n, status='承認待ち', kind='task') for n in (41, 42)]
+            bodies = {41: _mark('TBL-01', 'cov-merged@PR5'), 42: _mark('TBL-01', 'cov-gone@PR5')}
+            rc, out, _ = _run_coverage(files, rows, bodies)
+            assert '古い版を指す issue 0 件' in out and '#41' not in out, f'取り込み済みの提案を古い版に数えた: {out}'
+            assert '#42 の src=cov-gone@PR5 は docs/draft/ に file が無い' in out, out
+
+        t('coverage: 取り込み済みの提案を指す issue は古い版に数えず、file の無い src は 1 行出す', _coverage_merged_unknown_boundaries)
+
+        def _start_approved_prints_bundle() -> None:
+            gh_task.run_gh = make_write_gh(
+                {727: dict(title=f'{gh_task.OPERATION_MARK} task', status=gh_task.READY_STATUS, kind='task',
+                           body=_mark('TBL-01', 'tbl@PR9', READS))}, record=[], rest_handler=lambda m, p, b: {})
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = gh_task.cmd_start(727, '出どころ')
+            assert rc == 0 and '1. docs/4-domains/chat/README.md' in buf.getvalue(), buf.getvalue()
+
+        t('start --approved: 着手したあとに読む束を出す', _start_approved_prints_bundle)
+
+        def _impact_section_end_is_heading_only() -> None:
+            text = ('# x\n\nstatus: 承認\n\n## 11. task\n\n### 11-1. 位置と前後\n\n- 入る wave: #634\n'
+                    '#611 ← DS-13\n```bash\n# 例 #888\n#701\n```\n- milestone は無い #675\n\n### 11-2. 出力\n\nここの #5 は読まない\n')
+            numbers = gh_task.impact_numbers(text.splitlines())
+            assert numbers == [634, 611, 675], f'節が途中で切れたか囲みの中を拾った: {numbers}'
+
+        t('impact: 節の終わりは見出し（# の後ろに空白）だけで、#番号 で始まる行では切れず、コードの囲みの中は読まない', _impact_section_end_is_heading_only)
+
+        # 実物（rmp-app の docs/4-domains/chat/README.md）の形: 受入は行頭の「- ID.n …」・末尾に「／ 確かめ: …」・R1.1 と R1.10 が並ぶ
+        README_REAL = (
+            '# チャット（chat）\n\nid_prefix: CHAT\ndomain: chat\nstatus: 現在形\nrev: 3\n\n## 7. 要件と受入\n\n'
+            '### 要件 CHAT-R1: 入居者が会話を開いたとき、システムは部屋を 1 つだけ用意する（FR-MATCH-009）\n\n'
+            '- CHAT-R1.1 Given 部屋が無い When POST Then 201 ／ 確かめ: [`a.test.ts`](../../../a.test.ts)\n'
+            '- CHAT-R1.2 Given 部屋がある When POST Then 200 ／ 確かめ: なし\n'
+            '- CHAT-R1.10 Given 相談した When accept Then 続けて POST ／ 確かめ: 通し: [`b.test.tsx`](../../../b.test.tsx)\n'
+            '  （補足の続きの行）\n\n'
+            '### 要件 CHAT-R2: 一覧を返す\n\n- CHAT-R2.1 Given a When b Then c\n\n'
+            '## 8. 上の層との差分\n\nなし\n')
+
+        def _design_merge_replaces_only_written_acceptance_ids() -> None:
+            # 4-B: 書いた ID の行だけ差し替え・無い ID は足し、書かない ID（R1.2・R1.10 と続きの行）は残す。R1.1 は R1.10 を巻き込まない
+            delta = ('### 変更された要件\n\n### 要件 CHAT-R1: 入居者が会話を開いたとき、システムは部屋を作る\n\n'
+                     '- CHAT-R1.1 Given 部屋が無い When POST Then 201 と部屋を返す\n'
+                     '- CHAT-R1.11 Given 見送り When POST Then 404\n')
+            _, _, readme, _ = _merge(_merge_draft(delta), README_REAL)
+            assert '### 要件 CHAT-R1: 入居者が会話を開いたとき、システムは部屋を作る\n' in readme, readme
+            assert '- CHAT-R1.1 Given 部屋が無い When POST Then 201 と部屋を返す\n' in readme and '確かめ: [`a.test.ts`]' not in readme, readme
+            assert '- CHAT-R1.2 Given 部屋がある When POST Then 200 ／ 確かめ: なし\n' in readme, '書かない R1.2 が消えた'
+            assert '- CHAT-R1.10 Given 相談した When accept Then 続けて POST' in readme and '  （補足の続きの行）\n' in readme, 'R1.10 が R1.1 に巻き込まれた'
+            assert '- CHAT-R1.11 Given 見送り When POST Then 404\n' in readme, '現在形に無い ID が足されていない'
+            assert readme.index('CHAT-R1.10') < readme.index('CHAT-R1.11') < readme.index('### 要件 CHAT-R2'), '足した受入が要件ブロックの末尾に入っていない'
+            assert '- CHAT-R2.1 Given a When b Then c' in readme
+
+        t('design-merge: 変更は書いた受入の ID の行だけ差し替え、現在形に無い ID は足し、書かない ID は残す（R1.1 が R1.10 を巻き込まない）', _design_merge_replaces_only_written_acceptance_ids)
+
+        def _design_merge_refuses_arrow_heading() -> None:
+            for heading in ('一覧を返す → 新しい文', '（一覧を返す → 新しい文）'):
+                delta = '### 変更された要件\n\n### 要件 CHAT-R2: ' + heading + '\n- CHAT-R2.1 Given x When y Then z\n'
+                _assert_merge_refused(_merge_draft(delta), 1, '変更後の文だけ')
+
+        t('design-merge: 変更の見出しに → があれば、何も書かず exit 1（見出しは変更後の文だけ）', _design_merge_refuses_arrow_heading)
+
+        def _design_merge_refuses_foreign_acceptance_id() -> None:
+            delta = '### 変更された要件\n\n### 要件 CHAT-R2: y\n- CHAT-R3.1 Given x When y Then z\n'
+            _assert_merge_refused(_merge_draft(delta), 1, 'CHAT-R3.1')
+
+        t('design-merge: 変更の要件に属さない受入の ID（CHAT-R2 の下の CHAT-R3.1）は何も書かず exit 1', _design_merge_refuses_foreign_acceptance_id)
+
+        def _design_merge_deletes_acceptance_unit_and_requirement_unit() -> None:
+            # 4-B: 「- ID.n」はその受入の行だけを消し（続きの行も）、「- ID」は要件ブロックを消す
+            delta = '### 削除された要件\n\n- CHAT-R1.10（統合した）\n- CHAT-R2（廃止）\n'
+            out, _, readme, _ = _merge(_merge_draft(delta), README_REAL)
+            assert 'CHAT-R1.10' not in readme and '補足の続きの行' not in readme, readme
+            assert 'CHAT-R1.1 ' in readme and 'CHAT-R1.2 ' in readme, '消す受入以外が消えた'
+            assert '### 要件 CHAT-R1:' in readme, '受入の単位の削除で要件ブロックまで消えた'
+            assert 'CHAT-R2' not in readme, '要件の単位の削除でブロックが残った'
+            parsed = gh_task.parse_delta(_merge_draft(delta).splitlines())
+            assert parsed['deleted'][0][0] == 'CHAT-R2' and parsed['unreadable'] == [], parsed
+            assert '削除 1 件' in out and '受入の削除 1 件' in out, out
+
+        t('design-merge: 削除の「- ID.n」はその受入の行だけを、「- ID」は要件ブロックを消す', _design_merge_deletes_acceptance_unit_and_requirement_unit)
+
+        def _design_merge_refuses_deleting_missing_acceptance() -> None:
+            _assert_merge_refused(_merge_draft('### 削除された要件\n\n- CHAT-R2.9（無い）\n'), 1, 'CHAT-R2.9')
+            _assert_merge_refused(_merge_draft('### 削除された要件\n\n- CHAT-R8.1（要件ごと無い）\n'), 1, 'CHAT-R8.1')
+            _assert_merge_refused(_merge_draft('### 削除された要件\n\n- CHAT-R2（x）\n- CHAT-R2.1（y）\n'), 1, '重複')
+            both = ('### 変更された要件\n\n### 要件 CHAT-R2: y\n- CHAT-R2.1 Given a When b Then c\n\n'
+                    '### 削除された要件\n\n- CHAT-R2.1（z）\n')
+            _assert_merge_refused(_merge_draft(both), 1, '重複')
+
+        t('design-merge: 現在形に無い受入・要件の削除、同じ ID を書き直しと削除の両方に書く差分は、何も書かず exit 1', _design_merge_refuses_deleting_missing_acceptance)
+
+        def _design_merge_refuses_escaping_domain() -> None:
+            # 指摘 2: domain を 1 つの段として検査し、docs/4-domains の外を書かない
+            root = _ds_tree({'victim/README.md': README_BEFORE})
+            victim = os.path.join(root, 'victim', 'README.md')
+            before = _read(victim)
+            for domain in ('../x', '/tmp/x', '..', 'chat/../billing', '../../../victim'):
+                tree = _ds_tree({'docs/draft/att.md': _merge_draft(DELTA_OK, domain=domain),
+                                 'docs/4-domains/chat/README.md': README_BEFORE})
+                draft = os.path.join(tree, 'docs/draft/att.md')
+                _expect_exit(lambda: gh_task.cmd_design_merge([draft]), 1)
+                assert 'status: 承認' in _read(draft), f'{domain}: draft を書いた'
+            assert _read(victim) == before
+            # README の domain: が draft と違うときも断る
+            other = README_BEFORE.replace('domain: chat', 'domain: billing')
+            _assert_merge_refused(_merge_draft(DELTA_OK), 1, 'domain', readme_text=other)
+
+        t('design-merge: domain が 1 つの段（英小文字・数字・ハイフン）でない・README の domain: と違うときは何も書かず exit 1', _design_merge_refuses_escaping_domain)
+
+        def _design_merge_refuses_dash_domain() -> None:
+            _assert_merge_refused(_merge_draft(DELTA_OK, domain='—'), 1, '手で当てる')
+            _assert_merge_refused(_merge_draft(DELTA_OK, domain='chat, agent'), 1, '手で当てる')
+
+        t('design-merge: domain が「—」なら領域を 1 つに決められないと exit 1', _design_merge_refuses_dash_domain)
+
+        def _design_merge_accepts_nashi_with_punctuation() -> None:
+            # 指摘 6
+            delta = ('### 追加された要件\n\n### 要件 ATT-R1: 入居者が送る\n- ATT-R1.1 Given a When b Then c\n\n'
+                     '### 変更された要件\n\nなし（Figma には出ない）。\n\n### 削除された要件\n\nなし。\n')
+            out, _, readme, _ = _merge(_merge_draft(delta))
+            assert '追加 1 件・変更 0 件・削除 0 件' in out and 'ATT-R1:' in readme, out
+
+        t('design-merge: 「なし。」「なし（理由）。」は空の区分として通す', _design_merge_accepts_nashi_with_punctuation)
+
+        def _design_merge_refuses_stray_lines_and_duplicates() -> None:
+            # 指摘 13
+            stray = ('### 変更された要件\n\n### 要件 CHAT-R2: y\n- CHAT-R2.1 z\n\n#### 補足\n本文\n')
+            _assert_merge_refused(_merge_draft(stray), 1, '要件ブロック')
+            dup = ('### 追加された要件\n\n### 要件 ATT-R1: a\n- ATT-R1.1 Given a When b Then c\n\n'
+                   '### 要件 ATT-R1: b\n- ATT-R1.1 Given a When b Then c\n')
+            _assert_merge_refused(_merge_draft(dup), 1, '重複')
+            cross = (dup.split('### 要件 ATT-R1: b')[0] + '\n### 削除された要件\n\n- ATT-R1（x）\n')
+            _assert_merge_refused(_merge_draft(cross), 1, '重複')
+
+        t('design-merge: ブロックの後ろの関係ない行と、同じ ID の重複（区分をまたぐものも）は何も書かず exit 1', _design_merge_refuses_stray_lines_and_duplicates)
+
+        README_DUP = (
+            '# 提案（proposal）\n\nid_prefix: PROP\ndomain: chat\nstatus: 現在形\nrev: 3\n\n## 7. 要件と受入\n\n'
+            '### 要件 CHAT-R9: 開封する\n- CHAT-R9.5 Given a When b Then 開封の口\n- CHAT-R9.5 Given c When d Then 未読を作らない\n\n'
+            '### 要件 CHAT-R10: 別\n- CHAT-R10.1 Given a When b Then c\n\n## 8. 上の層との差分\n\nなし\n')
+
+        def _design_merge_refuses_duplicate_current_acceptance_id() -> None:
+            # 指摘 1: 現在形に同じ受入 ID が 2 行ある要件への変更・削除は、黙って片方だけ当てず exit 1
+            change = '### 変更された要件\n\n### 要件 CHAT-R9: 新しい文\n- CHAT-R9.5 Given NEW When x Then y\n'
+            _assert_merge_refused(_merge_draft(change), 1, '2 行ある', README_DUP)
+            _assert_merge_refused(_merge_draft('### 削除された要件\n\n- CHAT-R9.5（x）\n'), 1, '2 行ある', README_DUP)
+
+        t('design-merge: 現在形に同じ受入 ID が 2 行ある要件の変更・受入の削除は、何も書かず exit 1', _design_merge_refuses_duplicate_current_acceptance_id)
+
+        def _design_merge_refuses_empty_or_old_text_heading() -> None:
+            # 指摘 3・8: 見出しの文が空（受入だけを変えたつもり）は要件の文を消すので exit 1。指摘 4: 「変更前は」入りの見出しも exit 1
+            for heading in ('', '   '):
+                delta = '### 変更された要件\n\n### 要件 CHAT-R1:' + heading + '\n- CHAT-R1.1 Given d When e Then g\n'
+                _assert_merge_refused(_merge_draft(delta), 1, '文が空')
+            old = '### 変更された要件\n\n### 要件 CHAT-R2: 新しい文（変更前は「古い文」・`:49`）\n- CHAT-R2.1 Given x When y Then z\n'
+            _assert_merge_refused(_merge_draft(old), 1, '変更前')
+
+        t('design-merge: 変更の見出しの文が空・「変更前」入りなら、何も書かず exit 1', _design_merge_refuses_empty_or_old_text_heading)
+
+        def _design_merge_refuses_multi_id_deleted_line() -> None:
+            # 指摘 5: 1 行に ID が 2 つ以上の削除は一部だけ当てず exit 1。理由の括弧の中の ID は数えない
+            for line in ('- CHAT-R2.1・CHAT-R2.2（理由）', '- CHAT-R2, CHAT-R3', '- CHAT-R2.1 CHAT-R3.1'):
+                _assert_merge_refused(_merge_draft('### 削除された要件\n\n' + line + '\n'), 1, '要件ブロック')
+
+        t('design-merge: 削除の 1 行に ID が 2 つ以上あれば、何も書かず exit 1（括弧の理由の ID は数えない）', _design_merge_refuses_multi_id_deleted_line)
+
+        def _design_merge_unmatched_h3_ends_block() -> None:
+            # 指摘 6: 見出しの正規表現に当たらない `### ` は前の要件のブロックの終わり。消した要件と一緒に消えない
+            readme = README_BEFORE.replace(
+                '### 要件 CHAT-R3: 参加者を返す',
+                '### 要件 CHAT-R2・CHAT-R3: 案内（→ 別の領域）\n案内の文\n\n### 要件 CHAT-R3: 参加者を返す')
+            _, _, after, _ = _merge(_merge_draft('### 削除された要件\n\n- CHAT-R2（x）\n'), readme)
+            assert '### 要件 CHAT-R2・CHAT-R3: 案内' in after and '案内の文' in after, after
+            assert '一覧を返す' not in after and 'CHAT-R3.1' in after, after
+
+        t('design-merge: 見出しの形に当たらない ### の直前の要件を消しても、その見出しと文は消えない', _design_merge_unmatched_h3_ends_block)
+
+        def _design_merge_refuses_indented_acceptance_and_leading_text() -> None:
+            # 2 巡目の指摘 1: 字下げした受入の行は直前の受入の続きに入って同じ ID が 2 行になる／最初の受入より前の行は黙って捨てられる
+            indented = '### 変更された要件\n\n### 要件 CHAT-R2: 一覧を返す\n- CHAT-R2.1 Given x When y Then z\n  - CHAT-R2.1 Given p When q Then r\n'
+            _assert_merge_refused(_merge_draft(indented), 1, '要件ブロック')
+            leading = '### 変更された要件\n\n### 要件 CHAT-R2: 一覧を返す\n  補足の文\n- CHAT-R2.1 Given x When y Then z\n'
+            _assert_merge_refused(_merge_draft(leading), 1, '最初の受入より前')
+
+        t('design-merge: 字下げした受入の行と、最初の受入より前の本文の行は、何も書かず exit 1', _design_merge_refuses_indented_acceptance_and_leading_text)
+
+        def _design_merge_refuses_id_in_unmatched_h3() -> None:
+            # 2 巡目の指摘 2: 形に当たらない `### 要件 A・B:` 見出しの ID を追加すると重複する
+            readme = README_BEFORE.replace(
+                '### 要件 CHAT-R3: 参加者を返す',
+                '### 要件 CHAT-R8・CHAT-R9: 案内\n\n→ 案内の文\n\n### 要件 CHAT-R3: 参加者を返す')
+            add = '### 追加された要件\n\n### 要件 CHAT-R9: 新しい文\n- CHAT-R9.1 Given a When b Then c\n'
+            _assert_merge_refused(_merge_draft(add), 1, '既にある', readme)
+
+        t('design-merge: 形に当たらない ### 見出しにある ID を追加すれば、何も書かず exit 1', _design_merge_refuses_id_in_unmatched_h3)
+
+        def _design_merge_checks_added_body() -> None:
+            # 2 巡目の指摘 3: 追加にも、別の要件の受入 ID・同じ受入 ID の 2 行・空の見出しの文の検査を当てる
+            head = '### 追加された要件\n\n'
+            _assert_merge_refused(_merge_draft(head + '### 要件 ATT-R1: a\n- ATT-R2.1 Given a When b Then c\n'), 1, '別の要件の受入')
+            _assert_merge_refused(_merge_draft(head + '### 要件 ATT-R1: a\n- ATT-R1.1 Given a When b Then c\n- ATT-R1.1 Given d When e Then f\n'), 1, '重複')
+            _assert_merge_refused(_merge_draft(head + '### 要件 ATT-R1:\n- ATT-R1.1 Given a When b Then c\n'), 1, '文が空')
+
+        t('design-merge: 追加された要件の本文も、別の要件の受入 ID・同じ受入 ID の 2 行・空の見出しの文を断る', _design_merge_checks_added_body)
+
+        def _design_merge_accepts_words_before_and_arrow_in_new_text() -> None:
+            # 2 巡目の指摘 4: 変更後の文に「変更前」や → が語として入っていても通す。断るのは括弧書きの変更前と、現在形の今の文 → の形だけ
+            for text in ('変更前の本文を履歴に残す', '送信 → 既読 → マッチ の順に進める'):
+                delta = '### 変更された要件\n\n### 要件 CHAT-R2: ' + text + '\n- CHAT-R2.1 Given x When y Then z\n'
+                _, _, after, _ = _merge(_merge_draft(delta))
+                assert '### 要件 CHAT-R2: ' + text in after, after
+            for text in ('（変更前は「古い文」）新しい文', '(変更前 古い文) 新しい文', '一覧を返す → 新しい文', '（一覧を返す → 新しい文）'):
+                delta = '### 変更された要件\n\n### 要件 CHAT-R2: ' + text + '\n- CHAT-R2.1 Given x When y Then z\n'
+                _assert_merge_refused(_merge_draft(delta), 1, '変更後の文だけ')
+
+        t('design-merge: 「変更前」「→」が語として入る変更後の文は通し、括弧書きの変更前と「今の文 → 新しい文」は断る', _design_merge_accepts_words_before_and_arrow_in_new_text)
+
+        def _draft_template_explanations_above_delta_headings() -> None:
+            # 2 巡目の指摘 5: 雛形の説明の段落が区分の見出しの下にあると、そのまま使って unreadable で exit 1 になる
+            template = _read(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'templates', 'draft.md'))
+            template = template.replace('<現在形の id_prefix>', 'CHAT').replace('<id_prefix>', 'ATT')
+            delta = gh_task.parse_delta(template.split('\n'))
+            assert [r for r, _, _ in delta['added'] + delta['changed']] == ['ATT-R1', 'CHAT-R2'], delta
+            assert delta['unreadable'] == [], delta
+
+        t('templates/draft.md: 説明の段落は「### 追加された要件」より上にあり、区分の中に残らない', _draft_template_explanations_above_delta_headings)
+
+        def _design_merge_second_write_failure_is_reported() -> None:
+            # 指摘 8: 書く順は draft → README。README の置き換えが落ちたら draft を元へ戻して exit 1
+            root = _ds_tree({'docs/draft/att.md': _merge_draft(DELTA_OK), 'docs/4-domains/chat/README.md': README_BEFORE})
+            draft = os.path.join(root, 'docs/draft/att.md')
+            readme = os.path.join(root, 'docs/4-domains/chat/README.md')
+            before = (_read(draft), _read(readme))
+            real_replace = os.replace
+
+            def failing_replace(src, dst, *a, **k):
+                if os.path.abspath(dst) == os.path.abspath(readme):
+                    raise OSError('disk full')
+                return real_replace(src, dst, *a, **k)
+
+            os.replace = failing_replace
+            try:
+                try:
+                    gh_task.cmd_design_merge([draft])
+                except gh_task.GhError as exc:
+                    assert exc.code == 1 and 'README' in str(exc), exc
+                else:
+                    raise AssertionError('置き換えの失敗を黙った')
+            finally:
+                os.replace = real_replace
+            assert (_read(draft), _read(readme)) == before, '片方だけ書かれた状態で止まった'
+            leftovers = [n for d in ('docs/draft', 'docs/4-domains/chat') for n in os.listdir(os.path.join(root, d)) if '.tmp' in n]
+            assert not leftovers, f'tmp が残った: {leftovers}'
+
+        t('design-merge: 2 本目の置き換えが失敗したら draft を元に戻し、tmp を残さず exit 1', _design_merge_second_write_failure_is_reported)
+
         # ── draft_approved_at ──
         def _draft_approved_table_form() -> None:
             approved = gh_task.draft_approved_at(_draft_path('table.md', '# 設計\n\n| approved | 2026-09-04 |\n'))

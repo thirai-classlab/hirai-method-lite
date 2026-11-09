@@ -1710,6 +1710,24 @@ JSONEOF
   [ ! -e "$ht_home/gh.log" ] || pr_bad="$pr_bad hirai-task の selftest・リポ未解決で gh が呼ばれた: $(cat "$ht_home/gh.log")"
   find "$ROOT/scripts" "$ROOT/bin" -name __pycache__ 2>/dev/null | grep -q . \
     && pr_bad="$pr_bad hirai-task --selftest がプラグインの置き場所に __pycache__ を作った"
+  # design-merge は一時ディレクトリの写しにだけ当たり、gh を 1 回も呼ばない (偽の gh を PATH の先頭に置いて呼ばれたら gh.log に残す)。
+  # 使い方の誤り (coverage に引数・impact に引数なし) は gh を呼ぶ前に exit 2。
+  mkdir -p "$ht_home/dmtree/docs/draft" "$ht_home/dmtree/docs/4-domains/chat" "$ht_home/fakegh"
+  printf '#!/bin/sh\necho "$@" >> "%s/gh.log"\nexit 1\n' "$ht_home" > "$ht_home/fakegh/gh"; chmod +x "$ht_home/fakegh/gh"
+  printf '# c\n\nid_prefix: CHAT\ndomain: chat\nstatus: 現在形\nrev: 1\n\n## 7. 要件と受入\n\n### 要件 CHAT-R1: 一つ\n- CHAT-R1.1 Given a When b Then c\n\n## 8. 上の層との差分\n' > "$ht_home/dmtree/docs/4-domains/chat/README.md"
+  printf '# d\n\nid_prefix: ATT\ndomain: chat\nstatus: 承認\napproved_at: 2026-10-01（PR #9 の merge で承認）\nmerged_into:\n\n## 2. 目指す状態\n\n### 追加された要件\n\n### 要件 ATT-R1: 二つ\n- ATT-R1.1 Given a When b Then c\n\n## 3. 変える\n' > "$ht_home/dmtree/docs/draft/att.md"
+  ht_out="$(cd "$ht_home" && env HOME="$ht_home" PATH="$ht_home/fakegh:$PATH" python3 "$ROOT/bin/hirai-task" design-merge "$ht_home/dmtree/docs/draft/att.md" 2>&1)"; ht_rc=$?
+  { [ "$ht_rc" -eq 0 ] && grep -q '^status: 取り込み済み' "$ht_home/dmtree/docs/draft/att.md" \
+      && grep -q '^rev: 2' "$ht_home/dmtree/docs/4-domains/chat/README.md" \
+      && grep -q '### 要件 ATT-R1: 二つ' "$ht_home/dmtree/docs/4-domains/chat/README.md"; } \
+    || pr_bad="$pr_bad hirai-task design-merge が写しの木に当たらない: exit ${ht_rc} [${ht_out}]"
+  (cd "$ht_home" && env HOME="$ht_home" PATH="$ht_home/fakegh:$PATH" HIRAI_TASK_REPO=o/r python3 "$ROOT/bin/hirai-task" design-merge "$ht_home/dmtree/docs/draft/att.md" >/dev/null 2>&1); ht_rc=$?
+  [ "$ht_rc" -eq 2 ] || pr_bad="$pr_bad 取り込み済みの提案への design-merge が exit 2 でない: ${ht_rc}"
+  (cd "$ht_home" && env HOME="$ht_home" PATH="$ht_home/fakegh:$PATH" HIRAI_TASK_REPO=o/r python3 "$ROOT/bin/hirai-task" coverage extra >/dev/null 2>&1); ht_rc=$?
+  [ "$ht_rc" -eq 2 ] || pr_bad="$pr_bad hirai-task coverage に引数を渡したときの exit が 2 でない: ${ht_rc}"
+  (cd "$ht_home" && env HOME="$ht_home" PATH="$ht_home/fakegh:$PATH" HIRAI_TASK_REPO=o/r python3 "$ROOT/bin/hirai-task" impact >/dev/null 2>&1); ht_rc=$?
+  [ "$ht_rc" -eq 2 ] || pr_bad="$pr_bad hirai-task impact を引数なしで呼んだ exit が 2 でない: ${ht_rc}"
+  [ ! -e "$ht_home/gh.log" ] || pr_bad="$pr_bad design-merge・使い方の誤りで gh が呼ばれた: $(cat "$ht_home/gh.log")"
   rm -rf "$ht_home"
   # 導入先の内部の名前の一覧は公開リポに置かない。手元の一覧を HIRAI_INTERNAL_WORDS
   # (grep -E の式) で渡したときだけ検査する。渡さなければ一般の検査 (利用者の home 以下の絶対パス) だけを見る。

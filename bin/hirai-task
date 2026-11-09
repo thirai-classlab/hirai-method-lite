@@ -3,8 +3,8 @@
 hirai-task — リポに紐づいた GitHub Project のタスクを読み書きする 1 本の道具。
 
 サブコマンド:
-  読む側: ready / pending / blocked / show <issue> / memos / unblocked
-  書く側: new / add / set / start / review / done / reopen（approve は廃止）
+  読む側: ready / pending / blocked / show <issue> / memos / unblocked / coverage / impact <draft>
+  書く側: new / add / set / start / review / done / reopen（approve は廃止）/ design-merge <draft>（file だけ書く）
   会話の最初と merge の直後: comments / close-parents / align / today / after-merge
   ほか: sync（field・option の id の取り直し）/ --selftest（gh を使わない自己検査）
 
@@ -1303,6 +1303,7 @@ query($owner:String!, $name:String!, $number:Int!) {{
         title
         state
         url
+        body
         parent {{ number title }}
         blockedBy(first: 30) {{ totalCount nodes {{ number title state }} }}
 {_PROJECT_ITEM_FRAGMENT}
@@ -1361,6 +1362,7 @@ def cmd_show(number: int) -> int:
         for b in blockers:
             mark = '' if b.get('state') == 'CLOSED' else '  ← 未完了'
             print(f"    #{b['number']:<4} {b.get('title', '')[:60]}{mark}")
+    print_reading_bundle(node.get('body') or '')
     return 0
 
 
@@ -1663,6 +1665,7 @@ def cmd_start(number: int, approved: str | None) -> int:
         append_body_line(number, item, f'- 出どころ: {approved}')
         write_single_select_rest(project_number, number, 'Status', IN_PROGRESS_STATUS, item_id=item_id)
         print(f'#{number} Status={IN_PROGRESS_STATUS}（{OPERATION_MARK}・出どころ: {approved}）')
+        print_reading_bundle(item.get('body') or '')
         return 0
     if status == PENDING_STATUS:
         # 承認待ちから進めてよいのは、task_not_startable_reason を通るときだけ（目印が無く、
@@ -1684,6 +1687,7 @@ def cmd_start(number: int, approved: str | None) -> int:
         )
     write_single_select_rest(project_number, number, 'Status', IN_PROGRESS_STATUS)
     print(f'#{number} Status={IN_PROGRESS_STATUS}')
+    print_reading_bundle(item.get('body') or '')
     return 0
 
 
@@ -2129,8 +2133,12 @@ def _draft_header(lines: list[str]) -> dict[str, str]:
     return header
 
 
-def _table_section_and_rows(lines: list[str]) -> tuple[str, list[dict[str, str]]] | None:
-    """「### 11-3. 表」を持つ節の名前と、表の行（列名 → 値）。表が無ければ None。"""
+# coverage は旧い形（9 節）の承認済みの提案の「### 8-3. task の表」も読む（new --from-table は 11-3 だけ）。
+_OLD_TABLE_HEADING_RE = re.compile(r'^###\s+8-3\.\s*task の表\s*$')
+
+
+def _table_section_and_rows(lines: list[str], *, accept_old: bool = False) -> tuple[str, list[dict[str, str]]] | None:
+    """「### 11-3. 表」（accept_old なら「### 8-3. task の表」も）を持つ節の名前と、表の行（列名 → 値）。表が無ければ None。"""
     section = ''
     in_fence = False
     for index, line in enumerate(lines):
@@ -2141,7 +2149,7 @@ def _table_section_and_rows(lines: list[str]) -> tuple[str, list[dict[str, str]]
         found = _TABLE_SECTION_RE.match(line) if line.startswith('## ') else None
         if found:
             section = found.group(1)
-        if line.strip() != TABLE_HEADING:
+        if line.strip() != TABLE_HEADING and not (accept_old and _OLD_TABLE_HEADING_RE.match(line.strip())):
             continue
         rows: list[list[str]] = []
         for row in lines[index + 1:]:
@@ -2324,6 +2332,673 @@ def cmd_new_from_table(argv: list[str]) -> int:
             'blocked_by': [number_of(b) for b in r['blockers']],
             'body': table_issue_body(r, slug, src_pr, header.get('domain', '')),
         })
+    return 0
+
+
+# ── issue の目印を読む側（start・show の読む束 / coverage）（DS-06） ─────────────
+# 目印は new --from-table が本文の先頭に書く `<!-- rmp-task: id=… rev=… stream=… src=<slug>@PR<n> … reads=<path#見出し,…> -->`。
+_TASK_MARK_RE = re.compile(rf'^\s*<!--\s*{TABLE_MARK}:\s*(.*?)\s*-->', re.DOTALL)
+_MARK_FIELD_RE = re.compile(r'(\w+)=(.*?)(?=\s+\w+=|$)', re.DOTALL)
+_SRC_RE = re.compile(r'^(?P<slug>[^@\s]+)(?:@PR(?P<pr>\d+))?$')
+NO_BUNDLE_OLD_FORM = '読む束なし（旧い形）'
+
+
+def parse_task_mark(body: str) -> dict[str, str] | None:
+    """本文の先頭の rmp-task の目印を、項目名 → 値で返す。無ければ None。"""
+    match = _TASK_MARK_RE.match(body or '')
+    if not match:
+        return None
+    return {k: v.strip() for k, v in _MARK_FIELD_RE.findall(match.group(1))}
+
+
+# 本文に出てくる docs/ の path（`docs/…/x.md` に、`#見出し` か `:行` `:行-行` が付くものを含む）。ASCII の path だけを拾う。
+_BODY_DOC_PATH_RE = re.compile(
+    r'(?<![A-Za-z0-9_./\-])docs/[A-Za-z0-9_./\-]*?\.md(?![A-Za-z0-9_])'
+    r'(?:#[^\s,，、。)）」』`\'"]+|:\d+(?:-\d+)?)?')
+
+
+def body_doc_paths(body: str) -> list[str]:
+    """本文（先頭の目印を除く）に出てくる docs/ の path を、出てきた順に重複なく返す。"""
+    text = _TASK_MARK_RE.sub('', body or '', count=1)
+    return list(dict.fromkeys(_BODY_DOC_PATH_RE.findall(text)))
+
+
+def _path_exists(root: str, path: str) -> bool:
+    """一覧の path（`:行`・`#見出し` 付き）が作業ツリーの根にあるか。"""
+    return os.path.exists(os.path.join(root, re.split(r'[:#]', path, maxsplit=1)[0]))
+
+
+def reading_bundle_lines(body: str, root: str | None = None) -> list[str]:
+    """start・show が出す読む束（DS-R1.1）。目印の reads= をそのまま 1 件 1 行で出す。
+    reads= が無い issue（目印なし＝旧い形・目印はあるが reads= が空）は、本文に出てくる docs/ の path を一覧で出す。
+    本文に path も無ければ、旧い形は「読む束なし（旧い形）」、目印ありは「読む束なし（目印に reads= が無い）」の 1 行。"""
+    mark = parse_task_mark(body)
+    reads = [r.strip() for r in (mark or {}).get('reads', '').split(',') if r.strip()]
+    if not reads:
+        paths = body_doc_paths(body)
+        if paths:
+            reason = 'reads= が無い' if mark is not None else '旧い形'
+            base = root if root is not None else _root()
+            present = [p for p in paths if _path_exists(base, p)]
+            missing = [p for p in paths if p not in present]
+            lines = [f'読む束なし（{reason}）。本文に出てくる docs/ の path {len(paths)} 件（手がかり。上から読む。本文の参照の path は docs 以外も読む）:']
+            lines += [f'  - {path}' for path in present]
+            if missing:
+                lines.append(f'  まだ無い・移動か削除（作業ツリーの根に無い）{len(missing)} 件:')
+                lines += [f'  - {path}（まだ無い）' for path in missing]
+            return lines
+        return ['読む束なし（旧い形）' if mark is None else '読む束なし（目印に reads= が無い）']
+    lines = [f'読む束（{len(reads)} 件。上から順に読む。束の外は読まない）:']
+    lines += [f'  {index}. {path}' for index, path in enumerate(reads, 1)]
+    for key, label in (('reqs', '要件'), ('src', '提案')):
+        if mark.get(key):
+            lines.append(f'  {label}: {mark[key]}')
+    return lines
+
+
+def print_reading_bundle(body: str) -> None:
+    for line in reading_bundle_lines(body):
+        print(line)
+
+
+# ── coverage（承認済みの提案の表と、issue の目印の突き合わせ）（DS-R2.3） ────────────
+DRAFT_DIR_RELATIVE = os.path.join('docs', 'draft')
+_HISTORY_SECTION_RE = re.compile(r'^##\s+(?:9\.\s*承認履歴|12\.\s*履歴)')
+_MERGED_STATUSES = ('取り込み済み',)  # coverage と読む束の対象から外れる（DS-R3.3）
+_EXPIRED_STATUS = '失効'
+_TABLE_REQUIRED_COLUMNS = ('id', 'kind', '題名')
+_EXISTING_ISSUE_RE = re.compile(r'既存\s*#(\d+)')
+# 履歴で承認の PR と読むのは「PR #n の merge で承認」と「承認（… PR #n …）」の形だけ（移行・差し戻しの PR は数えない）。
+_HISTORY_APPROVAL_RE = re.compile(r'(PR\s*#\d+\s*の\s*merge\s*で承認)|承認[（(][^）)]*?(PR\s*#\d+)')
+
+
+def _read_draft(path: str) -> list[str]:
+    try:
+        with open(path, encoding='utf-8') as f:
+            return f.read().splitlines()
+    except OSError as exc:
+        die(f'{path} を読めなかった: {exc}', 2)
+
+
+def latest_approval_pr(lines: list[str]) -> int | None:
+    """提案が持つ承認の PR 番号のうち最も大きいもの（approved_at・approvals・履歴の「承認」の行）。"""
+    header = _draft_header(lines)
+    texts = [header.get('approved_at', ''), header.get('approvals', '')]
+    in_history = False
+    for line in lines:
+        if line.startswith('## '):
+            in_history = bool(_HISTORY_SECTION_RE.match(line))
+        elif in_history:
+            texts.extend(m.group(0) for m in _HISTORY_APPROVAL_RE.finditer(line))
+    numbers = [int(n) for text in texts for n in _TABLE_PR_RE.findall(text)]
+    return max(numbers) if numbers else None
+
+
+def coverage_findings(
+    drafts: dict[str, list[str]], marks: list[dict],
+) -> dict[str, list]:
+    """drafts（slug → 行）と issue の目印（number・state・mark）から、coverage の 3 つの指摘を作る。
+    missing: slug → (起票漏れの行, 起票しない行と理由) / stale: 古い版を指す open の issue /
+    expired: 失効した提案を指す open の issue / unknown: file の無い提案を指す open の issue。"""
+    by_slug: dict[str, dict[str, int]] = {}
+    for m in marks:
+        src = _SRC_RE.match(m['mark'].get('src', ''))
+        if src and m['mark'].get('id'):
+            by_slug.setdefault(src.group('slug'), {})[m['mark']['id']] = m['number']
+    result: dict[str, list] = {'missing': [], 'unreadable': [], 'stale': [], 'expired': [], 'unknown': []}
+    for slug, lines in sorted(drafts.items()):
+        header = _draft_header(lines)
+        # 起票漏れを数えるのは承認の提案だけ（取り込み済み・失効は status が承認でないので、ここで外れる。DS-R3.3）。
+        table = _table_section_and_rows(lines, accept_old=True)
+        if not header.get('status', '').startswith(_APPROVAL_STATUS) or table is None:
+            continue
+        section, rows = table
+        stage = _stage_of(section)
+        if stage is not None:
+            approved, why = _stage_approval(header, stage)
+            if not approved:
+                result['unreadable'].append((slug, f'{stage} の段の承認が読めない／無い: {why}'))
+                continue
+        if not any(line.strip() == TABLE_HEADING for line in lines):
+            # 旧い形の表から new --from-table は起票できず、目印が付かない。目印では突き合わせられない。
+            result['unreadable'].append((slug, '旧い形の表（8-3）は目印で突き合わせられない'))
+            continue
+        absent = [c for c in _TABLE_REQUIRED_COLUMNS if rows and c not in rows[0]]
+        if absent:
+            result['unreadable'].append((slug, f'表の列が new --from-table の形でない（{"・".join(absent)} の列が無い）'))
+            continue
+        existing = dict(by_slug.get(slug, {}))
+        for row in rows:  # 「既存 #723 を使う」と書いた行は、新しく起票しない
+            used = _EXISTING_ISSUE_RE.search(row.get('題名', ''))
+            if used and row.get('id'):
+                existing.setdefault(row['id'], int(used.group(1)))
+        fileable, skipped = plan_table_rows(rows, existing)
+        result['missing'].append((
+            slug, fileable, [(i, why) for i, why in skipped if not why.startswith('すでに起票済み')],
+        ))
+    for m in marks:
+        if m['state'] == 'CLOSED':
+            continue
+        src = _SRC_RE.match(m['mark'].get('src', ''))
+        if not src:
+            continue
+        lines = drafts.get(src.group('slug'))
+        if lines is None:
+            result['unknown'].append(m)
+            continue
+        status = _draft_header(lines).get('status', '')
+        if status.startswith(_EXPIRED_STATUS):
+            result['expired'].append(m)
+        elif not status.startswith(_MERGED_STATUSES) and src.group('pr'):
+            newest = latest_approval_pr(lines)
+            if newest is not None and newest > int(src.group('pr')):
+                result['stale'].append({**m, 'newest': newest})
+    return result
+
+
+def cmd_coverage() -> int:
+    draft_dir = os.path.join(_root(), DRAFT_DIR_RELATIVE)
+    drafts: dict[str, list[str]] = {}
+    if os.path.isdir(draft_dir):
+        for name in sorted(os.listdir(draft_dir)):
+            if name.endswith('.md'):
+                drafts[name[:-3]] = _read_draft(os.path.join(draft_dir, name))
+    project_number = discover_project_number()
+    issues = [i for i in fetch_all_items(project_number) if i.get('type') == 'Issue']
+    numbers = [i['number'] for i in issues]
+    states = {i['number']: i.get('state') for i in issues}
+    marks = [
+        {'number': n, 'state': states.get(n), 'mark': mark}
+        for n, body in sorted(fetch_bodies(numbers).items())
+        if (mark := parse_task_mark(body)) is not None
+    ]
+    found = coverage_findings(drafts, marks)
+    print(f'coverage（提案 {len(drafts)} 本・目印つき issue {len(marks)} 件）')
+    missing_total = 0
+    for slug, why in found['unreadable']:
+        print(f'{slug}: 照合できない（{why}）')
+    for slug, fileable, skipped in found['missing']:
+        missing_total += len(fileable)
+        print(f'{slug}: 起票漏れ {len(fileable)} 件')
+        for row in fileable:
+            print(f'  {row["id"]} / {row["kind"]} / {row["title"]}')
+        for row_id, why in skipped:
+            print(f'  （起票しない行 {row_id}: {why}）')
+    if not found['missing'] and not found['unreadable']:
+        print('承認済みの提案（表あり）は 0 本')
+    print(f'古い版を指す issue {len(found["stale"])} 件')
+    for m in found['stale']:
+        print(f'  #{m["number"]} {m["mark"].get("id", "")}: src={m["mark"]["src"]} より新しい承認 PR #{m["newest"]} がある')
+    print(f'失効した提案を指す issue {len(found["expired"])} 件')
+    for m in found['expired']:
+        print(f'  #{m["number"]} {m["mark"].get("id", "")}: src={m["mark"]["src"]}（{DRAFT_DIR_RELATIVE}/ の提案は失効）')
+    for m in found['unknown']:
+        print(f'  （#{m["number"]} の src={m["mark"]["src"]} は {DRAFT_DIR_RELATIVE}/ に file が無い）')
+    return 0
+
+
+# ── impact（設計の「位置と前後」の #番号を GitHub から引いて注記する）（DS-07） ──────────
+# 節は旧い形の「### 8-1. 位置と前後」も新しい形の「### 11-1. 位置と前後」も読む。
+_IMPACT_HEADING_RE = re.compile(r'^###\s+(?:8|11)-1\.\s*位置と前後')
+_HEADING_LINE_RE = re.compile(r'^#{1,3}\s')
+_IMPACT_NUMBER_RE = re.compile(r'(?<![\w&/])#(\d+)\b')
+
+
+def impact_numbers(lines: list[str]) -> list[int] | None:
+    """「位置と前後」の節にある #番号（出た順・重複なし）。節が無ければ None。"""
+    start = next((i for i, line in enumerate(lines) if _IMPACT_HEADING_RE.match(line.strip())), None)
+    if start is None:
+        return None
+    numbers: list[int] = []
+    in_fence = False
+    for line in lines[start + 1:]:
+        if line.lstrip().startswith(('```', '~~~')):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if _HEADING_LINE_RE.match(line):
+            break
+        for n in _IMPACT_NUMBER_RE.findall(line):
+            if int(n) not in numbers:
+                numbers.append(int(n))
+    return numbers
+
+
+def impact_notes(numbers: list[int], items: list[dict], extras: dict[int, dict]) -> tuple[list[str], list[int]]:
+    """番号ごとの注記の 1 行と、警告の番号（閉じた・保留）。"""
+    by_number = {i['number']: i for i in items if i.get('number') is not None}
+    children: dict[int, list[dict]] = {}
+    for i in items:
+        if i.get('type') == 'Issue' and i.get('parent_number') is not None:
+            children.setdefault(i['parent_number'], []).append(i)
+    notes: list[str] = []
+    warned: list[int] = []
+    for n in numbers:
+        item = by_number.get(n)
+        if item is None:
+            notes.append(f'#{n} Projects に載っていない（PR・他のリポ・まだ追加していない issue のどれか）')
+            continue
+        parts = [item.get('kind') or '種別なし', item.get('status') or 'Status なし']
+        if item.get('order') is not None:
+            parts.append(f'着手順 {item["order"]:g}')
+        if item.get('parent_number') is not None:
+            parts.append(f'親 #{item["parent_number"]}')
+        kids = children.get(n, [])
+        if kids:
+            tally: dict[str, int] = {}
+            for k in kids:
+                tally[k.get('status') or '空'] = tally.get(k.get('status') or '空', 0) + 1
+            parts.append(f'子 {len(kids)}（' + '・'.join(f'{s} {c}' for s, c in tally.items()) + '）')
+        open_blockers = (extras.get(n) or {}).get('blocked_by_open_numbers') or []
+        if open_blockers:
+            parts.append('blocked by ' + ' '.join(f'#{b}' for b in open_blockers))
+        if item.get('state') == 'CLOSED':
+            parts.append('閉じた')
+        if item.get('state') == 'CLOSED' or item.get('status') == '保留':
+            warned.append(n)
+        notes.append(f'#{n} {item.get("title", "")[:50]} — ' + '・'.join(parts))
+    return notes, warned
+
+
+def cmd_impact(argv: list[str]) -> int:
+    if len(argv) != 1:
+        die('使い方: hirai-task impact <draft の path>', 2)
+    lines = _read_draft(argv[0])
+    numbers = impact_numbers(lines)
+    if numbers is None:
+        die(f'{argv[0]} に「### 8-1. 位置と前後」（新しい形は 11-1）の節が無い', 2)
+    print(f'impact: {argv[0]}（位置と前後の #番号 {len(numbers)} 件）')
+    if not numbers:
+        return 0
+    project_number = discover_project_number()
+    items = fetch_all_items(project_number)
+    on_board = [n for n in numbers if any(i.get('number') == n and i.get('type') == 'Issue' for i in items)]
+    notes, warned = impact_notes(numbers, items, fetch_extras(on_board))
+    for note in notes:
+        print(f'  {note}')
+    if warned:
+        print('警告: 閉じた・保留の番号 ' + ' '.join(f'#{n}' for n in warned))
+    else:
+        print('警告: なし（閉じた・保留の番号 0 件）')
+    return 0
+
+
+# ── design-merge（承認済みの提案の差分を層 4 の現在形に当てる）（DS-08） ────────────
+_REQ_HEADING_RE = re.compile(r'^###\s+要件\s+([A-Z][A-Z0-9]*-R\d+)\s*[:：]\s*(.*?)\s*$')
+_DELETED_ID_RE = re.compile(r'^[-*]\s+([A-Z][A-Z0-9]*-R\d+)(?![.\d])')
+_DELETED_ACCEPTANCE_RE = re.compile(r'^[-*]\s+([A-Z][A-Z0-9]*-R\d+\.\d+)(?!\d)')
+_ANY_ID_RE = re.compile(r'[A-Z][A-Z0-9]*-R\d+')
+_ACCEPTANCE_LINE_RE = re.compile(r'^-\s+[A-Z][A-Z0-9]*-R\d+\.\d+(?![\d])')
+_ACCEPTANCE_ID_RE = re.compile(r'^-\s+([A-Z][A-Z0-9]*-R\d+)\.(\d+)(?!\d)')
+_EMPTY_SECTION_RE = re.compile(r'^なし(?:[。.]|[（(].*[）)][。.]?)?$')
+_DELTA_HEADINGS = {'### 追加された要件': 'added', '### 変更された要件': 'changed', '### 削除された要件': 'deleted'}
+_DOMAIN_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')  # docs/4-domains/ の下の 1 つの段
+_DESIGN_MERGE_ARGS = '使い方: hirai-task design-merge <draft の path>'
+_MERGEABLE_STATUSES = ('承認', '実装済み')  # 提案の一生: 承認／実装済み → 取り込み済み
+MERGED_STATUS = '取り込み済み'
+
+
+def _section_range(lines: list[str], pattern: re.Pattern[str]) -> tuple[int, int] | None:
+    """`## ` の節のうち見出しが pattern に当たるものの [開始, 終わり)。コードの囲みの中は見ない。"""
+    start = None
+    in_fence = False
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith(('```', '~~~')):
+            in_fence = not in_fence
+        if in_fence or not line.startswith('## '):
+            continue
+        if start is not None:
+            return start, index
+        if pattern.match(line):
+            start = index
+    return (start, len(lines)) if start is not None else None
+
+
+def parse_delta(lines: list[str]) -> dict:
+    """提案の「## 2. 目指す状態」の 3 区分を読む。要件ブロックは (ID, 見出しの文, 本文の行)。
+    ブロックの形でない中身（表など）は unreadable に区分の名前で入れる。"""
+    span = _section_range(lines, re.compile(r'^##\s+2\.\s'))
+    delta: dict = {'added': [], 'changed': [], 'deleted': [], 'deleted_acceptance': [], 'unreadable': []}
+    if span is None:
+        delta['missing_section'] = True
+        return delta
+    mode = None
+    block: list | None = None
+    other: dict[str, list[str]] = {k: [] for k in ('added', 'changed', 'deleted')}
+
+    def close() -> None:
+        nonlocal block
+        if block is not None:
+            while block[2] and not block[2][-1].strip():
+                block[2].pop()
+            delta[mode].append((block[0], block[1], block[2]))
+        block = None
+
+    for line in lines[span[0] + 1:span[1]]:
+        stripped = line.strip()
+        if stripped in _DELTA_HEADINGS:
+            close()
+            mode = _DELTA_HEADINGS[stripped]
+            continue
+        heading = _REQ_HEADING_RE.match(stripped)
+        if mode in ('added', 'changed') and heading:
+            close()
+            block = (heading.group(1), heading.group(2), [])
+            continue
+        if mode is None:
+            continue
+        if mode == 'deleted':
+            found = _DELETED_ID_RE.match(stripped)
+            found_acceptance = _DELETED_ACCEPTANCE_RE.match(stripped)
+            lead = _DELETED_ID_RE.match(stripped) or _DELETED_ACCEPTANCE_RE.match(stripped)
+            if lead and _ANY_ID_RE.search(re.split(r'[（(]', stripped[lead.end():], maxsplit=1)[0]):
+                other[mode].append(stripped)  # 1 行に ID が 2 つ以上は読めない（1 行 1 ID）
+            elif found:
+                delta['deleted'].append((found.group(1), '', []))
+            elif found_acceptance:
+                delta['deleted_acceptance'].append(found_acceptance.group(1))
+            elif stripped and not _EMPTY_SECTION_RE.match(stripped):
+                other[mode].append(stripped)
+        elif block is not None:
+            if stripped and not _ACCEPTANCE_LINE_RE.match(stripped) and not line[:1].isspace():
+                other[mode].append(stripped)  # 受入の行でも空行でもない（補足の見出しなど）は現在形に書かない
+            elif line[:1].isspace() and _ACCEPTANCE_LINE_RE.match(stripped):
+                other[mode].append(stripped)  # 字下げした受入の形の行は、直前の受入の続きに混ざって同じ ID が 2 行になる
+            else:
+                block[2].append(line.rstrip())
+        elif stripped and not _EMPTY_SECTION_RE.match(stripped):
+            other[mode].append(stripped)
+    close()
+    for key, rest in other.items():
+        if rest:
+            delta['unreadable'].append(key)
+    return delta
+
+
+def _acceptance_units(lines: list[str]) -> list[tuple[str | None, list[str]]]:
+    """要件ブロックの本文を (受入の ID か None, 行) の単位に分ける。受入の行（行頭の `- <ID>.<n>`）とその続きの行
+    （字下げのある行）が 1 単位。ID の無い単位は受入の前後の行（空行・補足）。"""
+    units: list[tuple[str | None, list[str]]] = []
+    for line in lines:
+        found = _ACCEPTANCE_ID_RE.match(line)
+        if found:
+            units.append((f'{found.group(1)}.{found.group(2)}', [line]))
+        elif units and units[-1][0] is not None and line[:1].isspace() and line.strip():
+            units[-1][1].append(line)
+        else:
+            units.append((None, [line]))
+    return units
+
+
+def _merge_acceptances(
+    current: list[str], rewrites: list[str], removals: set[str],
+) -> list[str]:
+    """現在形の要件ブロックの本文（見出しの次の行から）に、書いた受入の行を差し替え・足し、消す受入を落とす。
+    書いていない受入は残す。足す受入は最後の受入の次（無ければ本文の末尾）に入れる。"""
+    units = _acceptance_units(current)
+    new_by_id: dict[str, list[str]] = {}
+    for line in rewrites:
+        found = _ACCEPTANCE_ID_RE.match(line)
+        if found:
+            new_by_id[f'{found.group(1)}.{found.group(2)}'] = [line]
+        elif line.strip() and new_by_id:
+            last = list(new_by_id)[-1]
+            new_by_id[last].append(line)
+    result: list[tuple[str | None, list[str]]] = []
+    for acceptance_id, unit in units:
+        if acceptance_id in removals:
+            continue
+        if acceptance_id in new_by_id:
+            result.append((acceptance_id, new_by_id.pop(acceptance_id)))
+        else:
+            result.append((acceptance_id, unit))
+    if new_by_id:
+        last_acceptance = max((i for i, (a, _) in enumerate(result) if a is not None), default=None)
+        added = [(k, v) for k, v in new_by_id.items()]
+        if last_acceptance is None:
+            body = _trim_trailing_blank([ln for _, u in result for ln in u])
+            result = [(None, body)] + added + [(None, [''])]
+        else:
+            result[last_acceptance + 1:last_acceptance + 1] = added
+    return [ln for _, unit in result for ln in unit]
+
+
+def _requirement_blocks(lines: list[str], span: tuple[int, int]) -> dict[str, tuple[int, int]]:
+    """現在形の「## 7. 要件と受入」の中の `### 要件 ID:` ブロック → [開始, 終わり)。"""
+    # 見出しの形に当たらない `### ` も境界にする（`### 要件 A-R8・A-R9:` が前の要件のブロックに混ざらない）
+    starts = [
+        (i, (_REQ_HEADING_RE.match(lines[i].strip()) or [None, None])[1]) for i in range(span[0] + 1, span[1])
+        if lines[i].startswith('### ')
+    ]
+    blocks: dict[str, tuple[int, int]] = {}
+    for position, (start, req_id) in enumerate(starts):
+        if req_id is None:
+            continue
+        end = starts[position + 1][0] if position + 1 < len(starts) else span[1]
+        blocks[req_id] = (start, end)
+    return blocks
+
+
+def _unmatched_heading_ids(lines: list[str], span: tuple[int, int]) -> set[str]:
+    """現在形の「## 7.」の中で、要件の見出しの形に当たらない `### ` 見出し（`### 要件 A-R8・A-R9: …`）の `:` より前の ID。"""
+    found: set[str] = set()
+    for line in lines[span[0] + 1:span[1]]:
+        if line.startswith('### ') and not _REQ_HEADING_RE.match(line.strip()):
+            found.update(_ANY_ID_RE.findall(re.split(r'[:：]', line, maxsplit=1)[0]))
+    return found
+
+
+def _check_requirement_body(label: str, req_id: str, text: str, body: list[str], problems: list[str]) -> None:
+    """追加・変更の要件の本文の検査: 見出しの文が空・別の要件の受入 ID・同じ受入 ID の 2 行。"""
+    if not text.strip():
+        problems.append(f'{label} {req_id} の見出しの文が空。受入だけを変えるときも、見出しには現在形の今の文をそのまま書く')
+    written: set[str] = set()
+    for line in body:
+        found = _ACCEPTANCE_ID_RE.match(line)
+        if not found:
+            continue
+        acceptance_id = f'{found.group(1)}.{found.group(2)}'
+        if found.group(1) != req_id:
+            problems.append(f'{label} {req_id} の下に、別の要件の受入 {acceptance_id} がある')
+        if acceptance_id in written:
+            problems.append(f'受入 {acceptance_id} が{label.removesuffix("された要件")}の中で重複している')
+        written.add(acceptance_id)
+
+
+_OLD_TEXT_RE = re.compile(r'[（(]\s*変更前')
+
+
+def _trim_trailing_blank(block: list[str]) -> list[str]:
+    end = len(block)
+    while end and not block[end - 1].strip():
+        end -= 1
+    return block[:end]
+
+
+def apply_delta(readme: list[str], delta: dict) -> tuple[list[str] | None, list[str]]:
+    """現在形（行）に差分を当てた新しい行と、当てられない理由の一覧。理由があれば行は None（何も書かない）。"""
+    span = _section_range(readme, re.compile(r'^##\s+7\.\s*要件と受入'))
+    if span is None:
+        return None, ['現在形に「## 7. 要件と受入」の節が無い']
+    blocks = _requirement_blocks(readme, span)
+    problems: list[str] = []
+    seen: set[str] = set()
+    for req_id in [r for kind in ('added', 'changed', 'deleted') for r, _, _ in delta[kind]]:
+        if req_id in seen:
+            problems.append(f'{req_id} が差分の中で重複している')
+        seen.add(req_id)
+    unmatched_ids = _unmatched_heading_ids(readme, span)
+    for req_id, text, body in delta['added']:
+        if req_id in blocks:
+            problems.append(f'追加された要件 {req_id} は現在形に既にある')
+        elif req_id in unmatched_ids:
+            problems.append(f'追加された要件 {req_id} は現在形の形に当たらない `###` 見出しに既にある')
+        _check_requirement_body('追加された要件', req_id, text, body, problems)
+    for kind, label in (('changed', '変更された要件'), ('deleted', '削除された要件')):
+        for req_id, _, _ in delta[kind]:
+            if req_id not in blocks:
+                problems.append(f'{label} {req_id} が現在形に無い（変更先の要件 ID が無い）')
+    rewrites: dict[str, list[str]] = {}
+    for req_id, text, body in delta['changed']:
+        _check_requirement_body('変更された要件', req_id, text, body, problems)
+        first_acceptance = next((n for n, ln in enumerate(body) if _ACCEPTANCE_ID_RE.match(ln)), len(body))
+        if any(ln.strip() for ln in body[:first_acceptance]):
+            problems.append(f'変更された要件 {req_id} の本文に、最初の受入より前の行がある（受入の行 `- <ID>.<n> …` から書く）')
+        current_text = ''
+        if req_id in blocks:
+            current_match = _REQ_HEADING_RE.match(readme[blocks[req_id][0]].strip())
+            current_text = current_match.group(2) if current_match else ''
+        old_forms = _OLD_TEXT_RE.search(text) is not None
+        if '→' in text and current_text.strip():
+            before = text.split('→', 1)[0].strip(' \t（()）「」`')
+            old_forms = old_forms or before == current_text.strip(' \t（()）「」`')
+        if old_forms:
+            problems.append(f'変更された要件 {req_id} の見出しに変更前の文（括弧書きの「変更前」か、今の文 → 新しい文）がある。見出しは変更後の文だけを書く（変更前の文は §3 か PR に書く）')
+        rewrites[req_id] = body
+    removals: dict[str, set[str]] = {}
+    deleted_requirements = {r for r, _, _ in delta['deleted']}
+    rewritten = {f'{m.group(1)}.{m.group(2)}' for body in rewrites.values() for m in map(_ACCEPTANCE_ID_RE.match, body) if m}
+    for acceptance_id in delta.get('deleted_acceptance', []):
+        req_id = acceptance_id.rsplit('.', 1)[0]
+        if acceptance_id in removals.get(req_id, set()):
+            problems.append(f'受入 {acceptance_id} が削除の中で重複している')
+        elif req_id in deleted_requirements:
+            problems.append(f'受入 {acceptance_id} は、要件 {req_id} ごと削除する差分の中で重複している')
+        elif acceptance_id in rewritten:
+            problems.append(f'受入 {acceptance_id} が変更と削除の両方に重複している')
+        elif req_id not in blocks:
+            problems.append(f'削除された受入 {acceptance_id} の要件 {req_id} が現在形に無い')
+        elif acceptance_id not in {a for a, _ in _acceptance_units(readme[blocks[req_id][0] + 1:blocks[req_id][1]]) if a}:
+            problems.append(f'削除された受入 {acceptance_id} が現在形に無い')
+        removals.setdefault(req_id, set()).add(acceptance_id)
+    for req_id in sorted((set(rewrites) | set(removals)) & set(blocks)):
+        touched = {f'{m.group(1)}.{m.group(2)}' for m in map(_ACCEPTANCE_ID_RE.match, rewrites.get(req_id, [])) if m} | removals.get(req_id, set())
+        ids = [a for a, _ in _acceptance_units(readme[blocks[req_id][0] + 1:blocks[req_id][1]]) if a]
+        for acceptance_id in sorted(touched):
+            if ids.count(acceptance_id) > 1:
+                problems.append(f'現在形の {acceptance_id} が {ids.count(acceptance_id)} 行ある。手で直してから当てる')
+    if problems:
+        return None, problems
+    replacements: dict[str, list[str] | None] = {}
+    changed_text = {r: t for r, t, _ in delta['changed']}
+    for req_id in sorted(set(rewrites) | set(removals), key=lambda r: blocks[r][0]):
+        start, end = blocks[req_id]
+        heading = f'### 要件 {req_id}: {changed_text[req_id].strip()}' if req_id in changed_text else readme[start]
+        body = _merge_acceptances(_trim_trailing_blank(readme[start + 1:end]), rewrites.get(req_id, []), removals.get(req_id, set()))
+        replacements[req_id] = [heading] + _trim_trailing_blank(body) + ['']
+    for req_id, _, _ in delta['deleted']:
+        replacements[req_id] = None
+    result: list[str] = []
+    index = 0
+    for req_id, (start, end) in sorted(blocks.items(), key=lambda kv: kv[1][0]):
+        if req_id not in replacements:
+            continue
+        result += readme[index:start]
+        result += replacements[req_id] or []
+        index = end
+    result += readme[index:span[1]]
+    tail = _trim_trailing_blank(result)
+    additions: list[str] = []
+    for req_id, text, body in delta['added']:
+        additions += [''] + [f'### 要件 {req_id}: {text}'] + _trim_trailing_blank(body)
+    # 節の終わりの空行は 1 つにそろえてから、追加分を足す。
+    return tail + additions + [''] + readme[span[1]:], []
+
+
+def _with_header_value(lines: list[str], key: str, value: str) -> list[str]:
+    """先頭の項目（最初の `## ` まで）の `key: …` を value に替えた新しい行。無ければ status の次の行に足す。"""
+    pattern = re.compile(rf'^{key}:')
+    result = list(lines)
+    limit = next((i for i, ln in enumerate(result) if ln.startswith('## ')), len(result))
+    for index in range(limit):
+        if pattern.match(result[index]):
+            result[index] = f'{key}: {value}'.rstrip()
+            return result
+    anchor = next((i for i in range(limit) if result[i].startswith('status:')), limit - 1)
+    return result[:anchor + 1] + [f'{key}: {value}'] + result[anchor + 1:]
+
+
+def cmd_design_merge(argv: list[str]) -> int:
+    import difflib
+    if len(argv) != 1:
+        die(_DESIGN_MERGE_ARGS, 2)
+    path = argv[0]
+    lines = _read_draft(path)
+    header = _draft_header(lines)
+    if 'id_prefix' not in header:
+        die(f'{path} は新しい形の提案（先頭に id_prefix: がある）でない', 2)
+    status = header.get('status', '')
+    if status.startswith(MERGED_STATUS):
+        die(f'{path} は既に {MERGED_STATUS}（merged_into: {header.get("merged_into") or "空"}）', 2)
+    if not status.startswith(_MERGEABLE_STATUSES):
+        die(f'{path} の status が「{status or "空"}」で、承認済み（{"・".join(_MERGEABLE_STATUSES)}）でない', 2)
+    approved, detail = _stage_approval({**header, 'status': _APPROVAL_STATUS}, '要件')
+    if not approved:
+        die(f'{path} の要件の段が承認されていない: {detail}', 2)
+    domain = header.get('domain', '')
+    if not _DOMAIN_NAME_RE.match(domain):
+        die(
+            f'取り込み先の領域を 1 つに決められない（domain: {domain or "空"}）。'
+            '現在形 docs/4-domains/<領域>/README.md を 1 つ指す domain: が要る。領域が 2 つ以上・— の提案は手で当てる', 1,
+        )
+    docs_dir = os.path.dirname(os.path.dirname(os.path.abspath(path)))
+    readme_relative = os.path.join('docs', '4-domains', domain, 'README.md')
+    readme_path = os.path.join(docs_dir, '4-domains', domain, 'README.md')
+    domains_root = os.path.realpath(os.path.join(docs_dir, '4-domains'))
+    if not os.path.realpath(readme_path).startswith(domains_root + os.sep):
+        die(f'{readme_path} は docs/4-domains/ の外を指す（domain: {domain}）。何も書いていない', 2)
+    readme = _read_draft(readme_path)
+    readme_domain = _draft_header(readme).get('domain', '')
+    if readme_domain != domain:
+        die(f'{readme_relative} の domain: が「{readme_domain or "空"}」で、提案の domain: {domain} と違う。何も書いていない', 1)
+    delta = parse_delta(lines)
+    if delta.get('missing_section'):
+        die(f'{path} に「## 2. 目指す状態」の節が無い', 1)
+    if delta['unreadable']:
+        die(
+            f'{path} の差分（{"・".join(delta["unreadable"])}）が要件ブロック（`### 要件 <ID>: …` と `- <ID>.<n> …`）の形でない。'
+            '何も書いていない', 1,
+        )
+    if not (delta['added'] or delta['changed'] or delta['deleted'] or delta['deleted_acceptance']):
+        die(f'{path} の差分が空（追加・変更・削除がすべて「なし」）で、当てるものが無い。何も書いていない', 1)
+    merged, problems = apply_delta(readme, delta)
+    if merged is None:
+        die('当てられない差分があるので何も書いていない:\n' + '\n'.join(f'  - {p}' for p in problems), 1)
+    rev_line = next((ln for ln in readme[:next((i for i, x in enumerate(readme) if x.startswith('## ')), len(readme))] if ln.startswith('rev:')), None)
+    rev_text = ''
+    if rev_line and rev_line.split(':', 1)[1].strip().isdigit():
+        old_rev = int(rev_line.split(':', 1)[1])
+        merged = _with_header_value(merged, 'rev', str(old_rev + 1))
+        rev_text = f'rev: {old_rev} → {old_rev + 1}'
+    new_draft = _with_header_value(_with_header_value(lines, 'status', MERGED_STATUS), 'merged_into', readme_relative)
+    # 2 本とも tmp に書き終えてから、draft → README の順に置き換える。README の置き換えが落ちたら draft を戻す。
+    pairs = ((path, new_draft), (readme_path, merged))
+    tmps = [f'{target}.tmp{os.getpid()}' for target, _ in pairs]
+    try:
+        for tmp, (_, new) in zip(tmps, pairs):
+            with open(tmp, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(new) + '\n')
+        os.replace(tmps[0], path)
+        try:
+            os.replace(tmps[1], readme_path)
+        except OSError as exc:
+            restore = f'{path}.tmp{os.getpid()}'
+            with open(restore, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(lines) + '\n')
+            os.replace(restore, path)
+            die(f'{readme_relative} を書けなかったので、{path} を元に戻した: {exc}', 1)
+    except OSError as exc:
+        die(f'取り込みの書き込みに失敗した（README は未更新）: {exc}', 1)
+    finally:
+        for tmp in tmps:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+    print(f'design-merge: {path} → {readme_relative}')
+    print(f'  追加 {len(delta["added"])} 件・変更 {len(delta["changed"])} 件・削除 {len(delta["deleted"])} 件' + (f'・受入の削除 {len(delta["deleted_acceptance"])} 件' if delta['deleted_acceptance'] else '') + (f'・{rev_text}' if rev_text else ''))
+    print(f'  提案の先頭: status: {status} → {MERGED_STATUS}・merged_into: {readme_relative}')
+    for line in difflib.unified_diff(readme, merged, readme_relative, readme_relative, lineterm='', n=1):
+        print(line)
     return 0
 
 
@@ -3164,6 +3839,7 @@ def main(argv: list[str]) -> int:
         '           add <issue> | approve <issue> | start <issue> [--approved <出どころ>]\n'
         '           review <issue> | done <issue> [--not-planned <理由>] | reopen <issue> <status>\n'
         '           set <issue> <field> <value> | sync\n'
+        '           coverage | impact <draft の path> | design-merge <draft の path>\n'
         '           comments | close-parents [--json] | align [--json] | unblocked | memos\n'
         '           today | after-merge <PR番号>'
     )
@@ -3172,6 +3848,8 @@ def main(argv: list[str]) -> int:
     sub, tail = argv[0], argv[1:]
     if sub == '--selftest':
         return _run_selftest()
+    if sub == 'design-merge':  # ローカルの file だけを書く。GitHub も repo の判定も要らない。
+        return cmd_design_merge(tail)
     if not REPO:
         die(
             'リポを決められない（git remote の origin が github.com を指していない）。'
@@ -3224,6 +3902,12 @@ def main(argv: list[str]) -> int:
         fields = sync_fields(project_number)
         print(f'{len(fields)} フィールドを {FIELDS_CACHE} へ')
         return 0
+    if sub == 'coverage':
+        if tail:
+            die('使い方: hirai-task coverage', 2)
+        return cmd_coverage()
+    if sub == 'impact':
+        return cmd_impact(tail)
     if sub == 'comments':
         return cmd_comments()
     if sub == 'close-parents':
