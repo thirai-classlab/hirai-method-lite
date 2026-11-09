@@ -2703,6 +2703,8 @@ def parse_delta(lines: list[str]) -> dict:
         elif block is not None:
             if stripped and not _ACCEPTANCE_LINE_RE.match(stripped) and not line[:1].isspace():
                 other[mode].append(stripped)  # 受入の行でも空行でもない（補足の見出しなど）は現在形に書かない
+            elif line[:1].isspace() and _ACCEPTANCE_LINE_RE.match(stripped):
+                other[mode].append(stripped)  # 字下げした受入の形の行は、直前の受入の続きに混ざって同じ ID が 2 行になる
             else:
                 block[2].append(line.rstrip())
         elif stripped and not _EMPTY_SECTION_RE.match(stripped):
@@ -2778,6 +2780,35 @@ def _requirement_blocks(lines: list[str], span: tuple[int, int]) -> dict[str, tu
     return blocks
 
 
+def _unmatched_heading_ids(lines: list[str], span: tuple[int, int]) -> set[str]:
+    """現在形の「## 7.」の中で、要件の見出しの形に当たらない `### ` 見出し（`### 要件 A-R8・A-R9: …`）の `:` より前の ID。"""
+    found: set[str] = set()
+    for line in lines[span[0] + 1:span[1]]:
+        if line.startswith('### ') and not _REQ_HEADING_RE.match(line.strip()):
+            found.update(_ANY_ID_RE.findall(re.split(r'[:：]', line, maxsplit=1)[0]))
+    return found
+
+
+def _check_requirement_body(label: str, req_id: str, text: str, body: list[str], problems: list[str]) -> None:
+    """追加・変更の要件の本文の検査: 見出しの文が空・別の要件の受入 ID・同じ受入 ID の 2 行。"""
+    if not text.strip():
+        problems.append(f'{label} {req_id} の見出しの文が空。受入だけを変えるときも、見出しには現在形の今の文をそのまま書く')
+    written: set[str] = set()
+    for line in body:
+        found = _ACCEPTANCE_ID_RE.match(line)
+        if not found:
+            continue
+        acceptance_id = f'{found.group(1)}.{found.group(2)}'
+        if found.group(1) != req_id:
+            problems.append(f'{label} {req_id} の下に、別の要件の受入 {acceptance_id} がある')
+        if acceptance_id in written:
+            problems.append(f'受入 {acceptance_id} が{label.removesuffix("された要件")}の中で重複している')
+        written.add(acceptance_id)
+
+
+_OLD_TEXT_RE = re.compile(r'[（(]\s*変更前')
+
+
 def _trim_trailing_blank(block: list[str]) -> list[str]:
     end = len(block)
     while end and not block[end - 1].strip():
@@ -2797,32 +2828,33 @@ def apply_delta(readme: list[str], delta: dict) -> tuple[list[str] | None, list[
         if req_id in seen:
             problems.append(f'{req_id} が差分の中で重複している')
         seen.add(req_id)
-    for req_id, _, _ in delta['added']:
+    unmatched_ids = _unmatched_heading_ids(readme, span)
+    for req_id, text, body in delta['added']:
         if req_id in blocks:
             problems.append(f'追加された要件 {req_id} は現在形に既にある')
+        elif req_id in unmatched_ids:
+            problems.append(f'追加された要件 {req_id} は現在形の形に当たらない `###` 見出しに既にある')
+        _check_requirement_body('追加された要件', req_id, text, body, problems)
     for kind, label in (('changed', '変更された要件'), ('deleted', '削除された要件')):
         for req_id, _, _ in delta[kind]:
             if req_id not in blocks:
                 problems.append(f'{label} {req_id} が現在形に無い（変更先の要件 ID が無い）')
     rewrites: dict[str, list[str]] = {}
     for req_id, text, body in delta['changed']:
-        if not text.strip():
-            problems.append(f'変更された要件 {req_id} の見出しの文が空。受入だけを変えるときも、見出しには現在形の今の文をそのまま書く')
-        if '変更前' in text:
-            problems.append(f'変更された要件 {req_id} の見出しに「変更前」がある。見出しは変更後の文だけを書く（変更前の文は §3 か PR に書く）')
-        if '→' in text:
-            problems.append(f'変更された要件 {req_id} の見出しに → がある。見出しは変更後の文だけを書く（変更前の文は §3 か PR に書く）')
-        written: set[str] = set()
-        for line in body:
-            found = _ACCEPTANCE_ID_RE.match(line)
-            if not found:
-                continue
-            acceptance_id = f'{found.group(1)}.{found.group(2)}'
-            if found.group(1) != req_id:
-                problems.append(f'変更された要件 {req_id} の下に、別の要件の受入 {acceptance_id} がある')
-            if acceptance_id in written:
-                problems.append(f'受入 {acceptance_id} が変更の中で重複している')
-            written.add(acceptance_id)
+        _check_requirement_body('変更された要件', req_id, text, body, problems)
+        first_acceptance = next((n for n, ln in enumerate(body) if _ACCEPTANCE_ID_RE.match(ln)), len(body))
+        if any(ln.strip() for ln in body[:first_acceptance]):
+            problems.append(f'変更された要件 {req_id} の本文に、最初の受入より前の行がある（受入の行 `- <ID>.<n> …` から書く）')
+        current_text = ''
+        if req_id in blocks:
+            current_match = _REQ_HEADING_RE.match(readme[blocks[req_id][0]].strip())
+            current_text = current_match.group(2) if current_match else ''
+        old_forms = _OLD_TEXT_RE.search(text) is not None
+        if '→' in text and current_text.strip():
+            before = text.split('→', 1)[0].strip(' \t（()）「」`')
+            old_forms = old_forms or before == current_text.strip(' \t（()）「」`')
+        if old_forms:
+            problems.append(f'変更された要件 {req_id} の見出しに変更前の文（括弧書きの「変更前」か、今の文 → 新しい文）がある。見出しは変更後の文だけを書く（変更前の文は §3 か PR に書く）')
         rewrites[req_id] = body
     removals: dict[str, set[str]] = {}
     deleted_requirements = {r for r, _, _ in delta['deleted']}

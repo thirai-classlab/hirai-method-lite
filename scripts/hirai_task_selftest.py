@@ -3590,7 +3590,7 @@ def main() -> int:
         t('design-merge: 変更は書いた受入の ID の行だけ差し替え、現在形に無い ID は足し、書かない ID は残す（R1.1 が R1.10 を巻き込まない）', _design_merge_replaces_only_written_acceptance_ids)
 
         def _design_merge_refuses_arrow_heading() -> None:
-            for heading in ('旧い文 → 新しい文', '（旧い文 → 新しい文）'):
+            for heading in ('一覧を返す → 新しい文', '（一覧を返す → 新しい文）'):
                 delta = '### 変更された要件\n\n### 要件 CHAT-R2: ' + heading + '\n- CHAT-R2.1 Given x When y Then z\n'
                 _assert_merge_refused(_merge_draft(delta), 1, '変更後の文だけ')
 
@@ -3711,6 +3711,56 @@ def main() -> int:
             assert '一覧を返す' not in after and 'CHAT-R3.1' in after, after
 
         t('design-merge: 見出しの形に当たらない ### の直前の要件を消しても、その見出しと文は消えない', _design_merge_unmatched_h3_ends_block)
+
+        def _design_merge_refuses_indented_acceptance_and_leading_text() -> None:
+            # 2 巡目の指摘 1: 字下げした受入の行は直前の受入の続きに入って同じ ID が 2 行になる／最初の受入より前の行は黙って捨てられる
+            indented = '### 変更された要件\n\n### 要件 CHAT-R2: 一覧を返す\n- CHAT-R2.1 Given x When y Then z\n  - CHAT-R2.1 Given p When q Then r\n'
+            _assert_merge_refused(_merge_draft(indented), 1, '要件ブロック')
+            leading = '### 変更された要件\n\n### 要件 CHAT-R2: 一覧を返す\n  補足の文\n- CHAT-R2.1 Given x When y Then z\n'
+            _assert_merge_refused(_merge_draft(leading), 1, '最初の受入より前')
+
+        t('design-merge: 字下げした受入の行と、最初の受入より前の本文の行は、何も書かず exit 1', _design_merge_refuses_indented_acceptance_and_leading_text)
+
+        def _design_merge_refuses_id_in_unmatched_h3() -> None:
+            # 2 巡目の指摘 2: 形に当たらない `### 要件 A・B:` 見出しの ID を追加すると重複する
+            readme = README_BEFORE.replace(
+                '### 要件 CHAT-R3: 参加者を返す',
+                '### 要件 CHAT-R8・CHAT-R9: 案内\n\n→ 案内の文\n\n### 要件 CHAT-R3: 参加者を返す')
+            add = '### 追加された要件\n\n### 要件 CHAT-R9: 新しい文\n- CHAT-R9.1 Given a When b Then c\n'
+            _assert_merge_refused(_merge_draft(add), 1, '既にある', readme)
+
+        t('design-merge: 形に当たらない ### 見出しにある ID を追加すれば、何も書かず exit 1', _design_merge_refuses_id_in_unmatched_h3)
+
+        def _design_merge_checks_added_body() -> None:
+            # 2 巡目の指摘 3: 追加にも、別の要件の受入 ID・同じ受入 ID の 2 行・空の見出しの文の検査を当てる
+            head = '### 追加された要件\n\n'
+            _assert_merge_refused(_merge_draft(head + '### 要件 ATT-R1: a\n- ATT-R2.1 Given a When b Then c\n'), 1, '別の要件の受入')
+            _assert_merge_refused(_merge_draft(head + '### 要件 ATT-R1: a\n- ATT-R1.1 Given a When b Then c\n- ATT-R1.1 Given d When e Then f\n'), 1, '重複')
+            _assert_merge_refused(_merge_draft(head + '### 要件 ATT-R1:\n- ATT-R1.1 Given a When b Then c\n'), 1, '文が空')
+
+        t('design-merge: 追加された要件の本文も、別の要件の受入 ID・同じ受入 ID の 2 行・空の見出しの文を断る', _design_merge_checks_added_body)
+
+        def _design_merge_accepts_words_before_and_arrow_in_new_text() -> None:
+            # 2 巡目の指摘 4: 変更後の文に「変更前」や → が語として入っていても通す。断るのは括弧書きの変更前と、現在形の今の文 → の形だけ
+            for text in ('変更前の本文を履歴に残す', '送信 → 既読 → マッチ の順に進める'):
+                delta = '### 変更された要件\n\n### 要件 CHAT-R2: ' + text + '\n- CHAT-R2.1 Given x When y Then z\n'
+                _, _, after, _ = _merge(_merge_draft(delta))
+                assert '### 要件 CHAT-R2: ' + text in after, after
+            for text in ('（変更前は「古い文」）新しい文', '(変更前 古い文) 新しい文', '一覧を返す → 新しい文', '（一覧を返す → 新しい文）'):
+                delta = '### 変更された要件\n\n### 要件 CHAT-R2: ' + text + '\n- CHAT-R2.1 Given x When y Then z\n'
+                _assert_merge_refused(_merge_draft(delta), 1, '変更後の文だけ')
+
+        t('design-merge: 「変更前」「→」が語として入る変更後の文は通し、括弧書きの変更前と「今の文 → 新しい文」は断る', _design_merge_accepts_words_before_and_arrow_in_new_text)
+
+        def _draft_template_explanations_above_delta_headings() -> None:
+            # 2 巡目の指摘 5: 雛形の説明の段落が区分の見出しの下にあると、そのまま使って unreadable で exit 1 になる
+            template = _read(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'templates', 'draft.md'))
+            template = template.replace('<現在形の id_prefix>', 'CHAT').replace('<id_prefix>', 'ATT')
+            delta = gh_task.parse_delta(template.split('\n'))
+            assert [r for r, _, _ in delta['added'] + delta['changed']] == ['ATT-R1', 'CHAT-R2'], delta
+            assert delta['unreadable'] == [], delta
+
+        t('templates/draft.md: 説明の段落は「### 追加された要件」より上にあり、区分の中に残らない', _draft_template_explanations_above_delta_headings)
 
         def _design_merge_second_write_failure_is_reported() -> None:
             # 指摘 8: 書く順は draft → README。README の置き換えが落ちたら draft を元へ戻して exit 1
