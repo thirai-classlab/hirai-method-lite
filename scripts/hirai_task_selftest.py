@@ -3072,6 +3072,196 @@ def main() -> int:
 
         t('new --from-table: 新しい形（id_prefix: と 11-3 の表）でない draft は断る', _from_table_refuses_old_form)
 
+        # ── start・show の読む束 / coverage / impact / design-merge（#816〜#818） ──
+        def _ds_tree(files: dict[str, str]) -> str:
+            root = os.path.realpath(tempfile.mkdtemp(dir=cache_tmp_dir))
+            for rel, text in files.items():
+                full = os.path.join(root, rel)
+                os.makedirs(os.path.dirname(full), exist_ok=True)
+                with open(full, 'w', encoding='utf-8') as f:
+                    f.write(text)
+            return root
+
+        def _read(path: str) -> str:
+            with open(path, encoding='utf-8') as f:
+                return f.read()
+
+        def make_ds_board_gh(rows: list[dict], bodies: dict[int, str], extras: dict[int, list[int]] | None = None, *, calls: list):
+            """Project の全件・本文の alias・blockedBy の alias に答える偽 gh。呼び出しを calls に控える。"""
+            extras = extras or {}
+
+            def fake_run_gh(args: list[str], input_text: str | None = None) -> tuple[int, str, str]:
+                joined = ' '.join(args)
+                calls.append(joined[:80])
+                if 'projectsV2' in joined and 'items(first:' not in joined:
+                    return _discovery_response()
+                if 'items(first:' in joined:
+                    nodes = [_fake_row(**row) for row in rows]
+                    body = {'data': {'repository': {'projectV2': {
+                        'items': {'pageInfo': {'hasNextPage': False, 'endCursor': None}, 'nodes': nodes}}}}}
+                    return 0, json.dumps(body), ''
+                numbers = [int(x) for x in re.findall(r'issue\(number:\s*(\d+)\)', joined)]
+                if re.search(r'\bi0:', joined) and 'blockedBy' in joined:
+                    data = {f'i{i}': {'issue': {'number': n, 'blockedBy': {
+                        'totalCount': len(extras.get(n, [])),
+                        'nodes': [{'number': b, 'state': 'OPEN'} for b in extras.get(n, [])]},
+                        'closedByPullRequestsReferences': {'nodes': []}}} for i, n in enumerate(numbers)}
+                    return 0, json.dumps({'data': data}), ''
+                if re.search(r'\bi0:', joined):
+                    data = {f'i{i}': {'issue': {'number': n, 'body': bodies.get(n, '')}} for i, n in enumerate(numbers)}
+                    return 0, json.dumps({'data': data}), ''
+                return 1, '', f'unhandled fake gh call: {joined[:120]}'
+
+            return fake_run_gh
+
+        def _mark(row_id: str, src: str, reads: str = '') -> str:
+            reads_part = f' reads={reads}' if reads else ''
+            return f'<!-- rmp-task: id={row_id} rev=1 stream=Infra src={src} reqs=TBL-R1{reads_part} -->\n\n## 完了条件\nx\n'
+
+        # -- 読む束（#816・DS-R1.1） --
+        READS = 'docs/4-domains/chat/README.md#7.-要件と受入,docs/3-shared/auth.md#境界'
+
+        def _bundle_lines_from_mark() -> None:
+            lines = gh_task.reading_bundle_lines(_mark('TBL-01', 'tbl@PR9', READS))
+            assert lines[0].startswith('読む束（2 件'), lines
+            assert lines[1].strip() == '1. docs/4-domains/chat/README.md#7.-要件と受入', lines
+            assert lines[2].strip() == '2. docs/3-shared/auth.md#境界', lines
+            assert gh_task.reading_bundle_lines('旧い本文\n') == ['読む束なし（旧い形）']
+            assert gh_task.reading_bundle_lines(_mark('TBL-01', 'tbl@PR9'))[0].startswith('読む束なし（目印に reads=')
+
+        t('読む束: 目印の reads= を 1 件 1 行で出し、目印が無ければ「読む束なし（旧い形）」', _bundle_lines_from_mark)
+
+        def _start_prints_bundle() -> None:
+            record: list = []
+            for body, expect in ((_mark('TBL-01', 'tbl@PR9', READS), '1. docs/4-domains/chat/README.md'), ('旧い', '読む束なし（旧い形）')):
+                gh_task.run_gh = make_write_gh(
+                    {720: dict(title='task', status=gh_task.READY_STATUS, kind='task', body=body)}, record=record)
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    rc = gh_task.cmd_start(720, None)
+                assert rc == 0 and expect in buf.getvalue(), buf.getvalue()
+                assert f'Status={gh_task.IN_PROGRESS_STATUS}' in buf.getvalue()
+
+        t('start: 着手したあとに読む束を出す（目印なしは「読む束なし（旧い形）」）', _start_prints_bundle)
+
+        def _start_refused_prints_no_bundle() -> None:
+            gh_task.run_gh = make_write_gh(
+                {721: dict(title='task', status=gh_task.PENDING_STATUS, kind='task', body=_mark('T', 's@PR1', READS))})
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                _expect_exit(lambda: gh_task.cmd_start(721, None), 2)
+            assert '読む束' not in buf.getvalue(), buf.getvalue()
+
+        t('start: 断った task には読む束を出さない', _start_refused_prints_no_bundle)
+
+        def _show_prints_bundle() -> None:
+            inner = make_show_gh(as_pr=False, number=722)
+
+            def with_body(args, *rest):
+                rc, out, err = inner(args)
+                payload = json.loads(out) if out else None
+                if payload and 'issueOrPullRequest' in payload.get('data', {}).get('repository', {}):
+                    payload['data']['repository']['issueOrPullRequest']['body'] = _mark('TBL-01', 'tbl@PR9', READS)
+                    out = json.dumps(payload)
+                return rc, out, err
+
+            gh_task.run_gh = with_body
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = gh_task.cmd_show(722)
+            assert rc == 0 and '2. docs/3-shared/auth.md#境界' in buf.getvalue(), buf.getvalue()
+
+        t('show: 本文の目印の reads= を読む束として出す', _show_prints_bundle)
+
+        # -- coverage（#816・DS-R2.3） --
+        def _cov_draft(status: str, rows: str, *, history: str = '- 2026-10-01 PR #9 の merge で承認', heading: str = '### 11-3. 表') -> str:
+            return (
+                '# 試験\n\nid_prefix: TBL\nkind: ハーネス・進め方\ndomain: —\nstatus: ' + status + '\n'
+                'approvals: 要件=PR #9 設計=PR #9 task=PR #9\napproved_at: 2026-10-01（PR #9 の merge で承認）\n\n'
+                '## 1. 問題\n\n## 11. task\n\n' + heading + '\n\n'
+                '| id | kind | stream | 題名 | 親 | 止める依存 | 要件 | 完了条件 |\n|---|---|---|---|---|---|---|---|\n'
+                + rows + '\n\n## 12. 履歴\n\n' + history + '\n')
+
+        ROWS_ABC = ('| TBL-01 | task | Infra | 土台 | feature #900 | — | TBL-R1 | ok |\n'
+                    '| TBL-02 | task | Infra | 命名 [要判断: TBL-Q1] | feature #900 | — | TBL-R2 | — |\n'
+                    '| TBL-03 | task | Infra | 仕上げ | feature #900 | TBL-01 | TBL-R1 | ok |')
+
+        def _run_coverage(files: dict[str, str], rows: list[dict], bodies: dict[int, str]) -> tuple[int, str, list]:
+            root = _ds_tree({f'docs/draft/{k}.md': v for k, v in files.items()})
+            calls: list = []
+            fake = make_ds_board_gh(rows, bodies, calls=calls)
+            gh_task.run_gh = fake
+            saved = os.environ.get('HIRAI_TASK_ROOT')
+            os.environ['HIRAI_TASK_ROOT'] = root
+            try:
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    rc = gh_task.cmd_coverage()
+            finally:
+                if saved is None:
+                    os.environ.pop('HIRAI_TASK_ROOT', None)
+                else:
+                    os.environ['HIRAI_TASK_ROOT'] = saved
+            assert gh_task.run_gh is fake and calls, '外へ出る呼び出しが偽の gh に向いていない'
+            return rc, buf.getvalue(), calls
+
+        def _coverage_reports_missing_stale_expired() -> None:
+            files = {
+                'cov-a': _cov_draft('承認', ROWS_ABC),
+                'cov-old': _cov_draft('承認', '| TBL-01 | task | Infra | x | feature #900 | — | TBL-R1 | ok |',
+                                      history='- 2026-10-01 PR #5 の merge で承認\n- 2026-10-09 PR #9 の merge で承認（要件を足した）'),
+                'cov-exp': _cov_draft('失効', ROWS_ABC),
+                'cov-merged': _cov_draft('取り込み済み', ROWS_ABC),
+                'cov-draft': _cov_draft('起案', ROWS_ABC),
+            }
+            rows = [dict(number=n, status='承認待ち', kind='task') for n in (11, 12, 13)] + [
+                dict(number=14, status='完了', kind='task', state='CLOSED')]
+            bodies = {
+                11: _mark('TBL-01', 'cov-a@PR9'), 12: _mark('TBL-01', 'cov-old@PR5'),
+                13: _mark('TBL-01', 'cov-exp@PR3'), 14: _mark('TBL-01', 'cov-exp@PR3'),
+            }
+            rc, out, calls = _run_coverage(files, rows, bodies)
+            assert rc == 0, out
+            assert 'cov-a: 起票漏れ 1 件' in out and 'TBL-03' in out, out
+            assert '（起票しない行 TBL-02' in out and '[要判断' in out, f'飛ばした行の理由が無い: {out}'
+            assert 'cov-old: 起票漏れ 0 件' in out, out
+            assert '古い版を指す issue 1 件' in out and '#12' in out and 'PR #9' in out, out
+            assert '失効した提案を指す issue 1 件' in out and '#13' in out and '#14' not in out, f'閉じた issue は失効側に出さない: {out}'
+            for skipped in ('cov-exp:', 'cov-merged:', 'cov-draft:'):
+                assert skipped not in out, f'{skipped} は起票漏れの対象外のはず: {out}'
+            assert not any('mutation' in c for c in calls), calls
+
+        t('coverage: 起票漏れ・古い版・失効を指す issue を出し、取り込み済み・失効・起案は漏れの対象にしない', _coverage_reports_missing_stale_expired)
+
+        def _coverage_zero_missing_for_fully_filed_draft() -> None:
+            rows_one = '| TBL-01 | task | Infra | 土台 | feature #900 | — | TBL-R1 | ok |'
+            rc, out, _ = _run_coverage(
+                {'cov-ok': _cov_draft('承認', rows_one)},
+                [dict(number=21, status='完了', kind='task', state='CLOSED')], {21: _mark('TBL-01', 'cov-ok@PR9')})
+            assert rc == 0 and 'cov-ok: 起票漏れ 0 件' in out, out
+
+        t('coverage: 承認済みの提案 1 本の行がすべて起票済み（閉じた issue も数える）なら「起票漏れ 0 件」', _coverage_zero_missing_for_fully_filed_draft)
+
+        def _coverage_reads_old_form_table() -> None:
+            old = _cov_draft('承認', '| TBL-01 | task | Infra | x | wave #634 | — | TBL-R1 | ok |', heading='### 8-3. task の表').replace(
+                '## 11. task', '## 8. タスク分解')
+            others = {
+                f'cov-oldform-{label}': old.replace('status: 承認', f'status: {status}')
+                for label, status in (('draft', '起案'), ('merged', '取り込み済み'))
+            }
+            rc, out, _ = _run_coverage({'cov-oldform': old, **others}, [], {})
+            assert rc == 0 and 'cov-oldform: 起票漏れ 1 件' in out, out
+            assert 'cov-oldform-draft:' not in out and 'cov-oldform-merged:' not in out, f'起案・取り込み済みを数えた: {out}'
+
+        t('coverage: 旧い形の承認済みの提案の「### 8-3. task の表」も突き合わせる', _coverage_reads_old_form_table)
+
+        def _coverage_skips_unapproved_task_stage() -> None:
+            text = _cov_draft('承認', ROWS_ABC).replace('task=PR #9', '').replace('要件=PR #9 設計=PR #9 ', '要件=PR #9 設計=PR #9')
+            rc, out, _ = _run_coverage({'cov-nostage': text}, [], {})
+            assert rc == 0 and 'cov-nostage:' not in out, f'task の段が未承認なのに起票漏れを数えた: {out}'
+
+        t('coverage: task の段が未承認の提案は起票漏れに数えない', _coverage_skips_unapproved_task_stage)
+
         # ── draft_approved_at ──
         def _draft_approved_table_form() -> None:
             approved = gh_task.draft_approved_at(_draft_path('table.md', '# 設計\n\n| approved | 2026-09-04 |\n'))

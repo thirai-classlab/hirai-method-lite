@@ -3,7 +3,7 @@
 hirai-task — リポに紐づいた GitHub Project のタスクを読み書きする 1 本の道具。
 
 サブコマンド:
-  読む側: ready / pending / blocked / show <issue> / memos / unblocked
+  読む側: ready / pending / blocked / show <issue> / memos / unblocked / coverage
   書く側: new / add / set / start / review / done / reopen（approve は廃止）
   会話の最初と merge の直後: comments / close-parents / align / today / after-merge
   ほか: sync（field・option の id の取り直し）/ --selftest（gh を使わない自己検査）
@@ -1303,6 +1303,7 @@ query($owner:String!, $name:String!, $number:Int!) {{
         title
         state
         url
+        body
         parent {{ number title }}
         blockedBy(first: 30) {{ totalCount nodes {{ number title state }} }}
 {_PROJECT_ITEM_FRAGMENT}
@@ -1361,6 +1362,7 @@ def cmd_show(number: int) -> int:
         for b in blockers:
             mark = '' if b.get('state') == 'CLOSED' else '  ← 未完了'
             print(f"    #{b['number']:<4} {b.get('title', '')[:60]}{mark}")
+    print_reading_bundle(node.get('body') or '')
     return 0
 
 
@@ -1663,6 +1665,7 @@ def cmd_start(number: int, approved: str | None) -> int:
         append_body_line(number, item, f'- 出どころ: {approved}')
         write_single_select_rest(project_number, number, 'Status', IN_PROGRESS_STATUS, item_id=item_id)
         print(f'#{number} Status={IN_PROGRESS_STATUS}（{OPERATION_MARK}・出どころ: {approved}）')
+        print_reading_bundle(item.get('body') or '')
         return 0
     if status == PENDING_STATUS:
         # 承認待ちから進めてよいのは、task_not_startable_reason を通るときだけ（目印が無く、
@@ -1684,6 +1687,7 @@ def cmd_start(number: int, approved: str | None) -> int:
         )
     write_single_select_rest(project_number, number, 'Status', IN_PROGRESS_STATUS)
     print(f'#{number} Status={IN_PROGRESS_STATUS}')
+    print_reading_bundle(item.get('body') or '')
     return 0
 
 
@@ -2129,8 +2133,12 @@ def _draft_header(lines: list[str]) -> dict[str, str]:
     return header
 
 
-def _table_section_and_rows(lines: list[str]) -> tuple[str, list[dict[str, str]]] | None:
-    """「### 11-3. 表」を持つ節の名前と、表の行（列名 → 値）。表が無ければ None。"""
+# coverage は旧い形（9 節）の承認済みの提案の「### 8-3. task の表」も読む（new --from-table は 11-3 だけ）。
+_OLD_TABLE_HEADING_RE = re.compile(r'^###\s+8-3\.\s*task の表\s*$')
+
+
+def _table_section_and_rows(lines: list[str], *, accept_old: bool = False) -> tuple[str, list[dict[str, str]]] | None:
+    """「### 11-3. 表」（accept_old なら「### 8-3. task の表」も）を持つ節の名前と、表の行（列名 → 値）。表が無ければ None。"""
     section = ''
     in_fence = False
     for index, line in enumerate(lines):
@@ -2141,7 +2149,7 @@ def _table_section_and_rows(lines: list[str]) -> tuple[str, list[dict[str, str]]
         found = _TABLE_SECTION_RE.match(line) if line.startswith('## ') else None
         if found:
             section = found.group(1)
-        if line.strip() != TABLE_HEADING:
+        if line.strip() != TABLE_HEADING and not (accept_old and _OLD_TABLE_HEADING_RE.match(line.strip())):
             continue
         rows: list[list[str]] = []
         for row in lines[index + 1:]:
@@ -2324,6 +2332,158 @@ def cmd_new_from_table(argv: list[str]) -> int:
             'blocked_by': [number_of(b) for b in r['blockers']],
             'body': table_issue_body(r, slug, src_pr, header.get('domain', '')),
         })
+    return 0
+
+
+# ── issue の目印を読む側（start・show の読む束 / coverage）（DS-06） ─────────────
+# 目印は new --from-table が本文の先頭に書く `<!-- rmp-task: id=… rev=… stream=… src=<slug>@PR<n> … reads=<path#見出し,…> -->`。
+_TASK_MARK_RE = re.compile(rf'^\s*<!--\s*{TABLE_MARK}:\s*(.*?)\s*-->', re.DOTALL)
+_MARK_FIELD_RE = re.compile(r'(\w+)=(.*?)(?=\s+\w+=|$)', re.DOTALL)
+_SRC_RE = re.compile(r'^(?P<slug>[^@\s]+)(?:@PR(?P<pr>\d+))?$')
+NO_BUNDLE_OLD_FORM = '読む束なし（旧い形）'
+
+
+def parse_task_mark(body: str) -> dict[str, str] | None:
+    """本文の先頭の rmp-task の目印を、項目名 → 値で返す。無ければ None。"""
+    match = _TASK_MARK_RE.match(body or '')
+    if not match:
+        return None
+    return {k: v.strip() for k, v in _MARK_FIELD_RE.findall(match.group(1))}
+
+
+def reading_bundle_lines(body: str) -> list[str]:
+    """start・show が出す読む束（DS-R1.1）。目印の reads= をそのまま 1 件 1 行で出す。
+    目印が無い issue は「読む束なし（旧い形）」、目印はあるが reads= が空ならその旨を 1 行で出す。"""
+    mark = parse_task_mark(body)
+    if mark is None:
+        return [NO_BUNDLE_OLD_FORM]
+    reads = [r.strip() for r in mark.get('reads', '').split(',') if r.strip()]
+    if not reads:
+        return ['読む束なし（目印に reads= が無い）']
+    lines = [f'読む束（{len(reads)} 件。上から順に読む。束の外は読まない）:']
+    lines += [f'  {index}. {path}' for index, path in enumerate(reads, 1)]
+    for key, label in (('reqs', '要件'), ('src', '提案')):
+        if mark.get(key):
+            lines.append(f'  {label}: {mark[key]}')
+    return lines
+
+
+def print_reading_bundle(body: str) -> None:
+    for line in reading_bundle_lines(body):
+        print(line)
+
+
+# ── coverage（承認済みの提案の表と、issue の目印の突き合わせ）（DS-R2.3） ────────────
+DRAFT_DIR_RELATIVE = os.path.join('docs', 'draft')
+_HISTORY_SECTION_RE = re.compile(r'^##\s+(?:9\.\s*承認履歴|12\.\s*履歴)')
+_MERGED_STATUSES = ('取り込み済み',)  # coverage と読む束の対象から外れる（DS-R3.3）
+_EXPIRED_STATUS = '失効'
+
+
+def _read_draft(path: str) -> list[str]:
+    try:
+        with open(path, encoding='utf-8') as f:
+            return f.read().splitlines()
+    except OSError as exc:
+        die(f'{path} を読めなかった: {exc}', 2)
+
+
+def latest_approval_pr(lines: list[str]) -> int | None:
+    """提案が持つ承認の PR 番号のうち最も大きいもの（approved_at・approvals・履歴の「承認」の行）。"""
+    header = _draft_header(lines)
+    texts = [header.get('approved_at', ''), header.get('approvals', '')]
+    in_history = False
+    for line in lines:
+        if line.startswith('## '):
+            in_history = bool(_HISTORY_SECTION_RE.match(line))
+        elif in_history and '承認' in line:
+            texts.append(line)
+    numbers = [int(n) for text in texts for n in _TABLE_PR_RE.findall(text)]
+    return max(numbers) if numbers else None
+
+
+def coverage_findings(
+    drafts: dict[str, list[str]], marks: list[dict],
+) -> dict[str, list]:
+    """drafts（slug → 行）と issue の目印（number・state・mark）から、coverage の 3 つの指摘を作る。
+    missing: slug → (起票漏れの行, 起票しない行と理由) / stale: 古い版を指す open の issue /
+    expired: 失効した提案を指す open の issue / unknown: file の無い提案を指す open の issue。"""
+    by_slug: dict[str, dict[str, int]] = {}
+    for m in marks:
+        src = _SRC_RE.match(m['mark'].get('src', ''))
+        if src and m['mark'].get('id'):
+            by_slug.setdefault(src.group('slug'), {})[m['mark']['id']] = m['number']
+    result: dict[str, list] = {'missing': [], 'stale': [], 'expired': [], 'unknown': []}
+    for slug, lines in sorted(drafts.items()):
+        header = _draft_header(lines)
+        # 起票漏れを数えるのは承認の提案だけ（取り込み済み・失効は status が承認でないので、ここで外れる。DS-R3.3）。
+        table = _table_section_and_rows(lines, accept_old=True)
+        if not header.get('status', '').startswith(_APPROVAL_STATUS) or table is None:
+            continue
+        section, rows = table
+        stage = _stage_of(section)
+        if stage is not None and not _stage_approval(header, stage)[0]:
+            continue
+        fileable, skipped = plan_table_rows(rows, by_slug.get(slug, {}))
+        result['missing'].append((
+            slug, fileable, [(i, why) for i, why in skipped if not why.startswith('すでに起票済み')],
+        ))
+    for m in marks:
+        if m['state'] == 'CLOSED':
+            continue
+        src = _SRC_RE.match(m['mark'].get('src', ''))
+        if not src:
+            continue
+        lines = drafts.get(src.group('slug'))
+        if lines is None:
+            result['unknown'].append(m)
+            continue
+        status = _draft_header(lines).get('status', '')
+        if status.startswith(_EXPIRED_STATUS):
+            result['expired'].append(m)
+        elif not status.startswith(_MERGED_STATUSES) and src.group('pr'):
+            newest = latest_approval_pr(lines)
+            if newest is not None and newest > int(src.group('pr')):
+                result['stale'].append({**m, 'newest': newest})
+    return result
+
+
+def cmd_coverage() -> int:
+    draft_dir = os.path.join(_root(), DRAFT_DIR_RELATIVE)
+    drafts: dict[str, list[str]] = {}
+    if os.path.isdir(draft_dir):
+        for name in sorted(os.listdir(draft_dir)):
+            if name.endswith('.md'):
+                drafts[name[:-3]] = _read_draft(os.path.join(draft_dir, name))
+    project_number = discover_project_number()
+    issues = [i for i in fetch_all_items(project_number) if i.get('type') == 'Issue']
+    numbers = [i['number'] for i in issues]
+    states = {i['number']: i.get('state') for i in issues}
+    marks = [
+        {'number': n, 'state': states.get(n), 'mark': mark}
+        for n, body in sorted(fetch_bodies(numbers).items())
+        if (mark := parse_task_mark(body)) is not None
+    ]
+    found = coverage_findings(drafts, marks)
+    print(f'coverage（提案 {len(drafts)} 本・目印つき issue {len(marks)} 件）')
+    missing_total = 0
+    for slug, fileable, skipped in found['missing']:
+        missing_total += len(fileable)
+        print(f'{slug}: 起票漏れ {len(fileable)} 件')
+        for row in fileable:
+            print(f'  {row["id"]} / {row["kind"]} / {row["title"]}')
+        for row_id, why in skipped:
+            print(f'  （起票しない行 {row_id}: {why}）')
+    if not found['missing']:
+        print('承認済みの提案（表あり）は 0 本')
+    print(f'古い版を指す issue {len(found["stale"])} 件')
+    for m in found['stale']:
+        print(f'  #{m["number"]} {m["mark"].get("id", "")}: src={m["mark"]["src"]} より新しい承認 PR #{m["newest"]} がある')
+    print(f'失効した提案を指す issue {len(found["expired"])} 件')
+    for m in found['expired']:
+        print(f'  #{m["number"]} {m["mark"].get("id", "")}: src={m["mark"]["src"]}（{DRAFT_DIR_RELATIVE}/ の提案は失効）')
+    for m in found['unknown']:
+        print(f'  （#{m["number"]} の src={m["mark"]["src"]} は {DRAFT_DIR_RELATIVE}/ に file が無い）')
     return 0
 
 
@@ -3164,6 +3324,7 @@ def main(argv: list[str]) -> int:
         '           add <issue> | approve <issue> | start <issue> [--approved <出どころ>]\n'
         '           review <issue> | done <issue> [--not-planned <理由>] | reopen <issue> <status>\n'
         '           set <issue> <field> <value> | sync\n'
+        '           coverage\n'
         '           comments | close-parents [--json] | align [--json] | unblocked | memos\n'
         '           today | after-merge <PR番号>'
     )
@@ -3224,6 +3385,10 @@ def main(argv: list[str]) -> int:
         fields = sync_fields(project_number)
         print(f'{len(fields)} フィールドを {FIELDS_CACHE} へ')
         return 0
+    if sub == 'coverage':
+        if tail:
+            die('使い方: hirai-task coverage', 2)
+        return cmd_coverage()
     if sub == 'comments':
         return cmd_comments()
     if sub == 'close-parents':
