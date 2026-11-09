@@ -3272,6 +3272,7 @@ def main() -> int:
             '# チャット（chat）\n\nid_prefix: CHAT\nkind: 製品の機能\ndomain: chat\nstatus: 現在形\nrev: 3\n\n'
             '## 1. 目的\n\n語は [`glossary.md` の「募集」](../../1-requirements/glossary.md#募集提案マッチ相談する)。'
             'データは [data.md](../../2-architecture/data.md)（節なしのリンクは拾わない）。\n\n'
+            '## 2. 概念と規則\n\n不変条件と状態遷移。\n\n'
             '## 3. 境界\n\n### 使う層 3 の部品\n\n| 部品 | 使うもの |\n|---|---|\n'
             '| [`auth-and-permissions.md`](../../3-shared/auth-and-permissions.md) | ACC-06（認証の関門） |\n'
             '| [`jobs-and-files.md`](../../3-shared/jobs-and-files.md) | JOB-25〜JOB-39 |\n'
@@ -3292,7 +3293,9 @@ def main() -> int:
             'docs/1-requirements/features.md': '# 機能一覧\n\n| FR | 内容 |\n|---|---|\n| FR-CHT-001 | 送る |\n| FR-CHT-002 | 開く |\n',
             'docs/1-requirements/use-cases/UC-06-consult.md': '# UC-06\n',
         }
-        CHAT_R1 = 'docs/4-domains/chat/README.md#要件-chat-r1-入居者が送るとき、システムは本文を保存するfr-cht-001uc-06'.replace('、', '')
+        CHAT_R1 = 'docs/4-domains/chat/README.md#要件-chat-r1'
+        CHAT_CONCEPT = 'docs/4-domains/chat/README.md#2-概念と規則'
+        CHAT_BOUNDARY = 'docs/4-domains/chat/README.md#3-境界'
         L2_OPS = 'docs/2-architecture/ops.md#ログと監査'
         L2_SEC = 'docs/2-architecture/security.md#多テナントの分離'
 
@@ -3303,7 +3306,7 @@ def main() -> int:
         def _bundle_five_stage_order_without_duplicates() -> None:
             reads = _build('CHAT-R1')
             assert reads == [
-                CHAT_R1,
+                CHAT_R1, CHAT_CONCEPT, CHAT_BOUNDARY,
                 'docs/3-shared/auth-and-permissions.md',
                 L2_OPS, L2_SEC,
                 'docs/1-requirements/features.md:5',
@@ -3334,6 +3337,68 @@ def main() -> int:
 
         t('reads: 部品は要件の節に出る層 3 の ID の頭で表の行を絞る（ID が無ければ全行）', _bundle_parts_narrowed_by_id_prefix)
 
+        # 指摘 1〜4（#1617）: 受入の ID の reqs・見出しの [要判断]・領域が複数・境界と概念と規則
+        JUDGE_README = BUNDLE_README.replace(
+            '### 要件 CHAT-R2: 入居者が開くとき、システムは一覧を出す（FR-CHT-002）',
+            '### 要件 CHAT-R2: 入居者が開くとき、システムは一覧を出す（FR-CHT-002）[要判断: D15-B1]')
+
+        def _bundle_acceptance_id_reqs_behaves_like_requirement() -> None:
+            by_req, by_acc = _build('CHAT-R1'), _build('CHAT-R1.1')
+            assert by_acc == by_req, (by_acc, by_req)  # 節・部品（ACC のみ）・FR・UC が同じ
+            assert _build('CHAT-R1.1,CHAT-R1.2') == by_req
+            # 受入の ID の reqs でも、要件の見出し行の [要判断] で止まる
+            files = {**BUNDLE_FILES, 'docs/4-domains/chat/README.md': JUDGE_README}
+            root = _ds_tree(files)
+            for reqs in ('CHAT-R2', 'CHAT-R2.1'):
+                mark = {'reqs': reqs, 'reads': ','.join(gh_task.build_reads(reqs, 'chat', root))}
+                stops = gh_task.bundle_stops(mark, root)
+                assert [k for k, _ in stops] == ['judgment'], (reqs, stops)
+
+        t('reads: reqs が受入の ID（A-R1.1）でも要件の節・部品・FR を束に入れ、要件の見出し行の [要判断] で止まる', _bundle_acceptance_id_reqs_behaves_like_requirement)
+
+        def _bundle_anchor_survives_heading_edits() -> None:
+            root = _ds_tree({**BUNDLE_FILES, 'docs/4-domains/chat/README.md': JUDGE_README})
+            reads = gh_task.build_reads('CHAT-R2', 'chat', root)
+            assert reads[0] == 'docs/4-domains/chat/README.md#要件-chat-r2', reads
+            mark = {'reqs': 'CHAT-R2', 'reads': ','.join(reads)}
+            assert [k for k, _ in gh_task.bundle_stops(mark, root)] == ['judgment']
+            # 人が裁定して見出しの印を外し、文言も直す: 見出しは見つかり、束は通る（--reread でも抜けられない 'heading' にならない）
+            settled = JUDGE_README.replace(' [要判断: D15-B1]', '').replace('システムは一覧を出す', 'システムは一覧を返す').replace('[要判断: D15-B1]', '')
+            root2 = _ds_tree({**BUNDLE_FILES, 'docs/4-domains/chat/README.md': settled})
+            assert gh_task.bundle_stops(mark, root2) == [], gh_task.bundle_stops(mark, root2)
+            # 並べた見出し（要件 A-R3・A-R4）の後ろの ID の anchor も当たる
+            two = gh_task.build_reads('CHAT-R4', 'chat', root2)
+            assert two[0] == 'docs/4-domains/chat/README.md#要件-chat-r4', two
+            assert gh_task.bundle_stops({'reqs': 'CHAT-R4', 'reads': ','.join(two)}, root2) == []
+
+        t('reads: 要件の anchor は見出しの文に依らない（見出しの [要判断] を外しても文言を直しても start が通る）', _bundle_anchor_survives_heading_edits)
+
+        def _bundle_parts_fallback_is_decided_once_across_domains() -> None:
+            other = BUNDLE_README.replace('domain: chat', 'domain: other').replace('CHAT', 'OTHR').replace(
+                'JOB-25〜JOB-39', 'COL-01').replace('ACC-06（認証の関門）', 'COL-02')
+            files = {**BUNDLE_FILES, 'docs/4-domains/other/README.md': other}
+            reads = _build('CHAT-R3', 'other, chat', files)
+            parts = [r for r in reads if r.startswith('docs/3-shared/')]
+            # 要件の JOB は chat の表にだけある。別の領域の表の全行へ戻さず、JOB の行だけ入れる
+            assert parts == ['docs/3-shared/jobs-and-files.md'], parts
+            # 層 3 の ID がどの表にも無い要件だけ、全領域の表の全行
+            assert len([r for r in _build('CHAT-R2', 'other, chat', files) if r.startswith('docs/3-shared/')]) == 3
+
+        t('reads: 部品を全行に戻すかは領域ごとでなく要件全体で 1 回決める（別の領域の表の全行を混ぜない）', _bundle_parts_fallback_is_decided_once_across_domains)
+
+        def _bundle_includes_concept_and_boundary_sections() -> None:
+            reads = _build('CHAT-R2')
+            assert reads[:3] == ['docs/4-domains/chat/README.md#要件-chat-r2', CHAT_CONCEPT, CHAT_BOUNDARY], reads
+            # 境界の中の [要判断] は、その task の要件を含む行だけが止める
+            readme = BUNDLE_README.replace('不変条件と状態遷移。', '不変条件と状態遷移。[要判断: D1]').replace(
+                '| ACC-06（認証の関門） |', '| ACC-06（認証の関門）[要判断: D2] |')
+            root = _ds_tree({**BUNDLE_FILES, 'docs/4-domains/chat/README.md': readme})
+            mark = {'reqs': 'CHAT-R2', 'reads': ','.join(gh_task.build_reads('CHAT-R2', 'chat', root))}
+            assert gh_task.bundle_stops(mark, root) == []
+            assert len(gh_task.bundle_open_judgments(mark, root)) == 2
+
+        t('reads: (1) 段に「概念と規則」「境界」の節を足す（要件を含まない行の [要判断] では止めない）', _bundle_includes_concept_and_boundary_sections)
+
         def _bundle_domain_dash_and_missing_readme() -> None:
             # domain が — は (4) だけ（reqs の文に書かれた FR・UC）
             assert _build('FR-CHT-002・UC-06', '—') == ['docs/1-requirements/features.md:6', 'docs/1-requirements/use-cases/UC-06-consult.md']
@@ -3357,7 +3422,7 @@ def main() -> int:
             root = _ds_tree(BUNDLE_FILES)
             body = _with_root(root, lambda: gh_task.table_issue_body(row, 'tbl', 'PR9', 'chat'))
             mark = gh_task.parse_task_mark(body)
-            assert mark['reads'].split(',')[0] == CHAT_R1 and len(mark['reads'].split(',')) == 6, mark
+            assert mark['reads'].split(',')[0] == CHAT_R1 and len(mark['reads'].split(',')) == 8, mark
             assert mark['reqs'] == 'CHAT-R1' and mark['domain'] == 'chat', mark
             # 束が空のとき（domain —・FR も無い）は reads= を書かない
             bare = _with_root(root, lambda: gh_task.table_issue_body(dict(row, reqs='TBL-R1'), 'tbl', 'PR9', '—'))
@@ -3371,7 +3436,7 @@ def main() -> int:
             path = _draft_path('tbl-bundle2.md', draft)
             root = _ds_tree(BUNDLE_FILES)
             rc, out = _with_root(root, lambda: _from_table(path, '--dry-run'))
-            assert rc == 0 and '読む束=6 件' in out, out
+            assert rc == 0 and '読む束=8 件' in out, out
 
         t('new --from-table --dry-run: 行ごとに読む束の件数を出す', _dry_run_prints_bundle_size)
 

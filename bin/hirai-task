@@ -2421,6 +2421,7 @@ def _github_slug(text: str) -> str:
     return kept.replace(' ', '-')
 
 
+REQUIREMENT_ANCHOR_PREFIX = '要件-'
 _ANCHOR_LINES_RE = re.compile(r'^L(\d+)(?:-L?(\d+))?$')
 
 
@@ -2440,6 +2441,12 @@ def _read_scope_span(lines: list[str], read: str) -> tuple[int, int] | None:
             last = int(line_span.group(2) or first)
             return max(first - 1, 0), min(last, len(lines))
         anchor = _heading_slug(raw)
+        # `#要件-<id小文字>` は見出しの文に依らず、`### 要件 <ID>:` の ID の並びにその ID がある見出しを当てる
+        # （見出しに [要判断] の印があっても、印を外して文を直しても同じ anchor で当たる。#1617）
+        if anchor.startswith(REQUIREMENT_ANCHOR_PREFIX):
+            found = _find_requirement_heading(lines, anchor[len(REQUIREMENT_ANCHOR_PREFIX):].upper())
+            if found:
+                return found[0], _section_end(lines, found[0], found[1])
         plain = anchor.replace('.', '')
         seen: dict[str, int] = {}
         in_fence = False
@@ -2514,6 +2521,11 @@ def _id_matches(line_id: str, req: str) -> bool:
     return line_id == req or line_id.startswith(req + '.')
 
 
+def _base_requirements(reqs: list[str]) -> list[str]:
+    """受入の ID（`A-R3.1`）を要件の ID（`A-R3`）に戻す（重複は除く）。"""
+    return list(dict.fromkeys(re.sub(r'(?:\.\d+)+$', '', req) for req in reqs))
+
+
 def _line_names_requirement(line: str, reqs: list[str]) -> bool:
     ids = expand_ids(line)
     return any(_id_matches(line_id, req) for line_id in ids for req in reqs)
@@ -2536,7 +2548,8 @@ def _scan_bundle(mark: dict[str, str] | None, root: str | None = None) -> tuple[
     """start が着手を断る読む束の理由（DS-R8.2。rev の差は rev_drift が別に見る）と、止めない未決の `path:行`。
     reads= がある issue: 束の各 path の範囲（`#見出し` はその節、`:行` はその行、path だけは file 全体。
     書き方の説明の `[要判断: <ID>]` は数えない）の次のどれかで止める。
-      - その task の要件 ID（reqs= の各 ID とその受入 `<ID>.<n>`）を含む行に `[要判断: …]` の印がある
+      - その task の要件 ID（reqs= の各 ID とその受入 `<ID>.<n>`。reqs= が受入の ID のときは、その要件の見出し行も）を含む行に
+        `[要判断: …]` の印がある
         （ADR-0701 を #1617 で見直した。要件を含まない行の印では止めず、止めない未決として返す）
       - 見出しが見つからない
       - file の先頭の `status:` が失効・取り込み済みの提案
@@ -2549,6 +2562,7 @@ def _scan_bundle(mark: dict[str, str] | None, root: str | None = None) -> tuple[
     open_notes: list[str] = []
     if reads:
         reqs = expand_ids(mark.get('reqs', ''))
+        base_reqs = _base_requirements(reqs)  # 受入の ID（A-R3.1）の要件 ID（A-R3）。要件の見出し行の印で止める
         for read in dict.fromkeys(reads):
             path = re.split(r'[:#]', read, maxsplit=1)[0]
             lines = _read_doc_lines(base, path)
@@ -2565,7 +2579,8 @@ def _scan_bundle(mark: dict[str, str] | None, root: str | None = None) -> tuple[
             for number in range(span[0], span[1]):
                 if not _has_open_judgment([lines[number]]):
                     continue
-                if _line_names_requirement(lines[number], reqs):
+                is_heading = _BUNDLE_HEADING_RE.match(lines[number]) is not None
+                if _line_names_requirement(lines[number], reqs) or (is_heading and _line_names_requirement(lines[number], base_reqs)):
                     stopping.append(number + 1)
                 else:
                     open_notes.append(f'{path}:{number + 1}')
@@ -2695,23 +2710,34 @@ def _section_end(lines: list[str], index: int, depth: int) -> int:
     return len(lines)
 
 
+def _find_requirement_heading(lines: list[str], req: str) -> tuple[int, int, str, str] | None:
+    """`### 要件 <ID>:` の見出し（見出しの `:` より前に並べた ID に req がある）を (index, 深さ, 文, anchor) で返す。"""
+    for heading in _headings(lines):
+        text = heading[2]
+        if text.startswith('要件') and req in expand_ids(re.split(r'[:：]', text, maxsplit=1)[0]):
+            return heading
+    return None
+
+
 def _requirement_sections(lines: list[str], reqs: list[str]) -> list[tuple[str, str, str]]:
     """README の `### 要件 <ID>: …` の見出しのうち reqs= の要件を持つものを、reqs の順に (anchor, 見出しの文, 節の本文) で返す。
-    見出しの `:` より前に並べた ID（`要件 RECR-R8・RECR-R9`）を見る。"""
-    headings = _headings(lines)
+    `reqs` が受入の ID（`A-R3.1`）なら要件 ID（`A-R3`）で当てる。anchor は見出しの文に依らない `要件-<id小文字>`
+    （見出しの [要判断] の印や文言が変わっても当たる）。"""
     sections: list[tuple[str, str, str]] = []
-    for req in reqs:
-        for index, depth, text, anchor in headings:
-            if not text.startswith('要件'):
-                continue
-            head = re.split(r'[:：]', text, maxsplit=1)[0]
-            if req in expand_ids(head):
-                end = _section_end(lines, index, depth)
-                entry = (anchor, text, '\n'.join(lines[index:end]))
-                if entry not in sections:
-                    sections.append(entry)
-                break
+    seen: set[int] = set()
+    for req in _base_requirements(reqs):
+        found = _find_requirement_heading(lines, req)
+        if found and found[0] not in seen:
+            seen.add(found[0])
+            end = _section_end(lines, found[0], found[1])
+            sections.append((f'{REQUIREMENT_ANCHOR_PREFIX}{req.lower()}', found[2], '\n'.join(lines[found[0]:end])))
     return sections
+
+
+def _domain_frame_anchors(lines: list[str]) -> list[str]:
+    """README の「概念と規則」「境界」の節（`## 2. 概念と規則`・`## 3. 境界`）の anchor を文書の順に返す。"""
+    return [anchor for _i, depth, text, anchor in _headings(lines)
+            if depth == 2 and re.fullmatch(r'(?:\d+\.\s*)?(?:概念と規則|境界)', text.strip())]
 
 
 def _layer3_parts(lines: list[str]) -> list[tuple[str, set[str]]]:
@@ -2764,14 +2790,15 @@ def build_reads(reqs_text: str, domain: str, root: str | None = None) -> list[st
         for anchor, text, body in _requirement_sections(lines, reqs):
             stage1.append(f'{DOMAIN_README.format(name)}#{anchor}')
             sections.append((anchor, text, body))
+        # 設計 §4-5 の (1): 要件の節に加えて「概念と規則」「境界」
+        stage1 += [f'{DOMAIN_README.format(name)}#{anchor}' for anchor in _domain_frame_anchors(lines)]
     # (2) 使う部品: 要件の節に出る層 3 の ID の頭で行を絞る。頭が 1 つも無ければ表の全行
     asked = set(_LAYER3_PREFIX_RE.findall('\n'.join(body for _a, _t, body in sections)))
-    stage2: list[str] = []
-    for _name, lines in readmes:
-        rows = _layer3_parts(lines)
-        known = set().union(*(prefixes for _f, prefixes in rows)) if rows else set()
-        narrowed = asked & known
-        stage2 += [file for file, prefixes in rows if not narrowed or prefixes & narrowed]
+    # 全行に戻すかは表ごとでなく要件全体で 1 回だけ決める（どの領域の表にも要件の ID の頭が無いときだけ全行）
+    tables = [_layer3_parts(lines) for _name, lines in readmes]
+    known = set().union(*(prefixes for rows in tables for _f, prefixes in rows))
+    narrowed = asked & known
+    stage2 = [file for rows in tables for file, prefixes in rows if not narrowed or prefixes & narrowed]
     # (3) 層 2 の節: README の本文にある、層 2 への節付きのリンクだけ（file だけのリンクは拾わない）
     stage3 = [f'{LAYER2_DIR}/{file}#{anchor}'
               for _name, lines in readmes for file, anchor in _LAYER2_LINK_RE.findall('\n'.join(lines))]
