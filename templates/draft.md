@@ -91,7 +91,7 @@ merged_into:
 
 ### 11-2. impact の出力
 
-<`hirai-task impact` の出力。未実装のあいだは手で引いた日時を書く>
+<`hirai-task impact <この draft の path>` の出力（11-1 の `#番号` に 種別・Status・親・子・blocked by・閉じたか を注記する）。引いた日を添える>
 
 ### 11-3. 表
 

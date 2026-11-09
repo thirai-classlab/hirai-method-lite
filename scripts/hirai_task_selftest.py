@@ -3262,6 +3262,57 @@ def main() -> int:
 
         t('coverage: task の段が未承認の提案は起票漏れに数えない', _coverage_skips_unapproved_task_stage)
 
+        # -- impact（#817・DS-R-§8-2） --
+        IMPACT_DRAFT = (
+            '# 試験\n\nid_prefix: TBL\nstatus: 承認\n\n## 11. task\n\n### 11-1. 位置と前後\n\n'
+            '- 入る wave: #634 ハーネスの改善\n- 止める依存（既存）: #611、#999\n- この設計を待つ既存 task: #675 #634\n'
+            '- 変える既存 task: #700（閉じた）\n- 重なりを見る言葉: new-draft、from-table\n\n### 11-2. impact の出力\n\nここの #5 は読まない\n')
+        IMPACT_ROWS = [
+            dict(number=634, status='', kind='wave', title='ハーネスの改善', order=None),
+            dict(number=675, status='着手可', kind='feature', title='ハーネス', parent_number=634, order=3),
+            dict(number=611, status='承認待ち', kind='task', title='tasks.md へ', parent_number=675),
+            dict(number=612, status='保留', kind='task', title='hirai-task', parent_number=675),
+            dict(number=700, status='完了', kind='task', title='閉じた', state='CLOSED'),
+        ]
+
+        def _run_impact(text: str, rows: list[dict], extras: dict) -> tuple[int, str, list]:
+            path = _draft_path('impact-draft.md', text)
+            calls: list = []
+            fake = make_ds_board_gh(rows, {}, extras, calls=calls)
+            gh_task.run_gh = fake
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = gh_task.cmd_impact([path])
+            assert gh_task.run_gh is fake and calls, '外へ出る呼び出しが偽の gh に向いていない'
+            return rc, buf.getvalue(), calls
+
+        def _impact_annotates_numbers() -> None:
+            rc, out, _ = _run_impact(IMPACT_DRAFT, IMPACT_ROWS, {611: [610]})
+            assert rc == 0 and '位置と前後の #番号 5 件' in out, out
+            assert '#634 ハーネスの改善 — wave' in out, out
+            assert '#675 ハーネス — feature・着手可・着手順 3・親 #634・子 2（承認待ち 1・保留 1）' in out, out
+            assert '#611 tasks.md へ — task・承認待ち・親 #675・blocked by #610' in out, out
+            assert '#999 Projects に載っていない' in out, out
+            assert '#700 閉じた — task・完了・閉じた' in out, out
+            assert '警告: 閉じた・保留の番号 #700' in out, out
+            assert '#5 ' not in out, f'節（11-2）の外の番号まで拾った: {out}'
+
+        t('impact: 位置と前後の #番号に 種別・Status・着手順・親・子の内訳・blocked by・閉じた を注記し、盤にない番号と警告も出す', _impact_annotates_numbers)
+
+        def _impact_reads_old_form_and_clean_warning() -> None:
+            text = '# 旧\n\nstatus: 承認\n\n## 8. タスク分解\n\n### 8-1. 位置と前後（既存の issue）\n- 入る wave: #675\n\n### 8-2. impact の出力\n'
+            rc, out, _ = _run_impact(text, IMPACT_ROWS, {})
+            assert rc == 0 and '#675 ハーネス' in out and '警告: なし（閉じた・保留の番号 0 件）' in out, out
+
+        t('impact: 旧い形の「### 8-1. 位置と前後」も読み、閉じた・保留が無ければ「警告: なし」', _impact_reads_old_form_and_clean_warning)
+
+        def _impact_refuses_draft_without_section() -> None:
+            path = _draft_path('impact-none.md', '# x\n\n## 1. 問題\n')
+            gh_task.run_gh = make_ds_board_gh([], {}, calls=[])
+            _expect_exit(lambda: gh_task.cmd_impact([path]), 2)
+
+        t('impact: 「位置と前後」の節が無い draft は exit 2', _impact_refuses_draft_without_section)
+
         # ── draft_approved_at ──
         def _draft_approved_table_form() -> None:
             approved = gh_task.draft_approved_at(_draft_path('table.md', '# 設計\n\n| approved | 2026-09-04 |\n'))

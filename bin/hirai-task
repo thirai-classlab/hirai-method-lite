@@ -3,7 +3,7 @@
 hirai-task — リポに紐づいた GitHub Project のタスクを読み書きする 1 本の道具。
 
 サブコマンド:
-  読む側: ready / pending / blocked / show <issue> / memos / unblocked / coverage
+  読む側: ready / pending / blocked / show <issue> / memos / unblocked / coverage / impact <draft>
   書く側: new / add / set / start / review / done / reopen（approve は廃止）
   会話の最初と merge の直後: comments / close-parents / align / today / after-merge
   ほか: sync（field・option の id の取り直し）/ --selftest（gh を使わない自己検査）
@@ -2487,6 +2487,86 @@ def cmd_coverage() -> int:
     return 0
 
 
+# ── impact（設計の「位置と前後」の #番号を GitHub から引いて注記する）（DS-07） ──────────
+# 節は旧い形の「### 8-1. 位置と前後」も新しい形の「### 11-1. 位置と前後」も読む。
+_IMPACT_HEADING_RE = re.compile(r'^###\s+(?:8|11)-1\.\s*位置と前後')
+_IMPACT_NUMBER_RE = re.compile(r'(?<![\w&/])#(\d+)\b')
+
+
+def impact_numbers(lines: list[str]) -> list[int] | None:
+    """「位置と前後」の節にある #番号（出た順・重複なし）。節が無ければ None。"""
+    start = next((i for i, line in enumerate(lines) if _IMPACT_HEADING_RE.match(line.strip())), None)
+    if start is None:
+        return None
+    numbers: list[int] = []
+    for line in lines[start + 1:]:
+        if line.startswith('#'):
+            break
+        for n in _IMPACT_NUMBER_RE.findall(line):
+            if int(n) not in numbers:
+                numbers.append(int(n))
+    return numbers
+
+
+def impact_notes(numbers: list[int], items: list[dict], extras: dict[int, dict]) -> tuple[list[str], list[int]]:
+    """番号ごとの注記の 1 行と、警告の番号（閉じた・保留）。"""
+    by_number = {i['number']: i for i in items if i.get('number') is not None}
+    children: dict[int, list[dict]] = {}
+    for i in items:
+        if i.get('type') == 'Issue' and i.get('parent_number') is not None:
+            children.setdefault(i['parent_number'], []).append(i)
+    notes: list[str] = []
+    warned: list[int] = []
+    for n in numbers:
+        item = by_number.get(n)
+        if item is None:
+            notes.append(f'#{n} Projects に載っていない（PR・他のリポ・まだ追加していない issue のどれか）')
+            continue
+        parts = [item.get('kind') or '種別なし', item.get('status') or 'Status なし']
+        if item.get('order') is not None:
+            parts.append(f'着手順 {item["order"]:g}')
+        if item.get('parent_number') is not None:
+            parts.append(f'親 #{item["parent_number"]}')
+        kids = children.get(n, [])
+        if kids:
+            tally: dict[str, int] = {}
+            for k in kids:
+                tally[k.get('status') or '空'] = tally.get(k.get('status') or '空', 0) + 1
+            parts.append(f'子 {len(kids)}（' + '・'.join(f'{s} {c}' for s, c in tally.items()) + '）')
+        open_blockers = (extras.get(n) or {}).get('blocked_by_open_numbers') or []
+        if open_blockers:
+            parts.append('blocked by ' + ' '.join(f'#{b}' for b in open_blockers))
+        if item.get('state') == 'CLOSED':
+            parts.append('閉じた')
+        if item.get('state') == 'CLOSED' or item.get('status') == '保留':
+            warned.append(n)
+        notes.append(f'#{n} {item.get("title", "")[:50]} — ' + '・'.join(parts))
+    return notes, warned
+
+
+def cmd_impact(argv: list[str]) -> int:
+    if len(argv) != 1:
+        die('使い方: hirai-task impact <draft の path>', 2)
+    lines = _read_draft(argv[0])
+    numbers = impact_numbers(lines)
+    if numbers is None:
+        die(f'{argv[0]} に「### 8-1. 位置と前後」（新しい形は 11-1）の節が無い', 2)
+    print(f'impact: {argv[0]}（位置と前後の #番号 {len(numbers)} 件）')
+    if not numbers:
+        return 0
+    project_number = discover_project_number()
+    items = fetch_all_items(project_number)
+    on_board = [n for n in numbers if any(i.get('number') == n and i.get('type') == 'Issue' for i in items)]
+    notes, warned = impact_notes(numbers, items, fetch_extras(on_board))
+    for note in notes:
+        print(f'  {note}')
+    if warned:
+        print('警告: 閉じた・保留の番号 ' + ' '.join(f'#{n}' for n in warned))
+    else:
+        print('警告: なし（閉じた・保留の番号 0 件）')
+    return 0
+
+
 def _parse_new_args(argv: list[str]) -> dict:
     if not argv:
         die('使い方: hirai-task new <title> --parent N [--kind task|feature|wave|設計メモ] '
@@ -3324,7 +3404,7 @@ def main(argv: list[str]) -> int:
         '           add <issue> | approve <issue> | start <issue> [--approved <出どころ>]\n'
         '           review <issue> | done <issue> [--not-planned <理由>] | reopen <issue> <status>\n'
         '           set <issue> <field> <value> | sync\n'
-        '           coverage\n'
+        '           coverage | impact <draft の path>\n'
         '           comments | close-parents [--json] | align [--json] | unblocked | memos\n'
         '           today | after-merge <PR番号>'
     )
@@ -3389,6 +3469,8 @@ def main(argv: list[str]) -> int:
         if tail:
             die('使い方: hirai-task coverage', 2)
         return cmd_coverage()
+    if sub == 'impact':
+        return cmd_impact(tail)
     if sub == 'comments':
         return cmd_comments()
     if sub == 'close-parents':

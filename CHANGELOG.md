@@ -5,12 +5,13 @@
 更新のしかたは [README の「更新する」](README.md#更新する既定では自動で新しくなりません)。**既定では自動更新しない**（v1.13.0 から opt-in で自動にできる）。
 
 ## v2.4.0
-設計の読む束と、設計と issue の突き合わせの道具を足した（rmp-app の design-structure の DS-06。#816）。`start`・`show`・`coverage` は 2.3.0 の `new --from-table` が書く `rmp-task` の目印を読む。
+設計の読む束と、設計と issue の突き合わせ・影響の注記の道具を足した（rmp-app の design-structure の DS-06・DS-07。#816・#817）。`start`・`show`・`coverage`・`impact` は 2.3.0 の `new --from-table` が書く `rmp-task` の目印と Project を読む。
 
 - `hirai-task start <n>` / `show <n>`（#816・DS-R1.1）: issue の本文の先頭の目印の `reads=` を「読む束」として 1 件 1 行で出す（あわせて目印の `reqs=`・`src=`）。目印が無い issue は「読む束なし（旧い形）」、目印はあって `reads=` が空なら「読む束なし（目印に reads= が無い）」。`start` は着手を書いたあとに出し、断った task には出さない。`show` の問い合わせに本文（`body`）を足した。
 - `hirai-task coverage`（新規。#816・DS-R2.3）: `docs/draft/*.md`（作業ツリーの根から）と、Project の issue の目印（open も closed も）を突き合わせて、3 つを出す。(1) 起票漏れ: status が承認の提案（新しい形の「### 11-3. 表」と旧い形の「### 8-3. task の表」。表の節が段に当たるときはその段の承認も見る）の行のうち、同じ slug と id の目印が無いもの。`new --from-table` と同じ判定（`plan_table_rows`）なので、`[要判断]` の行や親を解けない行は漏れに数えず、理由つきで別に出す。提案ごとに「起票漏れ N 件」を出す。(2) 古い版を指す issue: open の issue の `src=<slug>@PR<n>` より大きい承認の PR（先頭の `approved_at`・`approvals` と、履歴の節の「承認」の行）が提案にあるもの。(3) 失効した提案を指す open の issue。取り込み済み・失効の提案は漏れの対象にしない（DS-R3.3）。常に exit 0。
-- selftest: 読む束 4 本（目印からの束・`start`・断った task に出さない・`show`）と coverage 4 本を足した。GitHub の応答は偽の `gh`（固定の JSON）で与え、`run_gh` が偽物に向いていることをテストの中で確かめている。新しい検査は、実装を 1 か所ずつ壊して対応する case が FAIL することを確かめた。
-- **導入先で要る操作。** プラグインを上げて新しい会話を開く（`/hirai-lite:update`）。rmp-app の `scripts/gh-task.sh` に `coverage` を `hirai-task` へ通す行を足す（メインの作業）。`reads=` は `new --from-table` がまだ書かないので、それまでの issue の `start` は「読む束なし（目印に reads= が無い）」と出る。
+- `hirai-task impact <draft>`（新規。#817）: 提案の「位置と前後」（新しい形は 11-1、旧い形は 8-1）の `#番号` を Project から引き、番号ごとに 種別・Status・着手順・親・子の内訳（Status ごとの件数）・未完了の blocked by・閉じたか を 1 行で注記する。Project に載っていない番号（PR・他のリポ）はそう出す。最後に「警告: 閉じた・保留の番号 …」（無ければ「警告: なし（閉じた・保留の番号 0 件）」）。節が無い draft は exit 2。
+- selftest: 読む束 4 本、coverage 4 本、impact 3 本を足した。GitHub の応答は偽の `gh`（固定の JSON）で与え、`run_gh` が偽物に向いていることをテストの中で確かめている。新しい検査は、実装を 1 か所ずつ壊して対応する case が FAIL することを確かめた。
+- **導入先で要る操作。** プラグインを上げて新しい会話を開く（`/hirai-lite:update`）。rmp-app の `scripts/gh-task.sh` に `coverage`・`impact` を `hirai-task` へ通す行を足す（メインの作業）。`reads=` は `new --from-table` がまだ書かないので、それまでの issue の `start` は「読む束なし（目印に reads= が無い）」と出る。
 
 ## v2.3.0
 設計の task の表から issue を起こせるようになり、設計の雛形を新しい 12 節の形に書き直した（rmp-app の design-structure の DS-04・DS-05。#814・#815）。
