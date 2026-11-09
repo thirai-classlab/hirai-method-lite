@@ -21,6 +21,8 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
   task と feature に未完了の blocked by が無く、先祖の wave を止める wave が
   出る条件を満たしているものだけ。並びは着手順（数値の項目。ある行を先に小さい順）→
   先祖の wave の POSITION → 番号。着手順の項目が無い Project では先祖の wave の POSITION → 番号のまま。
+  出す行の本文を取り（50 件ごとに GraphQL 1 回）、目印が無い行と、目印はあるが reads= が無い行の
+  末尾に ` [旧い形]` を付ける（読む束を出せない issue。#829）。
   pending は承認待ちの feature、blocked は判断待ち・依存待ち・保留の task を出す。
 
   Project の在り処は Repository.projectsV2 から引く。0 件なら「無し」、
@@ -100,8 +102,18 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
     回れないようにする。done と reopen はこの守りの外）。着手可・進行中へ書くとき、
     閉じた issue は断る（reopen を案内）。
   - start（`--approved` なし）: 閉じた issue は断る。着手可の task は親を見ずに進行中へ進める
-    （見るのは自分の未完了の blocked by だけ。2.1.0 のまま）。承認待ちの task は、この判定を
-    通るときだけ進行中へ進める（目印つきは start --approved を案内）。ほかの Status は exit 2。
+    （見るのは自分の未完了の blocked by だけ。2.1.0 のまま。ただし未完了の blocker がすべて同じ親 feature の
+    子で Status が進行中・レビュー中なら通す。依存待ちの task もこの場合は進められる。前の task が承認待ち・
+    着手可・依存待ち、または別の feature の blocker は完了まで止める。branch の commit は見ない。2.5.0・#829）。承認待ちの task は、この判定を
+    通るときだけ進行中へ進める（目印つきは start --approved を案内）。ほかの Status は exit 2
+    （進行中の task には「別の会話が進行中の可能性。続きなら show <n> で読む束を出す」を添える。#829）。
+    目印の rev の差に加え、読む束の検出（DS-R8.2・#829）でも Status を書く前に exit 2 で「着手不可: …」と断る:
+    reads= がある issue は束の各 path の file に `[要判断: …]` の印がある／先頭の status が失効・取り込み済み。
+    reads= が無い issue は目印の src= の提案（docs/draft/<slug>.md）の status が失効・取り込み済みのときだけ。
+    `start <n> --reread`（#829）は AI が読む束を読み直した宣言。止まる理由が rev の差なら目印の `rev=` を今の版へ、
+    取り込み済みの提案なら `reread=<yyyy-mm-dd>` を足して（本文の先頭の目印の行だけを書き換え、PATCH 1 回）から、
+    通常の start と同じ検査を通して着手する。失効・[要判断]・見出しなしは --reread でも止める。止まる理由が無ければ
+    目印は書き換えない。目印の書き直し → Status の順（Status が落ちても次の start が通る）。
     `--approved` は `[操作]` の task に限り、着手可・承認待ちからだけ進行中にでき、本文に
     出どころを 1 行残す。
   - reopen: 閉じた issue だけを受け付ける。着手可へは set と同じ判定を通し、進行中へは自分の
@@ -1196,6 +1208,15 @@ def ready_warnings(items: list[dict], extras: dict[int, dict] | None = None) -> 
     return warnings
 
 
+OLD_FORM_SUFFIX = ' [旧い形]'
+
+
+def is_old_form(body: str) -> bool:
+    """目印が無い、または目印はあるが reads= が無い本文（読む束を出せない旧い形。ready の印）。"""
+    mark = parse_task_mark(body)
+    return mark is None or not mark.get('reads', '').strip()
+
+
 def cmd_ready() -> int:
     project_number = discover_project_number()
     items = fetch_all_items(project_number)
@@ -1213,11 +1234,14 @@ def cmd_ready() -> int:
     if not rows:
         print('着手可の issue は 0 件')
     else:
+        # 「旧い形」の印のために、出す行の本文だけを引く（#829。wave の本文とは別の 1 回）
+        row_bodies = fetch_bodies([i['number'] for i in rows])
         print(f'着手可 {len(rows)} 件')
         for i in rows:
             order = i.get('order')
             order_text = f' (着手順 {order:g})' if order is not None else ''
-            print(f"  #{i['number']:<4} [feature #{i['parent_number']}]{order_text} {i['title'][:64]}")
+            old_text = OLD_FORM_SUFFIX if is_old_form(row_bodies.get(i['number'], '')) else ''
+            print(f"  #{i['number']:<4} [feature #{i['parent_number']}]{order_text} {i['title'][:64]}{old_text}")
     for line in ready_warnings(items, extras):
         print(line)
     return 0
@@ -1375,7 +1399,7 @@ query($owner:String!, $name:String!, $number:Int!) {{
       body
       state
       parent {{ number }}
-      blockedBy(first: 30) {{ totalCount nodes {{ number state }} }}
+      blockedBy(first: 30) {{ totalCount nodes {{ number state repository {{ nameWithOwner }} }} }}
 {_PROJECT_ITEM_FRAGMENT}
     }}
   }}
@@ -1393,7 +1417,14 @@ def fetch_write_item(project_number: int, number: int) -> dict:
         return {'found': False, 'title': issue.get('title') or ''}
     parent = issue.get('parent')
     blocked_by = issue.get('blockedBy') or {}
-    blockers = [(b.get('number'), b.get('state')) for b in (blocked_by.get('nodes') or [])]
+    nodes = blocked_by.get('nodes') or []
+    blockers = [(b.get('number'), b.get('state')) for b in nodes]
+    # この repo でない blocker（別 repo の issue）。番号だけで引くとこの repo の同じ番号の PR・兄弟に当たる。
+    foreign = [
+        b.get('number') for b in nodes
+        if b.get('state') != 'CLOSED'
+        and ((b.get('repository') or {}).get('nameWithOwner') or REPO).lower() != REPO.lower()
+    ]
     return {
         'found': True,
         'id': item.get('id'),
@@ -1403,6 +1434,7 @@ def fetch_write_item(project_number: int, number: int) -> dict:
         'parent_number': (parent or {}).get('number'),
         'blocked_by': blockers,
         'blocked_by_open': [n for n, s in blockers if s != 'CLOSED'],
+        'blocked_by_foreign': foreign,
         'blocked_by_total': blocked_by.get('totalCount', 0),
         'fields': _field_values(item),
     }
@@ -1637,16 +1669,55 @@ def cmd_add(number: int) -> int:
     return 0
 
 
+# ── start の blocker の判定（同じ feature の中の依存。#829・裁定 1） ──
+_SIBLING_BLOCKER_PASS_STATUSES = (IN_PROGRESS_STATUS, REVIEW_STATUS)
+
+
+def split_start_blockers(project_number: int, item: dict) -> tuple[list[int], list[int]]:
+    """start が未完了の blocker を (止める番号, 通す番号) に分ける。通すのは、blocker が task と同じ
+    親 feature の子で Status が進行中・レビュー中のとき（同じ feature は 1 本の PR にまとまり、前の task は
+    その merge まで閉じないため）。前の task が承認待ち・着手可・依存待ちなら止める。別の feature の blocker は
+    完了まで止める。branch の commit は見ない（Status だけ）。blocker 1 本につき 1 件引きが 1 点。"""
+    parent_number = item.get('parent_number')
+    foreign = set(item.get('blocked_by_foreign') or [])
+    blocking: list[int] = []
+    waived: list[int] = []
+    for n in item['blocked_by_open']:
+        if n in foreign or parent_number is None:
+            blocking.append(n)  # 別 repo の blocker は引かずに止める
+            continue
+        try:
+            blocker = fetch_write_item(project_number, n)
+        except GhError as exc:
+            if _NOT_AN_ISSUE_MESSAGE in str(exc):
+                blocking.append(n)  # この repo の issue として引けない番号は止める側（通信の失敗は上げる）
+                continue
+            raise
+        same_feature = blocker.get('found') and blocker.get('parent_number') == parent_number
+        if same_feature and blocker['fields'].get('Status', '') in _SIBLING_BLOCKER_PASS_STATUSES:
+            waived.append(n)
+        else:
+            blocking.append(n)
+    return blocking, waived
+
+
 # ── start（着手可から。目印なしで親の feature が着手可なら承認待ちからも。
 #    `[操作]` は --approved で承認待ちからも） ──
-def cmd_start(number: int, approved: str | None) -> int:
+def cmd_start(number: int, approved: str | None, reread: bool = False) -> int:
     project_number = discover_project_number()
     item = _require_item(project_number, number)
     _reject_wave_feature(item, number, 'start')
     _reject_closed(item, number, 'start')
+    waived = []
     if item['blocked_by_open']:
-        blockers = ', '.join(f'#{n}' for n in item['blocked_by_open'])
-        die(f'#{number} には未完了の blocked by がある: {blockers}', 2)
+        blocking, waived = split_start_blockers(project_number, item)
+        if blocking:
+            blockers = ', '.join(f'#{n}' for n in blocking)
+            die(f'#{number} には未完了の blocked by がある: {blockers}', 2)
+        # 通した blocker は、承認待ちからの経路の判定（task_not_startable_reason）にも見せない。
+        item = {**item, 'blocked_by_open': []}
+    # 読み直しの宣言（--reread）で抜けられるのは rev の差と取り込み済みだけ。失効・[要判断]・見出しなしは人が判断する。
+    reread_updates = start_reread_plan(number, parse_task_mark(item.get('body') or ''), reread)
     status = item['fields'].get('Status', '')
     if approved is not None:
         if not has_mark(item['title'], OPERATION_MARK):
@@ -1662,30 +1733,39 @@ def cmd_start(number: int, approved: str | None) -> int:
         # item id は最初の副作用（本文への追記）の前に引く。0 件・複数で die しても
         # 出どころの行が二重に付かない。
         item_id = rest_item_id(project_number, number)
+        item = reread_rewrite_body(number, item, reread_updates)
         append_body_line(number, item, f'- 出どころ: {approved}')
         write_single_select_rest(project_number, number, 'Status', IN_PROGRESS_STATUS, item_id=item_id)
         print(f'#{number} Status={IN_PROGRESS_STATUS}（{OPERATION_MARK}・出どころ: {approved}）')
         print_reading_bundle(item.get('body') or '')
         return 0
-    if status == PENDING_STATUS:
-        # 承認待ちから進めてよいのは、task_not_startable_reason を通るときだけ（目印が無く、
-        # 親の feature が着手可で、blocked by と先の wave が済んでいる。align が着手可へ
-        # 動かす子と同じ。いつ子になったかは問わない）。
+    if status == PENDING_STATUS or (status == DEP_STATUS and waived):
+        # 承認待ち・（同じ feature の blocker を通した）依存待ちから進めてよいのは、
+        # task_not_startable_reason を通るときだけ（目印が無く、親の feature が着手可で、
+        # blocked by と先の wave が済んでいる。align が着手可へ動かす子と同じ。
+        # いつ子になったかは問わない）。緩めるのは同じ feature の blocker の条件だけ。
         if has_mark(item['title']):
             die(
-                f'#{number} は目印つきで承認待ちのため、start では進めない'
+                f'#{number} は目印つきで{status}のため、start では進めない'
                 f'（チャットの承認のあと start --approved <出どころ> を使う。{OPERATION_MARK} の task のみ）', 2,
             )
         reason = task_not_startable_reason(project_number, item)
         if reason:
-            die(f'#{number} は承認待ちのまま start では進めない: {reason}', 2)
-    elif status != READY_STATUS:
+            die(f'#{number} は{status}のまま start では進めない: {reason}', 2)
+    elif status != READY_STATUS and not (status == DEP_STATUS and waived):
+        in_progress_hint = (
+            f'。別の会話が進行中の可能性。続きなら show {number} で読む束を出す'
+            if status == IN_PROGRESS_STATUS else ''
+        )
         die(
             f'#{number} の Status は「{status or "空"}」で、着手可でも、承認待ち（目印なし・'
             f'親の feature が着手可）でもない（{OPERATION_MARK} の task はチャットの承認のあと'
-            ' start --approved <出どころ> を使う）', 2,
+            f' start --approved <出どころ> を使う）{in_progress_hint}', 2,
         )
-    write_single_select_rest(project_number, number, 'Status', IN_PROGRESS_STATUS)
+    # 目印の書き直し → Status の順。Status の書き込みが落ちても「目印だけ新しい」で止まり、次の start が通る。
+    item_id = rest_item_id(project_number, number) if reread_updates else None
+    item = reread_rewrite_body(number, item, reread_updates)
+    write_single_select_rest(project_number, number, 'Status', IN_PROGRESS_STATUS, item_id=item_id)
     print(f'#{number} Status={IN_PROGRESS_STATUS}')
     print_reading_bundle(item.get('body') or '')
     return 0
@@ -2252,8 +2332,262 @@ def plan_table_rows(rows: list[dict[str, str]], existing: dict[str, int]) -> tup
     return fileable, skipped
 
 
+DOMAIN_README = os.path.join('docs', '4-domains', '{}', 'README.md')
+_README_REV_RE = re.compile(r'^rev:\s*(\d+)\s*$')
+
+
+def domain_names(domain: str) -> list[str]:
+    """提案の `domain:` の値（`chat, proposal`・`notification（注）`）から領域名を出てきた順に重複なく返す。`—` は空。"""
+    names = [re.sub(r'[（(].*$', '', d).strip() for d in (domain or '').split(',')]
+    return list(dict.fromkeys(n for n in names if n and n != '—'))
+
+
+def readme_rev(root: str, domain: str) -> int | None:
+    """現在形 README の先頭の項目 `rev: <n>` を返す。file が無い・`rev:` が無ければ None。"""
+    try:
+        with open(os.path.join(root, DOMAIN_README.format(domain)), encoding='utf-8') as f:
+            for line in f:
+                if line.startswith('## '):
+                    break
+                match = _README_REV_RE.match(line)
+                if match:
+                    return int(match.group(1))
+    except OSError:
+        return None
+    return None
+
+
+def current_rev_field(domain: str, root: str | None = None) -> str:
+    """目印の `rev=` に書く値（ADR-0696）。領域ごとの現在形 README の rev を `chat:3,proposal:5` で。
+    domain が `—`、または README の rev が読めるものが 1 つも無ければ空（rev を書かない）。"""
+    base = root if root is not None else _root()
+    pairs = [(d, readme_rev(base, d)) for d in domain_names(domain)]
+    return ','.join(f'{d}:{r}' for d, r in pairs if r is not None)
+
+
+def rev_drift(mark: dict[str, str] | None, root: str | None = None) -> list[tuple[str, int, int]]:
+    """目印の `rev=chat:3,…` より今の README の rev が大きい領域を (領域, 目印の rev, 今の rev) で返す。
+    `rev=1` のような数字だけの旧い目印・README が読めない領域は比べない（ADR-0696）。"""
+    base = root if root is not None else _root()
+    drift = []
+    for part in ((mark or {}).get('rev', '')).split(','):
+        name, sep, number = part.strip().partition(':')
+        if not sep or not number.strip().isdigit():
+            continue
+        now = readme_rev(base, name.strip())
+        if now is not None and now > int(number):
+            drift.append((name.strip(), int(number), now))
+    return drift
+
+
+_OPEN_JUDGMENT_RE = re.compile(r'\[要判断(?:[:：]\s*([^\]]*))?\]')
+_BUNDLE_HEADING_RE = re.compile(r'^(#{1,6})\s+(.*?)\s*#*\s*$')
+_READ_LINES_RE = re.compile(r'^(\d+)(?:-(\d+))?$')
+_STOP_DRAFT_STATUSES = ('失効', '取り込み済み')
+
+
+def _read_doc_lines(root: str, rel: str) -> list[str] | None:
+    """root の下の file を行で返す。root の外・読めない・無い file は None（比べない）。"""
+    base = os.path.realpath(root)
+    full = os.path.realpath(os.path.join(base, rel))
+    if os.path.commonpath([base, full]) != base:
+        return None
+    try:
+        with open(full, encoding='utf-8') as f:
+            return f.read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _has_open_judgment(lines: list[str]) -> bool:
+    """行に未決の `[要判断…]` の印があるか。`[要判断: <ID>]`・`[要判断: …]` のような書き方の説明
+    （中身が `<…>` や `…` で始まるもの）は印として数えない。"""
+    for line in lines:
+        for match in _OPEN_JUDGMENT_RE.finditer(line):
+            content = (match.group(1) or '').strip()
+            if not content.startswith(('<', '…', '...')):
+                return True
+    return False
+
+
+def _heading_slug(text: str) -> str:
+    slug = re.sub(r'\s+', '-', text.strip().lower())
+    return slug
+
+
+def _github_slug(text: str) -> str:
+    """GitHub の見出し anchor（小文字・文字/数字/空白/-/_ 以外を落とす・空白を - に）。"""
+    kept = ''.join(c for c in text.strip().lower() if c.isalnum() or c in ' -_')
+    return kept.replace(' ', '-')
+
+
+_ANCHOR_LINES_RE = re.compile(r'^L(\d+)(?:-L?(\d+))?$')
+
+
+def _read_scope_lines(lines: list[str], read: str) -> list[str] | None:
+    """reads= の 1 件（`path`・`path#見出し`・`path#L<a>(-L<b>)`・`path:a-b`）が指す範囲の行。
+    path だけは file 全体。`#見出し` はその見出しから、同じ深さか浅い次の見出しの前まで。見出しは
+    書かれた文（小文字・空白を -・`.` を落としても比べる）でも GitHub の slug（句読点・括弧を落とす。
+    重複は -1, -2）でも当てる。`#L<a>-L<b>` は行の範囲。`:a-b`（`:a`）はその行だけ。
+    見出しが見つからないときは None（範囲を決められない。呼び出し側が理由を分けて止める）。"""
+    _, anchor_sep, rest = read.partition('#')
+    if anchor_sep:
+        raw = re.split(r':\d', rest, maxsplit=1)[0].strip()
+        line_span = _ANCHOR_LINES_RE.match(raw)
+        if line_span:
+            first = int(line_span.group(1))
+            last = int(line_span.group(2) or first)
+            return lines[max(first - 1, 0):last]
+        anchor = _heading_slug(raw)
+        plain = anchor.replace('.', '')
+        seen: dict[str, int] = {}
+        in_fence = False
+        for index, line in enumerate(lines):
+            if line.lstrip().startswith(('```', '~~~')):
+                in_fence = not in_fence
+                continue
+            match = None if in_fence else _BUNDLE_HEADING_RE.match(line)
+            if not match:
+                continue
+            slug = _heading_slug(match.group(2))
+            gh = _github_slug(match.group(2))
+            count = seen.get(gh, 0)
+            seen[gh] = count + 1
+            gh_unique = gh if count == 0 else f'{gh}-{count}'
+            if anchor not in (slug, gh_unique) and plain != slug.replace('.', ''):
+                continue
+            depth = len(match.group(1))
+            end = len(lines)
+            for later in range(index + 1, len(lines)):
+                nxt = _BUNDLE_HEADING_RE.match(lines[later])
+                if nxt and len(nxt.group(1)) <= depth:
+                    end = later
+                    break
+            return lines[index:end]
+        return None
+    _, line_sep, spec = read.partition(':')
+    span = _READ_LINES_RE.match(spec.strip()) if line_sep else None
+    if span:
+        first = int(span.group(1))
+        last = int(span.group(2) or first)
+        return lines[max(first - 1, 0):last]
+    return lines
+
+
+def bundle_stop_reasons(mark: dict[str, str] | None, root: str | None = None) -> list[str]:
+    return [text for _, text in bundle_stops(mark, root)]
+
+
+def bundle_stops(mark: dict[str, str] | None, root: str | None = None) -> list[tuple[str, str]]:
+    """start が着手を断る読む束の理由（DS-R8.2。rev の差は rev_drift が別に見る）。
+    reads= がある issue: 束の各 path の範囲（`#見出し` はその節、`:行` はその行、path だけは file 全体。
+    書き方の説明の `[要判断: <ID>]` は数えない。見出しが見つからないときも止める）に `[要判断: …]` の印がある、
+    または file の先頭の `status:` が失効・取り込み済みの提案。reads= が無い issue: 目印の
+    src=<slug> の提案（docs/draft/<slug>.md）の status が失効・取り込み済みのときだけ
+    （本文の path の文書は見ない）。無い file は比べない。"""
+    base = root if root is not None else _root()
+    mark = mark or {}
+    reads = [r.strip() for r in mark.get('reads', '').split(',') if r.strip()]
+    reasons: list[tuple[str, str]] = []
+    if reads:
+        for read in dict.fromkeys(reads):
+            path = re.split(r'[:#]', read, maxsplit=1)[0]
+            lines = _read_doc_lines(base, path)
+            if lines is None:
+                continue
+            status = _draft_header(lines).get('status', '')
+            if status in _STOP_DRAFT_STATUSES:
+                reasons.append(('merged' if status in _MERGED_STATUSES else 'expired', f'読む束の {path} は status: {status} の提案'))
+            scope = _read_scope_lines(lines, read)
+            if scope is None:
+                reasons.append(('heading', f'読む束の {read} の見出しが見つからない'))
+            elif _has_open_judgment(scope):
+                reasons.append(('judgment', f'読む束の {read} の範囲に [要判断] の印がある'))
+        return reasons
+    src = _SRC_RE.match(mark.get('src', ''))
+    if src:
+        rel = os.path.join(DRAFT_DIR_RELATIVE, src.group('slug') + '.md')
+        lines = _read_doc_lines(base, rel)
+        status = _draft_header(lines).get('status', '') if lines is not None else ''
+        if status in _STOP_DRAFT_STATUSES:
+            reasons.append(('merged' if status in _MERGED_STATUSES else 'expired', f'src={src.group("slug")} の提案（{rel}）は status: {status}'))
+    return reasons
+
+
+REREAD_FIELD = 'reread'
+
+
+def rewrite_task_mark(body: str, *, rev: str | None = None, reread: str | None = None) -> str:
+    """本文の先頭の rmp-task の目印の中だけを書き換えて返す（目印の外は 1 バイトも変えない）。
+    rev は `rev=` の値を置き換え、reread は `reread=<日付>` を（あれば置き換え、無ければ末尾に）足す。"""
+    match = _TASK_MARK_RE.match(body or '')
+    if not match:
+        return body
+    inner = match.group(1)
+    if rev is not None:
+        inner = re.sub(r'(?<!\S)rev=\S*', lambda _m: f'rev={rev}', inner, count=1)
+    if reread is not None:
+        if re.search(r'(?<!\S)reread=', inner):
+            inner = re.sub(r'(?<!\S)reread=\S*', lambda _m: f'reread={reread}', inner, count=1)
+        else:
+            inner = f'{inner} reread={reread}'
+    return body[:match.start(1)] + inner + body[match.end(1):]
+
+
+def start_reread_plan(number: int, mark: dict[str, str] | None, reread: bool, root: str | None = None) -> dict[str, str]:
+    """start の止める検査（rev の差・読む束）を通し、止めるなら Status を書く前に die(2)。
+    --reread のとき、rev の差と取り込み済みだけは「読み直した」として抜け、目印に書く内容を返す
+    （{'rev': …, 'reread': 日付}。止まる理由が無ければ空＝目印は書き換えない）。
+    失効・[要判断]・見出しなしは --reread でも止める（人が判断する）。reread= が既にある目印は取り込み済みで止めない。"""
+    base = root if root is not None else _root()
+    drift = rev_drift(mark, base)
+    stops = bundle_stops(mark, base)
+    already = bool((mark or {}).get(REREAD_FIELD))
+    merged = [text for kind, text in stops if kind == 'merged']
+    hard = [text for kind, text in stops if kind != 'merged']
+    merged_now = [] if (reread or already) else merged
+    hint = f'読み直してから start {number} --reread'
+    if hard:
+        die(f'#{number} は着手不可: ' + '・'.join(hard) + '。Status は変えていない。'
+            'issue にコメントして止まり、人が束か提案を直してから start をやり直す（失効・[要判断]・見出しなしは読み直しの宣言では通さない）', 2)
+    if drift and not reread:
+        die(f'#{number} は着手不可: {rev_drift_text(drift)}。Status は変えていない。'
+            f'issue にコメントして止まり、読む束を{hint}', 2)
+    if merged_now:
+        die(f'#{number} は着手不可: ' + '・'.join(merged_now) + '。Status は変えていない。'
+            f'issue にコメントして止まり、読む束を{hint}', 2)
+    updates: dict[str, str] = {}
+    if reread and drift:
+        now = {name: new for name, _old, new in drift}
+        parts = []
+        for part in (mark or {}).get('rev', '').split(','):
+            name, sep, _num = part.strip().partition(':')
+            parts.append(f'{name}:{now[name]}' if sep and name in now else part.strip())
+        updates['rev'] = ','.join(parts)
+    if reread and merged and not already:
+        updates['reread'] = datetime.date.today().isoformat()
+    return updates
+
+
+def reread_rewrite_body(number: int, item: dict, updates: dict[str, str]) -> dict:
+    """updates があれば本文の先頭の目印だけを書き直し（REST の PATCH 1 回）、書き直した本文を載せた item を返す。"""
+    if not updates:
+        return item
+    body = item.get('body') or ''
+    new_body = rewrite_task_mark(body, rev=updates.get('rev'), reread=updates.get('reread'))
+    if new_body != body:
+        rest('PATCH', f'repos/{REPO}/issues/{number}', {'body': new_body})
+    return {**item, 'body': new_body}
+
+
+def rev_drift_text(drift: list[tuple[str, int, int]]) -> str:
+    return '読む束が古い（' + '・'.join(f'{d} {old}→{new}' for d, old, new in drift) + '）'
+
+
 def table_issue_body(row: dict, slug: str, src_pr: str, domain: str) -> str:
-    fields = [f'id={row["id"]}', 'rev=1', f'stream={row["stream"]}', f'src={slug}@{src_pr}' if src_pr else f'src={slug}']
+    rev = current_rev_field(domain)
+    fields = [f'id={row["id"]}', *([f'rev={rev}'] if rev else []), f'stream={row["stream"]}',
+              f'src={slug}@{src_pr}' if src_pr else f'src={slug}']
     if domain and domain != '—':
         fields.append(f'domain={domain}')
     reqs = ','.join(r.strip() for r in re.split(r'[,、]', row['reqs']) if r.strip() and r.strip() != '—')
@@ -2435,7 +2769,7 @@ def latest_approval_pr(lines: list[str]) -> int | None:
 
 
 def coverage_findings(
-    drafts: dict[str, list[str]], marks: list[dict],
+    drafts: dict[str, list[str]], marks: list[dict], root: str | None = None,
 ) -> dict[str, list]:
     """drafts（slug → 行）と issue の目印（number・state・mark）から、coverage の 3 つの指摘を作る。
     missing: slug → (起票漏れの行, 起票しない行と理由) / stale: 古い版を指す open の issue /
@@ -2445,7 +2779,7 @@ def coverage_findings(
         src = _SRC_RE.match(m['mark'].get('src', ''))
         if src and m['mark'].get('id'):
             by_slug.setdefault(src.group('slug'), {})[m['mark']['id']] = m['number']
-    result: dict[str, list] = {'missing': [], 'unreadable': [], 'stale': [], 'expired': [], 'unknown': []}
+    result: dict[str, list] = {'missing': [], 'unreadable': [], 'stale': [], 'expired': [], 'unknown': [], 'rev_stale': []}
     for slug, lines in sorted(drafts.items()):
         header = _draft_header(lines)
         # 起票漏れを数えるのは承認の提案だけ（取り込み済み・失効は status が承認でないので、ここで外れる。DS-R3.3）。
@@ -2479,6 +2813,9 @@ def coverage_findings(
     for m in marks:
         if m['state'] == 'CLOSED':
             continue
+        drift = rev_drift(m['mark'], root)
+        if drift:  # 現在形の rev が目印より新しい（DS-R9.3）。src が無い目印も対象
+            result['rev_stale'].append({**m, 'drift': drift})
         src = _SRC_RE.match(m['mark'].get('src', ''))
         if not src:
             continue
@@ -2507,12 +2844,13 @@ def cmd_coverage() -> int:
     issues = [i for i in fetch_all_items(project_number) if i.get('type') == 'Issue']
     numbers = [i['number'] for i in issues]
     states = {i['number']: i.get('state') for i in issues}
+    statuses = {i['number']: i.get('status') for i in issues}
     marks = [
-        {'number': n, 'state': states.get(n), 'mark': mark}
+        {'number': n, 'state': states.get(n), 'status': statuses.get(n, ''), 'mark': mark}
         for n, body in sorted(fetch_bodies(numbers).items())
         if (mark := parse_task_mark(body)) is not None
     ]
-    found = coverage_findings(drafts, marks)
+    found = coverage_findings(drafts, marks, _root())
     print(f'coverage（提案 {len(drafts)} 本・目印つき issue {len(marks)} 件）')
     missing_total = 0
     for slug, why in found['unreadable']:
@@ -2532,6 +2870,9 @@ def cmd_coverage() -> int:
     print(f'失効した提案を指す issue {len(found["expired"])} 件')
     for m in found['expired']:
         print(f'  #{m["number"]} {m["mark"].get("id", "")}: src={m["mark"]["src"]}（{DRAFT_DIR_RELATIVE}/ の提案は失効）')
+    print(f'読む束が古い issue {len(found["rev_stale"])} 件（現在形の rev が目印より新しい。読み直してから start <n> --reread）')
+    for m in found['rev_stale']:
+        print(f'  #{m["number"]} {m["mark"].get("id", "")}（{m.get("status") or "Status なし"}）: {rev_drift_text(m["drift"])}')
     for m in found['unknown']:
         print(f'  （#{m["number"]} の src={m["mark"]["src"]} は {DRAFT_DIR_RELATIVE}/ に file が無い）')
     return 0
@@ -3836,7 +4177,7 @@ def main(argv: list[str]) -> int:
         'hirai-task ready|pending|blocked|show <issue>\n'
         '           new <title> --parent N [--kind ...] ...\n'
         '           new --from-table <draft の path> [--dry-run]\n'
-        '           add <issue> | approve <issue> | start <issue> [--approved <出どころ>]\n'
+        '           add <issue> | approve <issue> | start <issue> [--reread] [--approved <出どころ>]\n'
         '           review <issue> | done <issue> [--not-planned <理由>] | reopen <issue> <status>\n'
         '           set <issue> <field> <value> | sync\n'
         '           coverage | impact <draft の path> | design-merge <draft の path>\n'
@@ -3880,10 +4221,18 @@ def main(argv: list[str]) -> int:
             die('使い方: hirai-task set <issue> <field> <value>', 2)
         return cmd_set(_parse_issue_number(tail[0]), tail[1], tail[2])
     if sub == 'start':
-        if len(tail) not in (1, 3) or (len(tail) == 3 and tail[1] != '--approved'):
-            die('使い方: hirai-task start <issue> [--approved <出どころ>]', 2)
-        approved = tail[2] if len(tail) == 3 else None
-        return cmd_start(_parse_issue_number(tail[0]), approved)
+        usage_start = '使い方: hirai-task start <issue> [--reread] [--approved <出どころ>]'
+        if not tail:
+            die(usage_start, 2)
+        flags, approved, reread = tail[1:], None, False
+        while flags:
+            if flags[0] == '--reread' and not reread:
+                reread, flags = True, flags[1:]
+            elif flags[0] == '--approved' and approved is None and len(flags) >= 2 and not flags[1].startswith('--'):
+                approved, flags = flags[1], flags[2:]
+            else:
+                die(usage_start, 2)
+        return cmd_start(_parse_issue_number(tail[0]), approved, reread)
     if sub == 'review':
         if len(tail) != 1:
             die('使い方: hirai-task review <issue 番号>', 2)
