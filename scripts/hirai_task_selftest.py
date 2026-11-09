@@ -31,6 +31,7 @@ gh を実行しない。`gh_task.run_gh` を差し替えて、偽の GraphQL・R
 """
 from __future__ import annotations
 
+import datetime
 import io
 import json
 import os
@@ -3581,6 +3582,162 @@ def main() -> int:
                 assert rc == 0 and record == [('F_Status', 'O_Status_進行中')], (label, rc, message, record)
 
         t('start: reads= が無い issue は src= の提案の status（失効・取り込み済み）だけを見る（本文の path の文書は見ない）', _start_without_reads_checks_only_src_draft)
+
+        # -- start --reread（#829・裁定 5。止まった task から抜ける道） --
+        def _reread_run(files: dict[str, str], body: str, *, reread: bool = True, fail_status_write: bool = False) -> dict:
+            """偽 gh で start を 1 回走らせる。本文の PATCH（REST）を受けたら item の body を差し替える
+            （2 回目の start が新しい本文を読む）。Status の書き込み（Project item の PATCH）は fail_status_write で落とせる。"""
+            spec = dict(title='task', status=gh_task.READY_STATUS, kind='task', body=body)
+            record: list = []
+            patches: list = []
+
+            def rest_handler(method, path, payload):
+                if method == 'PATCH' and re.match(r'^repos/[^/]+/[^/]+/issues/750$', path):
+                    patches.append(payload)
+                    spec['body'] = payload['body']
+                    return {}
+                return None
+
+            inner = make_write_gh({750: spec}, record=record, rest_handler=rest_handler)
+
+            def fake(args, input_text=None):
+                if fail_status_write and args[:3] == ['api', '-X', 'PATCH'] and 'projectsV2' in args[3]:
+                    return 1, '', 'boom'
+                return inner(args, input_text)
+
+            gh_task.run_gh = fake
+            root = _ds_tree(files)
+            buf = io.StringIO()
+            rc, message = -1, ''
+            with redirect_stdout(buf):
+                try:
+                    rc = _with_root(root, lambda: gh_task.cmd_start(750, None, reread=reread))
+                except gh_task.GhError as exc:
+                    rc, message = exc.code, str(exc)
+            return dict(rc=rc, message=message, out=buf.getvalue(), record=record, patches=patches, spec=spec, root=root,
+                        again=lambda: _reread_again(spec, root))
+
+        def _reread_again(spec: dict, root: str) -> tuple[int, str]:
+            """同じ task をもう一度 --reread なしで start する（Status は着手可に戻して）。"""
+            gh_task.run_gh = make_write_gh({750: dict(spec, status=gh_task.READY_STATUS)}, record=[])
+            try:
+                return _with_root(root, lambda: gh_task.cmd_start(750, None)), ''
+            except gh_task.GhError as exc:
+                return exc.code, str(exc)
+
+        REREAD_TODAY = datetime.date.today().isoformat()
+        REREAD_TAIL = '\n## 完了条件\nx\n\n## 出どころ\n- 本文の別の行  \n\t末尾に空白と tab があり、改行は CRLF\r\nchat:3 rev=1\n\n  '
+
+        def _reread_body(rev: str = 'chat:3,proposal:5', src: str = 'tbl@PR9') -> str:
+            return (f'<!-- rmp-task: id=TBL-01 rev={rev} stream=Infra src={src} domain=chat, proposal reqs=TBL-R1 -->\n'
+                    + REREAD_TAIL)
+
+        def _reread_rewrites_stale_rev() -> None:
+            files = {'docs/4-domains/chat/README.md': _readme(4), 'docs/4-domains/proposal/README.md': _readme(5).replace('chat', 'proposal')}
+            body = _reread_body()
+            # --reread なしは止まる・案内は「読み直してから start <n> --reread」
+            res = _reread_run(files, body, reread=False)
+            assert res['rc'] == 2 and 'start 750 --reread' in res['message'] and res['patches'] == [] and res['record'] == [], res
+            # --reread で目印の rev だけを今の版へ書き直して着手する（proposal は変わらない）
+            res = _reread_run(files, body)
+            assert res['rc'] == 0 and res['record'] == [('F_Status', 'O_Status_進行中')], res
+            assert len(res['patches']) == 1, res['patches']
+            new = res['patches'][0]['body']
+            first, _, rest_new = new.partition('\n')
+            _, _, rest_old = body.partition('\n')
+            assert first == ('<!-- rmp-task: id=TBL-01 rev=chat:4,proposal:5 stream=Infra src=tbl@PR9 '
+                             'domain=chat, proposal reqs=TBL-R1 -->'), first
+            assert rest_new.encode() == rest_old.encode(), 'rev 以外の行が 1 バイトも変わらない'
+            assert 'reread=' not in new
+            rc, msg = res['again']()
+            assert rc == 0, msg  # 書き直したあとは --reread なしでも通る
+
+        t('start --reread: 目印の rev が古い task は rev を今の版へ書き直して着手する（本文の他の行は 1 バイトも変えない）', _reread_rewrites_stale_rev)
+
+        def _reread_marks_merged_src() -> None:
+            files = {'docs/draft/tbl.md': _draft_file('取り込み済み')}
+            body = _mark('TBL-01', 'tbl@PR9')
+            res = _reread_run(files, body, reread=False)
+            assert res['rc'] == 2 and 'start 750 --reread' in res['message'] and res['patches'] == [], res
+            res = _reread_run(files, body)
+            assert res['rc'] == 0 and res['record'] == [('F_Status', 'O_Status_進行中')], res
+            new = res['patches'][0]['body']
+            assert new.partition('\n')[0] == ('<!-- rmp-task: id=TBL-01 rev=1 stream=Infra src=tbl@PR9 reqs=TBL-R1 '
+                                              f'reread={REREAD_TODAY} -->'), new.partition('\n')[0]
+            assert new.partition('\n')[2] == body.partition('\n')[2]
+            rc, msg = res['again']()  # 2 回目の start は止まらない
+            assert rc == 0, msg
+
+        t('start --reread: 取り込み済みの src の task は reread=<日付> を足して着手し、2 回目の start は止まらない', _reread_marks_merged_src)
+
+        def _reread_keeps_human_stops() -> None:
+            readme = 'docs/4-domains/chat/README.md'
+            cases = {
+                '失効': ({'docs/draft/tbl.md': _draft_file('失効')}, _mark('TBL-01', 'tbl@PR9'), '失効'),
+                '[要判断]': ({readme: README_WITH_OPEN}, _mark('TBL-01', 'tbl@PR9', readme).replace('rev=1 ', ''), '[要判断]'),
+                '失効と取り込み済み': ({'docs/draft/tbl.md': _draft_file('失効'), 'docs/draft/b.md': _draft_file('取り込み済み')},
+                                  _mark('TBL-01', 'tbl@PR9', 'docs/draft/tbl.md,docs/draft/b.md').replace('rev=1 ', ''), '失効'),
+            }
+            for label, (files, body, word) in cases.items():
+                res = _reread_run(files, body)
+                assert res['rc'] == 2 and '着手不可' in res['message'] and word in res['message'], (label, res)
+                assert res['patches'] == [] and res['record'] == [], (label, res)  # 目印も Status も書かない
+            # rev が古くても、失効が同居すれば目印は書き直さない
+            files = {'docs/4-domains/chat/README.md': _readme(4), 'docs/draft/tbl.md': _draft_file('失効')}
+            res = _reread_run(files, _reread_body(rev='chat:3', src='tbl@PR9'))
+            assert res['rc'] == 2 and res['patches'] == [] and res['record'] == [], res
+
+        t('start --reread: 失効の提案・[要判断] の印では止めたまま（目印も Status も書かない）', _reread_keeps_human_stops)
+
+        def _reread_without_reason_is_plain_start() -> None:
+            files = {'docs/4-domains/chat/README.md': _readme(4), 'docs/draft/tbl.md': _draft_file('承認')}
+            for body in (_reread_body(rev='chat:4'), _mark('TBL-01', 'tbl@PR9'), '旧い本文\n'):
+                res = _reread_run(files, body)
+                assert res['rc'] == 0 and res['record'] == [('F_Status', 'O_Status_進行中')], res
+                assert res['patches'] == [], res['patches']  # 目印を書き換えない
+
+        t('start --reread: 止まる理由が無い task に付けても通常の start と同じ（目印を書き換えない）', _reread_without_reason_is_plain_start)
+
+        def _reread_status_write_failure_leaves_retryable_state() -> None:
+            files = {'docs/4-domains/chat/README.md': _readme(4)}
+            body = _reread_body(rev='chat:3', src='tbl@PR9')
+            res = _reread_run(files, body, fail_status_write=True)
+            assert res['rc'] == 1 and res['record'] == [], res  # Status は書けていない
+            assert len(res['patches']) == 1 and 'rev=chat:4' in res['patches'][0]['body'], res['patches']
+            rc, msg = res['again']()  # 目印だけ新しい → 次の start は --reread なしで着手できる
+            assert rc == 0, msg
+            # 目印を書く PATCH 自体が落ちたら Status は書かない
+            rec: list = []
+            gh_task.run_gh = make_write_gh({750: dict(title='task', status=gh_task.READY_STATUS, kind='task', body=body)},
+                                           record=rec, rest_handler=lambda m, p, b: None)
+            try:
+                _with_root(_ds_tree(files), lambda: gh_task.cmd_start(750, None, reread=True))
+                raise AssertionError('本文の PATCH が落ちたのに通った')
+            except gh_task.GhError as exc:
+                assert exc.code == 1, exc.code
+            assert rec == [], rec
+
+        t('start --reread: Status の書き込みが落ちても目印だけ新しく Status は変わらず、次の start がやり直せる', _reread_status_write_failure_leaves_retryable_state)
+
+        def _reread_arg_parsing_and_coverage_text() -> None:
+            seen: list = []
+            saved = gh_task.cmd_start
+            gh_task.cmd_start = lambda n, approved, reread=False: seen.append((n, approved, reread)) or 0
+            try:
+                assert gh_task.main(['start', '750', '--reread']) == 0
+                assert gh_task.main(['start', '750', '--reread', '--approved', 'x']) == 0
+                assert gh_task.main(['start', '750', '--approved', 'x', '--reread']) == 0
+                assert gh_task.main(['start', '750']) == 0
+            finally:
+                gh_task.cmd_start = saved
+            assert seen == [(750, None, True), (750, 'x', True), (750, 'x', True), (750, None, False)], seen
+            _expect_exit(lambda: gh_task.main(['start', '750', '--bogus']), 2)
+            _expect_exit(lambda: gh_task.main(['start', '750', '--approved']), 2)
+            rows = [dict(number=41, status='進行中', kind='task')]
+            rc, out, _ = _with_root_cov({}, rows, {41: _mark('TBL-01', 'none@PR1').replace('rev=1', 'rev=chat:3')})
+            assert '読み直してから start <n> --reread' in out, out
+
+        t('start --reread: 引数の受け付け（順不同・--approved と併用・不正は exit 2）と coverage の案内', _reread_arg_parsing_and_coverage_text)
 
         # -- ready の「旧い形」の印（#829・裁定 3） --
         def _ready_marks_old_form_rows() -> None:
