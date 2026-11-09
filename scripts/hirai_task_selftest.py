@@ -3769,6 +3769,33 @@ def main() -> int:
 
         t('start --reread: 引数の受け付け（順不同・--approved と併用・不正は exit 2）と coverage の案内', _reread_arg_parsing_and_coverage_text)
 
+        def _reread_hard_stop_is_judged_before_drift() -> None:
+            # rev が古く、かつ失効の提案がある task は、--reread なしでも失効で断り、--reread の案内を出さない
+            files = {'docs/4-domains/chat/README.md': _readme(5), 'docs/draft/e.md': _draft_file('失効')}
+            body = '<!-- rmp-task: id=TBL-01 rev=chat:3 stream=Infra src=e@PR1 domain=chat reqs=TBL-R1 -->\n' + REREAD_TAIL
+            res = _reread_run(files, body, reread=False)
+            assert res['rc'] == 2 and '失効' in res['message'], res
+            assert '--reread' not in res['message'], res['message']
+            assert res['patches'] == [] and res['record'] == [], res
+            res = _reread_run(files, body)
+            assert res['rc'] == 2 and '失効' in res['message'] and '--reread' not in res['message'], res
+            assert res['patches'] == [] and res['record'] == [], res
+
+        t('start: rev が古くても失効が同居すれば --reread なしでも失効で断り、--reread の案内を出さない', _reread_hard_stop_is_judged_before_drift)
+
+        def _reread_rejects_option_as_approved_value() -> None:
+            seen: list = []
+            saved = gh_task.cmd_start
+            gh_task.cmd_start = lambda n, approved, reread=False: seen.append((n, approved, reread)) or 0
+            try:
+                _expect_exit(lambda: gh_task.main(['start', '12', '--approved', '--reread']), 2)
+                _expect_exit(lambda: gh_task.main(['start', '12', '--approved', '--reread', '--reread']), 2)
+            finally:
+                gh_task.cmd_start = saved
+            assert seen == [], seen
+
+        t('start: --approved の値が -- で始まるときは使い方を出して exit 2（--reread を出どころに取らない）', _reread_rejects_option_as_approved_value)
+
         # -- ready の「旧い形」の印（#829・裁定 3） --
         def _ready_marks_old_form_rows() -> None:
             rows = [

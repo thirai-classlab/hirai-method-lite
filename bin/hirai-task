@@ -2547,12 +2547,12 @@ def start_reread_plan(number: int, mark: dict[str, str] | None, reread: bool, ro
     hard = [text for kind, text in stops if kind != 'merged']
     merged_now = [] if (reread or already) else merged
     hint = f'読み直してから start {number} --reread'
+    if hard:
+        die(f'#{number} は着手不可: ' + '・'.join(hard) + '。Status は変えていない。'
+            'issue にコメントして止まり、人が束か提案を直してから start をやり直す（失効・[要判断]・見出しなしは読み直しの宣言では通さない）', 2)
     if drift and not reread:
         die(f'#{number} は着手不可: {rev_drift_text(drift)}。Status は変えていない。'
             f'issue にコメントして止まり、読む束を{hint}', 2)
-    if hard:
-        die(f'#{number} は着手不可: ' + '・'.join(hard) + '。Status は変えていない。'
-            'issue にコメントして止まり、人が束か提案を直してから start をやり直す（--reread でも失効・[要判断] は通さない）', 2)
     if merged_now:
         die(f'#{number} は着手不可: ' + '・'.join(merged_now) + '。Status は変えていない。'
             f'issue にコメントして止まり、読む束を{hint}', 2)
@@ -4228,7 +4228,7 @@ def main(argv: list[str]) -> int:
         while flags:
             if flags[0] == '--reread' and not reread:
                 reread, flags = True, flags[1:]
-            elif flags[0] == '--approved' and approved is None and len(flags) >= 2:
+            elif flags[0] == '--approved' and approved is None and len(flags) >= 2 and not flags[1].startswith('--'):
                 approved, flags = flags[1], flags[2:]
             else:
                 die(usage_start, 2)
