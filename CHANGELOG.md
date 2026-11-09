@@ -10,8 +10,11 @@
 - `new --from-table`（#829）: 目印の `rev=` を、起票した時点の domain ごとの現在形 `docs/4-domains/<領域>/README.md` の先頭の `rev:` で書く（例 `rev=chat:3,proposal:5`）。`domain:` が `—` のとき、README が無い・`rev:` が読めない領域だけのときは `rev=` を書かない（今までの固定の `rev=1` はやめた）。`domain:` の値は `,` で分け、`（注）` は落として領域名にする。
 - `hirai-task start <n>`（#829・DS-R8.2）: 目印の `rev=` が `領域:数字` の形で、今の README の rev がそれより大きいとき、Status も本文も書かずに exit 2 で「着手不可: 読む束が古い（chat 3→4）」と断る（`--approved` も同じ）。数字だけの旧い目印（`rev=1`）と README が読めない領域は比べない。
 - `hirai-task coverage`（#829・DS-R9.3）: 「読む束が古い issue N 件」を足し、open の issue のうち現在形の rev が目印より新しいものを `#n id（Status）: 読む束が古い（chat 3→4）` で出す。報告のみで常に exit 0。
-- selftest: 目印への rev の書き込み・rev の比べ方・`start` の断り（Status を書かない）・`start` が止まらない場合・`coverage` の出力の 5 case を足した。
-- 未実装（設計か ADR に根拠が無く、要判断）: `start` の `[要判断]`・失効・取り込み済みの検出、`ready` の「旧い形」の印、`start` の「別の会話が進行中の可能性」。
+- selftest: 目印への rev の書き込み・rev の比べ方・`start` の断り（Status を書かない）・`start` が止まらない場合・`coverage` の出力の 5 case を足した。さらに裁定 1〜4 の case（同じ feature の blocker の通す・止める、束の検出、`ready` の印、進行中の断り）を足した。偽の `gh` は問い合わせに `body` があるときだけ本文を返す。実装を 1 か所ずつ壊して FAIL することを確かめた。
+- `hirai-task start <n>`（#829・裁定 1。同じ feature の中の依存）: 未完了の blocker がすべて task と同じ親 feature の子で、Status が 進行中 か レビュー中 なら、待たずに通す（依存待ち・着手可・承認待ち[目印なし・親が着手可]のどれからでも）。前の task が 承認待ち・着手可・依存待ち・判断待ち、別の feature の blocker、板に載っていない blocker は今までどおり「未完了の blocked by がある」で止め、止める番号だけを出す。branch の commit は見ず Status だけで判定する。blocker 1 本につき GraphQL 1 点が増える（未完了の blocker があるときだけ）。
+- `hirai-task start <n>`（#829・裁定 2。DS-R8.2 の検出）: rev の差と同じく、Status も本文も書く前に exit 2 で「着手不可: …」と断る。`reads=` がある issue は束の各 path（`#見出し`・`:行` は落とす）の file を見て、`[要判断: …]` の印がある、または先頭の `status:` が 失効・取り込み済み なら止まる。`reads=` が無い issue は、目印の `src=` の提案（`docs/draft/<slug>.md`）の status が 失効・取り込み済み のときだけ止まる（本文の path の文書は見ない）。無い file は比べない。
+- `hirai-task ready`（#829・裁定 3）: 目印が無い行と、目印はあるが `reads=` が無い行の末尾に ` [旧い形]` を付ける。そのために出す行の本文を取る（50 件ごとに GraphQL 1 回。wave の本文とは別）。
+- `hirai-task start <n>`（#829・裁定 4）: 進行中の task を start し直したときは、今までどおり exit 2 で断り、断りの文に「別の会話が進行中の可能性。続きなら show <n> で読む束を出す」を足した（ほかの Status には足さない）。
 - **導入先で要る操作。** プラグインを上げて新しい会話を開く（`/hirai-lite:update`）。
 
 ## v2.4.0
