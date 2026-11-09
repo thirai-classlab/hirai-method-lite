@@ -21,6 +21,8 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
   task と feature に未完了の blocked by が無く、先祖の wave を止める wave が
   出る条件を満たしているものだけ。並びは着手順（数値の項目。ある行を先に小さい順）→
   先祖の wave の POSITION → 番号。着手順の項目が無い Project では先祖の wave の POSITION → 番号のまま。
+  出す行の本文を取り（50 件ごとに GraphQL 1 回）、目印が無い行と、目印はあるが reads= が無い行の
+  末尾に ` [旧い形]` を付ける（読む束を出せない issue。#829）。
   pending は承認待ちの feature、blocked は判断待ち・依存待ち・保留の task を出す。
 
   Project の在り処は Repository.projectsV2 から引く。0 件なら「無し」、
@@ -1201,6 +1203,15 @@ def ready_warnings(items: list[dict], extras: dict[int, dict] | None = None) -> 
     return warnings
 
 
+OLD_FORM_SUFFIX = ' [旧い形]'
+
+
+def is_old_form(body: str) -> bool:
+    """目印が無い、または目印はあるが reads= が無い本文（読む束を出せない旧い形。ready の印）。"""
+    mark = parse_task_mark(body)
+    return mark is None or not mark.get('reads', '').strip()
+
+
 def cmd_ready() -> int:
     project_number = discover_project_number()
     items = fetch_all_items(project_number)
@@ -1218,11 +1229,14 @@ def cmd_ready() -> int:
     if not rows:
         print('着手可の issue は 0 件')
     else:
+        # 「旧い形」の印のために、出す行の本文だけを引く（#829。wave の本文とは別の 1 回）
+        row_bodies = fetch_bodies([i['number'] for i in rows])
         print(f'着手可 {len(rows)} 件')
         for i in rows:
             order = i.get('order')
             order_text = f' (着手順 {order:g})' if order is not None else ''
-            print(f"  #{i['number']:<4} [feature #{i['parent_number']}]{order_text} {i['title'][:64]}")
+            old_text = OLD_FORM_SUFFIX if is_old_form(row_bodies.get(i['number'], '')) else ''
+            print(f"  #{i['number']:<4} [feature #{i['parent_number']}]{order_text} {i['title'][:64]}{old_text}")
     for line in ready_warnings(items, extras):
         print(line)
     return 0

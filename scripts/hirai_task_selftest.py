@@ -3108,7 +3108,10 @@ def main() -> int:
                         'closedByPullRequestsReferences': {'nodes': []}}} for i, n in enumerate(numbers)}
                     return 0, json.dumps({'data': data}), ''
                 if re.search(r'\bi0:', joined):
-                    data = {f'i{i}': {'issue': {'number': n, 'body': bodies.get(n, '')}} for i, n in enumerate(numbers)}
+                    # 問い合わせに body が無ければ body を返さない（本文を取り忘れた回帰を捕まえるため）
+                    with_body = re.search(r'\bbody\b', joined) is not None
+                    data = {f'i{i}': {'issue': {'number': n, **({'body': bodies.get(n, '')} if with_body else {})}}
+                            for i, n in enumerate(numbers)}
                     return 0, json.dumps({'data': data}), ''
                 return 1, '', f'unhandled fake gh call: {joined[:120]}'
 
@@ -3454,6 +3457,66 @@ def main() -> int:
                 assert rc == 0 and record == [('F_Status', 'O_Status_進行中')], (label, rc, message, record)
 
         t('start: reads= が無い issue は src= の提案の status（失効・取り込み済み）だけを見る（本文の path の文書は見ない）', _start_without_reads_checks_only_src_draft)
+
+        # -- ready の「旧い形」の印（#829・裁定 3） --
+        def _ready_marks_old_form_rows() -> None:
+            rows = [
+                dict(number=500, status=gh_task.READY_STATUS, kind='feature'),
+                *[dict(number=n, status=gh_task.READY_STATUS, kind='task', parent_number=500) for n in (501, 502, 503)],
+                dict(number=504, status=gh_task.IN_PROGRESS_STATUS, kind='task', parent_number=500),
+                dict(number=506, status=gh_task.PENDING_STATUS, kind='feature'),
+                dict(number=505, status=gh_task.READY_STATUS, kind='task', parent_number=506),  # 親が着手可でないので出ない
+            ]
+            bodies = {
+                501: '旧い本文\n',
+                502: _mark('TBL-02', 'tbl@PR9'),
+                503: _mark('TBL-03', 'tbl@PR9', READS),
+                504: '旧い本文\n',
+            }
+            asked: list = []
+            inner = make_ds_board_gh(rows, bodies, calls=[])
+
+            def spy(args, input_text=None):
+                joined = ' '.join(args)
+                if re.search(r'\bi0:', joined) and re.search(r'\bbody\b', joined):
+                    asked.append([int(x) for x in re.findall(r'issue\(number:\s*(\d+)\)', joined)])
+                return inner(args, input_text)
+
+            gh_task.run_gh = spy
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = gh_task.cmd_ready()
+            out = buf.getvalue()
+            lines = {int(m.group(1)): line for line in out.splitlines() if (m := re.match(r'\s+#(\d+)\s', line))}
+            assert rc == 0 and set(lines) == {501, 502, 503}, out
+            assert lines[501].endswith(' [旧い形]') and lines[502].endswith(' [旧い形]'), out
+            assert '[旧い形]' not in lines[503], out
+            # 本文を引くのは出す行だけ（進行中の 504 は引かない）。問い合わせに body を含める
+            assert asked == [[501, 502, 503]], asked
+
+        t('ready: 目印が無い・目印はあるが reads= が無い行の末尾に [旧い形] を付ける（本文を取るのは出す行だけ）', _ready_marks_old_form_rows)
+
+        def _ready_fake_returns_body_only_when_queried() -> None:
+            # 偽の gh が、問い合わせに body が無いのに body を返すと、本文を取り忘れた回帰を捕まえられない
+            rows = [dict(number=500, status=gh_task.READY_STATUS, kind='feature'),
+                    dict(number=501, status=gh_task.READY_STATUS, kind='task', parent_number=500)]
+            seen: list = []
+            inner = make_ds_board_gh(rows, {501: _mark('TBL-03', 'tbl@PR9', READS)}, calls=[])
+
+            def spy(args, input_text=None):
+                joined = ' '.join(args)
+                rc, out, err = inner(args, input_text)
+                if re.search(r'\bi0:', joined) and 'blockedBy' not in joined:
+                    seen.append(('body' in joined, '"body"' in out))
+                return rc, out, err
+
+            gh_task.run_gh = spy
+            with redirect_stdout(io.StringIO()):
+                gh_task.cmd_ready()
+            assert seen and all(asked == returned for asked, returned in seen), seen
+            assert any(asked for asked, _ in seen), seen
+
+        t('ready: 偽の gh は問い合わせに body があるときだけ body を返し、ready は body を問い合わせる', _ready_fake_returns_body_only_when_queried)
 
         # -- coverage（#816・DS-R2.3） --
         def _cov_draft(status: str, rows: str, *, history: str = '- 2026-10-01 PR #9 の merge で承認', heading: str = '### 11-3. 表',
