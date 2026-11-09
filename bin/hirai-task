@@ -104,6 +104,9 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
     子で Status が進行中・レビュー中なら通す。依存待ちの task もこの場合は進められる。前の task が承認待ち・
     着手可・依存待ち、または別の feature の blocker は完了まで止める。branch の commit は見ない。2.5.0・#829）。承認待ちの task は、この判定を
     通るときだけ進行中へ進める（目印つきは start --approved を案内）。ほかの Status は exit 2。
+    目印の rev の差に加え、読む束の検出（DS-R8.2・#829）でも Status を書く前に exit 2 で「着手不可: …」と断る:
+    reads= がある issue は束の各 path の file に `[要判断: …]` の印がある／先頭の status が失効・取り込み済み。
+    reads= が無い issue は目印の src= の提案（docs/draft/<slug>.md）の status が失効・取り込み済みのときだけ。
     `--approved` は `[操作]` の task に限り、着手可・承認待ちからだけ進行中にでき、本文に
     出どころを 1 行残す。
   - reopen: 閉じた issue だけを受け付ける。着手可へは set と同じ判定を通し、進行中へは自分の
@@ -1681,6 +1684,10 @@ def cmd_start(number: int, approved: str | None) -> int:
         # Status を書く前に断る（DS-R8.2。断ったときは Status を変えない）。
         die(f'#{number} は着手不可: {rev_drift_text(drift)}。Status は変えていない。'
             'issue にコメントして止まり、読む束を読み直してから start をやり直す', 2)
+    stops = bundle_stop_reasons(parse_task_mark(item.get('body') or ''))
+    if stops:
+        die(f'#{number} は着手不可: ' + '・'.join(stops) + '。Status は変えていない。'
+            'issue にコメントして止まり、人が束か提案を直してから start をやり直す', 2)
     status = item['fields'].get('Status', '')
     if approved is not None:
         if not has_mark(item['title'], OPERATION_MARK):
@@ -2332,6 +2339,54 @@ def rev_drift(mark: dict[str, str] | None, root: str | None = None) -> list[tupl
         if now is not None and now > int(number):
             drift.append((name.strip(), int(number), now))
     return drift
+
+
+_OPEN_JUDGMENT_RE = re.compile(r'\[要判断[:：\]]')
+_STOP_DRAFT_STATUSES = ('失効', '取り込み済み')
+
+
+def _read_doc_lines(root: str, rel: str) -> list[str] | None:
+    """root の下の file を行で返す。root の外・読めない・無い file は None（比べない）。"""
+    base = os.path.realpath(root)
+    full = os.path.realpath(os.path.join(base, rel))
+    if os.path.commonpath([base, full]) != base:
+        return None
+    try:
+        with open(full, encoding='utf-8') as f:
+            return f.read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def bundle_stop_reasons(mark: dict[str, str] | None, root: str | None = None) -> list[str]:
+    """start が着手を断る読む束の理由（DS-R8.2。rev の差は rev_drift が別に見る）。
+    reads= がある issue: 束の各 path（`#見出し`・`:行` は落とす）の file に `[要判断: …]` の印がある、
+    または file の先頭の `status:` が失効・取り込み済みの提案。reads= が無い issue: 目印の
+    src=<slug> の提案（docs/draft/<slug>.md）の status が失効・取り込み済みのときだけ
+    （本文の path の文書は見ない）。無い file は比べない。"""
+    base = root if root is not None else _root()
+    mark = mark or {}
+    reads = [r.strip() for r in mark.get('reads', '').split(',') if r.strip()]
+    reasons: list[str] = []
+    if reads:
+        for read in dict.fromkeys(re.split(r'[:#]', r, maxsplit=1)[0] for r in reads):
+            lines = _read_doc_lines(base, read)
+            if lines is None:
+                continue
+            status = _draft_header(lines).get('status', '')
+            if status in _STOP_DRAFT_STATUSES:
+                reasons.append(f'読む束の {read} は status: {status} の提案')
+            if any(_OPEN_JUDGMENT_RE.search(line) for line in lines):
+                reasons.append(f'読む束の {read} に [要判断] の印がある')
+        return reasons
+    src = _SRC_RE.match(mark.get('src', ''))
+    if src:
+        rel = os.path.join(DRAFT_DIR_RELATIVE, src.group('slug') + '.md')
+        lines = _read_doc_lines(base, rel)
+        status = _draft_header(lines).get('status', '') if lines is not None else ''
+        if status in _STOP_DRAFT_STATUSES:
+            reasons.append(f'src={src.group("slug")} の提案（{rel}）は status: {status}')
+    return reasons
 
 
 def rev_drift_text(drift: list[tuple[str, int, int]]) -> str:

@@ -3390,6 +3390,71 @@ def main() -> int:
 
         t('start: 前の task が承認待ち・着手可・依存待ち・別の feature・板に無いなら止まる（止める番号だけを出す）', _start_still_stops_for_other_blockers)
 
+        # -- 読む束の中の要判断・失効・取り込み済み（#829・裁定 2・DS-R8.2） --
+        def _draft_file(status: str) -> str:  # rmp-app の docs/draft/*.md の先頭の形
+            return (f'# 表の提案\n\nstatus: {status}\napproved_at: 2026-10-02（PR #9 の merge で承認）\n'
+                    'kind: 製品の機能\ndomain: chat\nimplements: —\n\n## 1. 背景\n本文\n')
+
+        README_WITH_OPEN = _readme(4) + '\n## 7. 要件と受入\n営業の登録の入口は未決 `[要判断: #621]`。\n'
+
+        def _start_in_tree(files: dict[str, str], body: str) -> tuple[int, str, str, list]:
+            record: list = []
+            gh_task.run_gh = make_write_gh(
+                {740: dict(title='task', status=gh_task.READY_STATUS, kind='task', body=body)}, record=record)
+            buf = io.StringIO()
+            message = ''
+            rc = -1
+            with redirect_stdout(buf):
+                try:
+                    rc = _with_root(_ds_tree(files), lambda: gh_task.cmd_start(740, None))
+                except gh_task.GhError as exc:
+                    rc, message = exc.code, str(exc)
+            return rc, message, buf.getvalue(), record
+
+        def _start_stops_for_bundle_docs() -> None:
+            readme = 'docs/4-domains/chat/README.md'
+            reads = f'{readme}#7.-要件と受入,docs/draft/tbl.md:3-9'
+            stops = {
+                '束の文書に [要判断: #n]': ({readme: README_WITH_OPEN, 'docs/draft/tbl.md': _draft_file('承認')}, '[要判断]'),
+                '束の提案が失効': ({readme: _readme(4), 'docs/draft/tbl.md': _draft_file('失効')}, '失効'),
+                '束の提案が取り込み済み': ({readme: _readme(4), 'docs/draft/tbl.md': _draft_file('取り込み済み')}, '取り込み済み'),
+            }
+            for label, (files, word) in stops.items():
+                rc, message, out, record = _start_in_tree(files, _mark('TBL-01', 'tbl@PR9', reads).replace('rev=1 ', ''))
+                assert rc == 2 and '着手不可' in message and word in message, (label, rc, message)
+                assert record == [] and '読む束（' not in out, (label, record, out)  # Status を書かず、束も出さない
+            # 通る: 印も失効も無い束・無い file・失効した提案が束の外にある・[要判断] は本文の参照の path にだけある
+            passes = {
+                '印の無い束': ({readme: _readme(4), 'docs/draft/tbl.md': _draft_file('承認')}, reads),
+                '束の file が無い': ({}, reads),
+                '失効した src は束に入っていない': ({readme: _readme(4), 'docs/draft/tbl.md': _draft_file('失効')}, readme),
+            }
+            for label, (files, bundle) in passes.items():
+                rc, message, out, record = _start_in_tree(files, _mark('TBL-01', 'tbl@PR9', bundle).replace('rev=1 ', ''))
+                assert rc == 0 and record == [('F_Status', 'O_Status_進行中')], (label, rc, message, record)
+
+        t('start: reads= があれば束の各 path を見て、[要判断] の印・失効・取り込み済みの提案で「着手不可」と断る（Status を書かない）', _start_stops_for_bundle_docs)
+
+        def _start_without_reads_checks_only_src_draft() -> None:
+            readme = 'docs/4-domains/chat/README.md'
+            for status in ('失効', '取り込み済み'):
+                rc, message, _out, record = _start_in_tree(
+                    {'docs/draft/tbl.md': _draft_file(status)}, _mark('TBL-01', 'tbl@PR9'))
+                assert rc == 2 and '着手不可' in message and status in message and 'tbl' in message, (status, message)
+                assert record == [], record
+            ok_body = _mark('TBL-01', 'tbl@PR9') + f'参照: {readme}:10-20\n'
+            for label, files, body in (
+                ('src の提案が承認', {'docs/draft/tbl.md': _draft_file('承認')}, ok_body),
+                ('src の提案の file が無い', {}, ok_body),
+                # 本文の path の文書に [要判断] があっても見ない
+                ('本文の path は見ない', {readme: README_WITH_OPEN}, ok_body),
+                ('目印が無い旧い形', {readme: README_WITH_OPEN, 'docs/draft/tbl.md': _draft_file('失効')}, f'旧い本文 {readme}\n'),
+            ):
+                rc, message, _out, record = _start_in_tree(files, body)
+                assert rc == 0 and record == [('F_Status', 'O_Status_進行中')], (label, rc, message, record)
+
+        t('start: reads= が無い issue は src= の提案の status（失効・取り込み済み）だけを見る（本文の path の文書は見ない）', _start_without_reads_checks_only_src_draft)
+
         # -- coverage（#816・DS-R2.3） --
         def _cov_draft(status: str, rows: str, *, history: str = '- 2026-10-01 PR #9 の merge で承認', heading: str = '### 11-3. 表',
                        pr: int = 9, header_row: str | None = None, approvals: str | None = None) -> str:
