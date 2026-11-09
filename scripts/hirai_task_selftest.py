@@ -3584,10 +3584,11 @@ def main() -> int:
         t('start: reads= が無い issue は src= の提案の status（失効・取り込み済み）だけを見る（本文の path の文書は見ない）', _start_without_reads_checks_only_src_draft)
 
         # -- start --reread（#829・裁定 5。止まった task から抜ける道） --
-        def _reread_run(files: dict[str, str], body: str, *, reread: bool = True, fail_status_write: bool = False) -> dict:
+        def _reread_run(files: dict[str, str], body: str, *, reread: bool = True, fail_status_write: bool = False,
+                        title: str = 'task', status: str | None = None, approved: str | None = None) -> dict:
             """偽 gh で start を 1 回走らせる。本文の PATCH（REST）を受けたら item の body を差し替える
             （2 回目の start が新しい本文を読む）。Status の書き込み（Project item の PATCH）は fail_status_write で落とせる。"""
-            spec = dict(title='task', status=gh_task.READY_STATUS, kind='task', body=body)
+            spec = dict(title=title, status=status or gh_task.READY_STATUS, kind='task', body=body)
             record: list = []
             patches: list = []
 
@@ -3611,7 +3612,7 @@ def main() -> int:
             rc, message = -1, ''
             with redirect_stdout(buf):
                 try:
-                    rc = _with_root(root, lambda: gh_task.cmd_start(750, None, reread=reread))
+                    rc = _with_root(root, lambda: gh_task.cmd_start(750, approved, reread=reread))
                 except gh_task.GhError as exc:
                     rc, message = exc.code, str(exc)
             return dict(rc=rc, message=message, out=buf.getvalue(), record=record, patches=patches, spec=spec, root=root,
@@ -3669,6 +3670,35 @@ def main() -> int:
             assert rc == 0, msg
 
         t('start --reread: 取り込み済みの src の task は reread=<日付> を足して着手し、2 回目の start は止まらない', _reread_marks_merged_src)
+
+        def _reread_approved_operation_rewrites_mark_first() -> None:
+            files = {'docs/4-domains/chat/README.md': _readme(4), 'docs/4-domains/proposal/README.md': _readme(5).replace('chat', 'proposal')}
+            body = _reread_body()
+            res = _reread_run(files, body, title='[操作] task', status=gh_task.PENDING_STATUS, approved='x')
+            assert res['rc'] == 0, res
+            assert len(res['patches']) == 2, res['patches']  # 目印の書き直し → 出どころの追記
+            assert res['patches'][0]['body'].partition('\n')[0].count('rev=chat:4,proposal:5') == 1, res['patches'][0]
+            last = res['patches'][1]['body']
+            assert last.partition('\n')[0] == res['patches'][0]['body'].partition('\n')[0], last
+            assert last.endswith('- 出どころ: x\n'), last
+            assert res['record'] == [('F_Status', 'O_Status_進行中')], res['record']
+
+        t('start --reread --approved: [操作] の task も目印の rev を先に書き直し、出どころを足して着手する', _reread_approved_operation_rewrites_mark_first)
+
+        def _reread_marks_merged_reads_file() -> None:
+            files = {'docs/draft/b.md': _draft_file('取り込み済み')}
+            body = _mark('TBL-01', 'tbl@PR9', 'docs/draft/b.md').replace('rev=1 ', '')
+            res = _reread_run(files, body, reread=False)
+            assert res['rc'] == 2 and '取り込み済み' in res['message'] and res['patches'] == [] and res['record'] == [], res
+            res = _reread_run(files, body)
+            assert res['rc'] == 0 and res['record'] == [('F_Status', 'O_Status_進行中')], res
+            assert len(res['patches']) == 1, res['patches']
+            first = res['patches'][0]['body'].partition('\n')[0]
+            assert first.endswith(f'reread={REREAD_TODAY} -->'), first
+            rc, msg = res['again']()  # そのあとの --reread なしの start も止まらない
+            assert rc == 0, msg
+
+        t('start --reread: reads= の束の file が取り込み済みの task も reread=<日付> を足して着手し、2 回目は止まらない', _reread_marks_merged_reads_file)
 
         def _reread_keeps_human_stops() -> None:
             readme = 'docs/4-domains/chat/README.md'
