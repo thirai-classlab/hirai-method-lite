@@ -212,7 +212,12 @@ def make_board_gh(rows: list[dict], extras: dict[int, dict] | None = None, *, pr
                         'number': number,
                         'blockedBy': {
                             'totalCount': total,
-                            'nodes': [{'number': n, 'state': s} for n, s in blockers],
+                            # (番号, 状態) か (番号, 状態, 'owner/repo')。repo は本物の応答と同じく repository.nameWithOwner に載る
+            'nodes': [
+                {'number': b[0], 'state': b[1],
+                 'repository': {'nameWithOwner': b[2] if len(b) > 2 else gh_task.REPO}}
+                for b in blockers
+            ],
                         },
                         'closedByPullRequestsReferences': {
                             'nodes': [{'number': n, 'state': 'OPEN'} for n in open_prs],
@@ -347,7 +352,12 @@ def _write_item_body(
         'parent': {'number': parent_number} if parent_number is not None else None,
         'blockedBy': {
             'totalCount': len(blockers),
-            'nodes': [{'number': n, 'state': s} for n, s in blockers],
+            # (番号, 状態) か (番号, 状態, 'owner/repo')。repo は本物の応答と同じく repository.nameWithOwner に載る
+            'nodes': [
+                {'number': b[0], 'state': b[1],
+                 'repository': {'nameWithOwner': b[2] if len(b) > 2 else gh_task.REPO}}
+                for b in blockers
+            ],
         },
         'projectItems': {'nodes': [{
             'id': f'ITEM_{title}',
@@ -443,7 +453,7 @@ def make_write_gh(
     record: list[tuple[str, str]] | None = None,
     rest_handler=None, project_number: int = 7, owner_typename: str = 'Organization',
     rest_items: dict[int, list[dict]] | None = None, rest_log: list[tuple] | None = None,
-    graphql_writes: list[tuple] | None = None,
+    graphql_writes: list[tuple] | None = None, strict_missing: bool = False,
 ):
     """approve/set/start/done/reopen/add/new の 1 件引き・field-list・
     updateProjectV2ItemFieldValue・REST を検査する偽 gh。
@@ -511,6 +521,14 @@ def make_write_gh(
             number = int(number_raw) if number_raw is not None else None
             spec = item_specs.get(number)
             if spec is None:
+                if strict_missing:
+                    # 本物の形（2026-11 実測の型）: この repo の issue として引けない番号（PR・存在しない番号）は
+                    # data.repository.issue=null に errors（NOT_FOUND）がつき、gh は exit 1 で返す。
+                    return 1, json.dumps({
+                        'data': {'repository': {'issue': None}},
+                        'errors': [{'type': 'NOT_FOUND', 'path': ['repository', 'issue'],
+                                    'message': f'Could not resolve to an Issue with the number of {number}.'}],
+                    }), ''
                 return 0, json.dumps(_write_item_body(found=False)), ''
             return 0, json.dumps(_write_item_body(project_number=project_number, **spec)), ''
         # REST（`rest()` の呼び出し）は必ず ['api', '-X', method, path, ...] の形なので、
@@ -3393,6 +3411,59 @@ def main() -> int:
 
         t('start: 前の task が承認待ち・着手可・依存待ち・別の feature・板に無いなら止まる（止める番号だけを出す）', _start_still_stops_for_other_blockers)
 
+        def _start_dependent_keeps_approval_and_parent_gates() -> None:
+            # 依存待ちを通す経路も、承認待ちの経路と同じ task_not_startable_reason を通る（目印・親・親の blocked by）
+            cases = {
+                '依存待ち × [操作]': (_sibling_specs(gh_task.IN_PROGRESS_STATUS), '[操作]', '目印つき'),
+                '依存待ち × [User]': (_sibling_specs(gh_task.IN_PROGRESS_STATUS), '[User]', '目印つき'),
+                '依存待ち × 親 feature が承認待ち': (
+                    _sibling_specs(gh_task.IN_PROGRESS_STATUS, extra={
+                        800: dict(title='feature', status=gh_task.PENDING_STATUS, kind='feature')}),
+                    '', '着手可ではない'),
+                '依存待ち × 親 feature に別 feature の open blocker': (
+                    _sibling_specs(gh_task.IN_PROGRESS_STATUS, extra={
+                        800: dict(title='feature', status=gh_task.READY_STATUS, kind='feature', blockers=[(900, 'OPEN')]),
+                        900: dict(title='feature', status=gh_task.IN_PROGRESS_STATUS, kind='feature')}),
+                    '', '未完了の blocked by がある: #900'),
+            }
+            for label, (specs, mark, word) in cases.items():
+                if mark:
+                    specs[801]['title'] = f'task {mark}'
+                rc, message, _out, record = _start_sibling(specs)
+                assert rc == 2 and word in message, (label, rc, message)
+                assert record == [], (label, record)  # Status も出どころの行も書かない
+
+        t('start: 依存待ちを同じ feature の blocker で通すときも、目印・親 feature の Status・親の blocked by を承認待ちと同じく見る', _start_dependent_keeps_approval_and_parent_gates)
+
+        def _start_stops_for_foreign_or_unresolvable_blocker() -> None:
+            # 別 repo の blocker: 番号が同じ feature の進行中の兄弟に当たっても通さない
+            specs = _sibling_specs(gh_task.IN_PROGRESS_STATUS)
+            specs[801]['blockers'] = [(802, 'OPEN', 'other-org/other-repo')]
+            rc, message, _out, record = _start_sibling(specs)
+            assert rc == 2 and '未完了の blocked by がある: #802' in message and record == [], (rc, message, record)
+            # 別 repo の blocker の番号が、この repo の PR・存在しない番号（本物は errors つきで exit 1）
+            specs = _sibling_specs(gh_task.IN_PROGRESS_STATUS)
+            specs[801]['blockers'] = [(1500, 'OPEN', 'other-org/other-repo')]
+            record = []
+            gh_task.run_gh = make_write_gh(specs, record=record, strict_missing=True)
+            try:
+                gh_task.cmd_start(801, None)
+                raise AssertionError('exit 2 で止まるはず')
+            except gh_task.GhError as exc:
+                assert exc.code == 2 and '未完了の blocked by がある: #1500' in str(exc), (exc.code, str(exc))
+            assert record == [], record
+            # repo 情報が無い（古い応答）番号がこの repo の PR で引けないときも exit 2
+            specs = _sibling_specs(gh_task.IN_PROGRESS_STATUS)
+            specs[801]['blockers'] = [(1500, 'OPEN')]
+            gh_task.run_gh = make_write_gh(specs, record=record, strict_missing=True)
+            try:
+                gh_task.cmd_start(801, None)
+                raise AssertionError('exit 2 で止まるはず')
+            except gh_task.GhError as exc:
+                assert exc.code == 2 and '#1500' in str(exc), (exc.code, str(exc))
+
+        t('start: 別 repo の blocker・この repo の issue として引けない番号（NOT_FOUND）は exit 2 で止める（exit 1 で落ちず、同じ番号の兄弟に当てない）', _start_stops_for_foreign_or_unresolvable_blocker)
+
         # -- 読む束の中の要判断・失効・取り込み済み（#829・裁定 2・DS-R8.2） --
         def _draft_file(status: str) -> str:  # rmp-app の docs/draft/*.md の先頭の形
             return (f'# 表の提案\n\nstatus: {status}\napproved_at: 2026-10-02（PR #9 の merge で承認）\n'
@@ -3437,6 +3508,23 @@ def main() -> int:
                 assert rc == 0 and record == [('F_Status', 'O_Status_進行中')], (label, rc, message, record)
 
         t('start: reads= があれば束の各 path を見て、[要判断] の印・失効・取り込み済みの提案で「着手不可」と断る（Status を書かない）', _start_stops_for_bundle_docs)
+
+        def _start_bundle_scope_is_the_section() -> None:
+            readme = 'docs/4-domains/chat/README.md'
+            other = '\n## 4. 決定と未決\n| 未決 | `[要判断: #700]` |\n'
+            files = {readme: _readme(4) + '\n## 1. 目的\n目的の文。印の書き方は `[要判断: <ID>]` と `[要判断: …]`。\n' + other}
+            for label, bundle in (
+                ('見出しの節だけ', f'{readme}#1.-目的'),
+                ('行の範囲だけ', f'{readme}:1-3'),
+            ):
+                rc, message, _out, record = _start_in_tree(files, _mark('TBL-01', 'tbl@PR9', bundle).replace('rev=1 ', ''))
+                assert rc == 0 and record == [('F_Status', 'O_Status_進行中')], (label, rc, message, record)
+            # 束の節に印があれば止まる・path だけは file 全体を見る
+            for label, bundle in (('束の節に印', f'{readme}#4.-決定と未決'), ('path だけ', readme)):
+                rc, message, _out, record = _start_in_tree(files, _mark('TBL-01', 'tbl@PR9', bundle).replace('rev=1 ', ''))
+                assert rc == 2 and '[要判断]' in message and record == [], (label, rc, message)
+
+        t('start: 読む束の範囲だけを見る（#見出しはその節・:行はその行）。束の外の節の [要判断] と、書き方の説明の [要判断: <ID>] では止まらない', _start_bundle_scope_is_the_section)
 
         def _start_without_reads_checks_only_src_draft() -> None:
             readme = 'docs/4-domains/chat/README.md'
