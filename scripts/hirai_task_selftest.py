@@ -3330,6 +3330,66 @@ def main() -> int:
 
         t('coverage: 現在形の rev が目印より新しい open の issue を「読む束が古い（chat 3→4）」で出す（閉じた・同じ・数字だけは出さない）', _coverage_reports_stale_rev_tasks)
 
+        # -- 同じ feature の中の依存（#829・裁定 1） --
+        def _sibling_specs(blocker_status: str, *, blocker_parent: int | None = 800, own_status: str = '依存待ち',
+                           extra: dict | None = None) -> dict:
+            specs = {
+                801: dict(title='task', status=own_status, kind='task', parent_number=800,
+                          blockers=[(802, 'OPEN')], body=_mark('TBL-02', 'tbl@PR9')),
+                802: dict(title='task', status=blocker_status, kind='task', parent_number=blocker_parent),
+                800: dict(title='feature', status=gh_task.READY_STATUS, kind='feature'),
+            }
+            specs.update(extra or {})
+            return specs
+
+        def _start_sibling(specs: dict) -> tuple[int, str, str, list]:
+            record: list = []
+            gh_task.run_gh = make_write_gh(specs, record=record)
+            buf = io.StringIO()
+            message = ''
+            rc = -1
+            with redirect_stdout(buf):
+                try:
+                    rc = gh_task.cmd_start(801, None)
+                except gh_task.GhError as exc:
+                    rc = exc.code
+                    message = str(exc)
+            return rc, message, buf.getvalue(), record
+
+        def _start_passes_for_in_flight_sibling_blocker() -> None:
+            for blocker_status in (gh_task.IN_PROGRESS_STATUS, gh_task.REVIEW_STATUS):
+                for own in ('依存待ち', gh_task.READY_STATUS, gh_task.PENDING_STATUS):
+                    rc, message, out, record = _start_sibling(_sibling_specs(blocker_status, own_status=own))
+                    assert rc == 0, (blocker_status, own, rc, message)
+                    assert record == [('F_Status', 'O_Status_進行中')], (blocker_status, own, record)
+                    assert f'Status={gh_task.IN_PROGRESS_STATUS}' in out, out
+
+        t('start: 未完了の blocker がすべて同じ feature の子で 進行中・レビュー中なら通す（依存待ち・着手可・承認待ちから）', _start_passes_for_in_flight_sibling_blocker)
+
+        def _start_still_stops_for_other_blockers() -> None:
+            stops = {
+                '前の task が承認待ち': _sibling_specs(gh_task.PENDING_STATUS),
+                '前の task が着手可': _sibling_specs(gh_task.READY_STATUS),
+                '前の task が依存待ち': _sibling_specs(gh_task.DEP_STATUS),
+                '前の task が判断待ち': _sibling_specs(gh_task.JUDGMENT_STATUS),
+                '前の task が別の feature': _sibling_specs(gh_task.IN_PROGRESS_STATUS, blocker_parent=900),
+                '前の task に親が無い': _sibling_specs(gh_task.IN_PROGRESS_STATUS, blocker_parent=None),
+                '前の task が板に無い': {k: v for k, v in _sibling_specs(gh_task.IN_PROGRESS_STATUS).items() if k != 802},
+            }
+            for label, specs in stops.items():
+                rc, message, _out, record = _start_sibling(specs)
+                assert rc == 2 and '未完了の blocked by がある: #802' in message, (label, rc, message)
+                assert record == [], (label, record)  # Status を書かない
+            # 2 本のうち 1 本が止める blocker なら、止めている番号だけを出して断る
+            specs = _sibling_specs(gh_task.IN_PROGRESS_STATUS)
+            specs[801]['blockers'] = [(802, 'OPEN'), (803, 'OPEN'), (804, 'CLOSED')]
+            specs[803] = dict(title='task', status=gh_task.READY_STATUS, kind='task', parent_number=800)
+            rc, message, _out, record = _start_sibling(specs)
+            assert rc == 2 and '#803' in message and '#802' not in message and '#804' not in message, message
+            assert record == [], record
+
+        t('start: 前の task が承認待ち・着手可・依存待ち・別の feature・板に無いなら止まる（止める番号だけを出す）', _start_still_stops_for_other_blockers)
+
         # -- coverage（#816・DS-R2.3） --
         def _cov_draft(status: str, rows: str, *, history: str = '- 2026-10-01 PR #9 の merge で承認', heading: str = '### 11-3. 表',
                        pr: int = 9, header_row: str | None = None, approvals: str | None = None) -> str:

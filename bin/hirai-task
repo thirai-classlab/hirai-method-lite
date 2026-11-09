@@ -100,7 +100,9 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
     回れないようにする。done と reopen はこの守りの外）。着手可・進行中へ書くとき、
     閉じた issue は断る（reopen を案内）。
   - start（`--approved` なし）: 閉じた issue は断る。着手可の task は親を見ずに進行中へ進める
-    （見るのは自分の未完了の blocked by だけ。2.1.0 のまま）。承認待ちの task は、この判定を
+    （見るのは自分の未完了の blocked by だけ。2.1.0 のまま。ただし未完了の blocker がすべて同じ親 feature の
+    子で Status が進行中・レビュー中なら通す。依存待ちの task もこの場合は進められる。前の task が承認待ち・
+    着手可・依存待ち、または別の feature の blocker は完了まで止める。branch の commit は見ない。2.5.0・#829）。承認待ちの task は、この判定を
     通るときだけ進行中へ進める（目印つきは start --approved を案内）。ほかの Status は exit 2。
     `--approved` は `[操作]` の task に限り、着手可・承認待ちからだけ進行中にでき、本文に
     出どころを 1 行残す。
@@ -1637,6 +1639,28 @@ def cmd_add(number: int) -> int:
     return 0
 
 
+# ── start の blocker の判定（同じ feature の中の依存。#829・裁定 1） ──
+_SIBLING_BLOCKER_PASS_STATUSES = (IN_PROGRESS_STATUS, REVIEW_STATUS)
+
+
+def split_start_blockers(project_number: int, item: dict) -> tuple[list[int], list[int]]:
+    """start が未完了の blocker を (止める番号, 通す番号) に分ける。通すのは、blocker が task と同じ
+    親 feature の子で Status が進行中・レビュー中のとき（同じ feature は 1 本の PR にまとまり、前の task は
+    その merge まで閉じないため）。前の task が承認待ち・着手可・依存待ちなら止める。別の feature の blocker は
+    完了まで止める。branch の commit は見ない（Status だけ）。blocker 1 本につき 1 件引きが 1 点。"""
+    parent_number = item.get('parent_number')
+    blocking: list[int] = []
+    waived: list[int] = []
+    for n in item['blocked_by_open']:
+        blocker = fetch_write_item(project_number, n) if parent_number is not None else {'found': False}
+        same_feature = blocker.get('found') and blocker.get('parent_number') == parent_number
+        if same_feature and blocker['fields'].get('Status', '') in _SIBLING_BLOCKER_PASS_STATUSES:
+            waived.append(n)
+        else:
+            blocking.append(n)
+    return blocking, waived
+
+
 # ── start（着手可から。目印なしで親の feature が着手可なら承認待ちからも。
 #    `[操作]` は --approved で承認待ちからも） ──
 def cmd_start(number: int, approved: str | None) -> int:
@@ -1644,9 +1668,14 @@ def cmd_start(number: int, approved: str | None) -> int:
     item = _require_item(project_number, number)
     _reject_wave_feature(item, number, 'start')
     _reject_closed(item, number, 'start')
+    waived = []
     if item['blocked_by_open']:
-        blockers = ', '.join(f'#{n}' for n in item['blocked_by_open'])
-        die(f'#{number} には未完了の blocked by がある: {blockers}', 2)
+        blocking, waived = split_start_blockers(project_number, item)
+        if blocking:
+            blockers = ', '.join(f'#{n}' for n in blocking)
+            die(f'#{number} には未完了の blocked by がある: {blockers}', 2)
+        # 通した blocker は、承認待ちからの経路の判定（task_not_startable_reason）にも見せない。
+        item = {**item, 'blocked_by_open': []}
     drift = rev_drift(parse_task_mark(item.get('body') or ''))
     if drift:
         # Status を書く前に断る（DS-R8.2。断ったときは Status を変えない）。
@@ -1684,7 +1713,7 @@ def cmd_start(number: int, approved: str | None) -> int:
         reason = task_not_startable_reason(project_number, item)
         if reason:
             die(f'#{number} は承認待ちのまま start では進めない: {reason}', 2)
-    elif status != READY_STATUS:
+    elif status != READY_STATUS and not (status == DEP_STATUS and waived):
         die(
             f'#{number} の Status は「{status or "空"}」で、着手可でも、承認待ち（目印なし・'
             f'親の feature が着手可）でもない（{OPERATION_MARK} の task はチャットの承認のあと'
