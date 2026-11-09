@@ -3131,6 +3131,35 @@ def main() -> int:
 
         t('読む束: 目印の reads= を 1 件 1 行で出し、目印が無ければ「読む束なし（旧い形）」', _bundle_lines_from_mark)
 
+        BODY_WITH_PATHS = (
+            '## 参照\n- docs/4-domains/chat/README.md:411-423 を読む\n- `docs/harness/doc-formats.md`（形式）\n'
+            '- 再掲 docs/4-domains/chat/README.md:411-423 と docs/4-domains/chat/README.md#7.-要件と受入\n'
+            '- ../other/docs/not-this.md と apps/docs/x.md は拾わない\n')
+
+        def _bundle_lists_body_paths_without_reads() -> None:
+            expect = ['docs/4-domains/chat/README.md:411-423', 'docs/harness/doc-formats.md', 'docs/4-domains/chat/README.md#7.-要件と受入']
+            for body in (_mark('TBL-01', 'tbl@PR9') + BODY_WITH_PATHS, '旧い本文\n' + BODY_WITH_PATHS):
+                lines = gh_task.reading_bundle_lines(body)
+                assert lines[0].startswith('読む束なし') and '3 件' in lines[0], lines
+                assert [x.strip().lstrip('- ').strip() for x in lines[1:]] == expect, lines
+            # reads= があれば本文の path は出さない
+            with_reads = gh_task.reading_bundle_lines(_mark('TBL-01', 'tbl@PR9', READS) + BODY_WITH_PATHS)
+            assert with_reads[0].startswith('読む束（2 件') and not any('doc-formats' in x for x in with_reads), with_reads
+            # 本文に path が無ければ今の 1 行のまま
+            assert gh_task.reading_bundle_lines(_mark('TBL-01', 'tbl@PR9') + 'path なし\n') == ['読む束なし（目印に reads= が無い）']
+
+        t('読む束: reads= が無い issue（目印あり・なし）は本文の docs/ の path（path:line を含む）を重複なく一覧で出す', _bundle_lists_body_paths_without_reads)
+
+        def _start_prints_body_paths_without_reads() -> None:
+            gh_task.run_gh = make_write_gh(
+                {723: dict(title='task', status=gh_task.READY_STATUS, kind='task', body=_mark('T', 's@PR1') + BODY_WITH_PATHS)}, record=[])
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = gh_task.cmd_start(723, None)
+            assert rc == 0 and 'docs/4-domains/chat/README.md:411-423' in buf.getvalue(), buf.getvalue()
+
+        t('start: reads= が無い issue は本文の path の一覧を読む束として出す', _start_prints_body_paths_without_reads)
+
         def _start_prints_bundle() -> None:
             record: list = []
             for body, expect in ((_mark('TBL-01', 'tbl@PR9', READS), '1. docs/4-domains/chat/README.md'), ('旧い', '読む束なし（旧い形）')):

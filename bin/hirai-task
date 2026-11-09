@@ -2351,15 +2351,30 @@ def parse_task_mark(body: str) -> dict[str, str] | None:
     return {k: v.strip() for k, v in _MARK_FIELD_RE.findall(match.group(1))}
 
 
+# 本文に出てくる docs/ の path（`docs/…/x.md` に、`#見出し` か `:行` `:行-行` が付くものを含む）。ASCII の path だけを拾う。
+_BODY_DOC_PATH_RE = re.compile(
+    r'(?<![A-Za-z0-9_./\-])docs/[A-Za-z0-9_./\-]*?\.md(?![A-Za-z0-9_])'
+    r'(?:#[^\s,，、。)）」』`\'"]+|:\d+(?:-\d+)?)?')
+
+
+def body_doc_paths(body: str) -> list[str]:
+    """本文（先頭の目印を除く）に出てくる docs/ の path を、出てきた順に重複なく返す。"""
+    text = _TASK_MARK_RE.sub('', body or '', count=1)
+    return list(dict.fromkeys(_BODY_DOC_PATH_RE.findall(text)))
+
+
 def reading_bundle_lines(body: str) -> list[str]:
     """start・show が出す読む束（DS-R1.1）。目印の reads= をそのまま 1 件 1 行で出す。
-    目印が無い issue は「読む束なし（旧い形）」、目印はあるが reads= が空ならその旨を 1 行で出す。"""
+    reads= が無い issue（目印なし＝旧い形・目印はあるが reads= が空）は、本文に出てくる docs/ の path を一覧で出す。
+    本文に path も無ければ、旧い形は「読む束なし（旧い形）」、目印ありは「読む束なし（目印に reads= が無い）」の 1 行。"""
     mark = parse_task_mark(body)
-    if mark is None:
-        return [NO_BUNDLE_OLD_FORM]
-    reads = [r.strip() for r in mark.get('reads', '').split(',') if r.strip()]
+    reads = [r.strip() for r in (mark or {}).get('reads', '').split(',') if r.strip()]
     if not reads:
-        return ['読む束なし（目印に reads= が無い）']
+        paths = body_doc_paths(body)
+        if paths:
+            reason = 'reads= が無い' if mark is not None else '旧い形'
+            return [f'読む束なし（{reason}）。本文に出てくる docs/ の path {len(paths)} 件（上から読む）:'] + [f'  - {path}' for path in paths]
+        return ['読む束なし（旧い形）' if mark is None else '読む束なし（目印に reads= が無い）']
     lines = [f'読む束（{len(reads)} 件。上から順に読む。束の外は読まない）:']
     lines += [f'  {index}. {path}' for index, path in enumerate(reads, 1)]
     for key, label in (('reqs', '要件'), ('src', '提案')):
