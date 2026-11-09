@@ -2363,7 +2363,12 @@ def body_doc_paths(body: str) -> list[str]:
     return list(dict.fromkeys(_BODY_DOC_PATH_RE.findall(text)))
 
 
-def reading_bundle_lines(body: str) -> list[str]:
+def _path_exists(root: str, path: str) -> bool:
+    """一覧の path（`:行`・`#見出し` 付き）が作業ツリーの根にあるか。"""
+    return os.path.exists(os.path.join(root, re.split(r'[:#]', path, maxsplit=1)[0]))
+
+
+def reading_bundle_lines(body: str, root: str | None = None) -> list[str]:
     """start・show が出す読む束（DS-R1.1）。目印の reads= をそのまま 1 件 1 行で出す。
     reads= が無い issue（目印なし＝旧い形・目印はあるが reads= が空）は、本文に出てくる docs/ の path を一覧で出す。
     本文に path も無ければ、旧い形は「読む束なし（旧い形）」、目印ありは「読む束なし（目印に reads= が無い）」の 1 行。"""
@@ -2373,7 +2378,15 @@ def reading_bundle_lines(body: str) -> list[str]:
         paths = body_doc_paths(body)
         if paths:
             reason = 'reads= が無い' if mark is not None else '旧い形'
-            return [f'読む束なし（{reason}）。本文に出てくる docs/ の path {len(paths)} 件（上から読む）:'] + [f'  - {path}' for path in paths]
+            base = root if root is not None else _root()
+            present = [p for p in paths if _path_exists(base, p)]
+            missing = [p for p in paths if p not in present]
+            lines = [f'読む束なし（{reason}）。本文に出てくる docs/ の path {len(paths)} 件（手がかり。上から読む。本文の参照の path は docs 以外も読む）:']
+            lines += [f'  - {path}' for path in present]
+            if missing:
+                lines.append(f'  まだ無い・移動か削除（作業ツリーの根に無い）{len(missing)} 件:')
+                lines += [f'  - {path}（まだ無い）' for path in missing]
+            return lines
         return ['読む束なし（旧い形）' if mark is None else '読む束なし（目印に reads= が無い）']
     lines = [f'読む束（{len(reads)} 件。上から順に読む。束の外は読まない）:']
     lines += [f'  {index}. {path}' for index, path in enumerate(reads, 1)]
@@ -2615,6 +2628,7 @@ def cmd_impact(argv: list[str]) -> int:
 _REQ_HEADING_RE = re.compile(r'^###\s+要件\s+([A-Z][A-Z0-9]*-R\d+)\s*[:：]\s*(.*?)\s*$')
 _DELETED_ID_RE = re.compile(r'^[-*]\s+([A-Z][A-Z0-9]*-R\d+)(?![.\d])')
 _DELETED_ACCEPTANCE_RE = re.compile(r'^[-*]\s+([A-Z][A-Z0-9]*-R\d+\.\d+)(?!\d)')
+_ANY_ID_RE = re.compile(r'[A-Z][A-Z0-9]*-R\d+')
 _ACCEPTANCE_LINE_RE = re.compile(r'^-\s+[A-Z][A-Z0-9]*-R\d+\.\d+(?![\d])')
 _ACCEPTANCE_ID_RE = re.compile(r'^-\s+([A-Z][A-Z0-9]*-R\d+)\.(\d+)(?!\d)')
 _EMPTY_SECTION_RE = re.compile(r'^なし(?:[。.]|[（(].*[）)][。.]?)?$')
@@ -2677,7 +2691,10 @@ def parse_delta(lines: list[str]) -> dict:
         if mode == 'deleted':
             found = _DELETED_ID_RE.match(stripped)
             found_acceptance = _DELETED_ACCEPTANCE_RE.match(stripped)
-            if found:
+            lead = _DELETED_ID_RE.match(stripped) or _DELETED_ACCEPTANCE_RE.match(stripped)
+            if lead and _ANY_ID_RE.search(re.split(r'[（(]', stripped[lead.end():], maxsplit=1)[0]):
+                other[mode].append(stripped)  # 1 行に ID が 2 つ以上は読めない（1 行 1 ID）
+            elif found:
                 delta['deleted'].append((found.group(1), '', []))
             elif found_acceptance:
                 delta['deleted_acceptance'].append(found_acceptance.group(1))
@@ -2747,12 +2764,15 @@ def _merge_acceptances(
 
 def _requirement_blocks(lines: list[str], span: tuple[int, int]) -> dict[str, tuple[int, int]]:
     """現在形の「## 7. 要件と受入」の中の `### 要件 ID:` ブロック → [開始, 終わり)。"""
+    # 見出しの形に当たらない `### ` も境界にする（`### 要件 A-R8・A-R9:` が前の要件のブロックに混ざらない）
     starts = [
-        (i, _REQ_HEADING_RE.match(lines[i].strip()).group(1)) for i in range(span[0] + 1, span[1])
-        if _REQ_HEADING_RE.match(lines[i].strip())
+        (i, (_REQ_HEADING_RE.match(lines[i].strip()) or [None, None])[1]) for i in range(span[0] + 1, span[1])
+        if lines[i].startswith('### ')
     ]
     blocks: dict[str, tuple[int, int]] = {}
     for position, (start, req_id) in enumerate(starts):
+        if req_id is None:
+            continue
         end = starts[position + 1][0] if position + 1 < len(starts) else span[1]
         blocks[req_id] = (start, end)
     return blocks
@@ -2786,6 +2806,10 @@ def apply_delta(readme: list[str], delta: dict) -> tuple[list[str] | None, list[
                 problems.append(f'{label} {req_id} が現在形に無い（変更先の要件 ID が無い）')
     rewrites: dict[str, list[str]] = {}
     for req_id, text, body in delta['changed']:
+        if not text.strip():
+            problems.append(f'変更された要件 {req_id} の見出しの文が空。受入だけを変えるときも、見出しには現在形の今の文をそのまま書く')
+        if '変更前' in text:
+            problems.append(f'変更された要件 {req_id} の見出しに「変更前」がある。見出しは変更後の文だけを書く（変更前の文は §3 か PR に書く）')
         if '→' in text:
             problems.append(f'変更された要件 {req_id} の見出しに → がある。見出しは変更後の文だけを書く（変更前の文は §3 か PR に書く）')
         written: set[str] = set()
@@ -2816,6 +2840,12 @@ def apply_delta(readme: list[str], delta: dict) -> tuple[list[str] | None, list[
         elif acceptance_id not in {a for a, _ in _acceptance_units(readme[blocks[req_id][0] + 1:blocks[req_id][1]]) if a}:
             problems.append(f'削除された受入 {acceptance_id} が現在形に無い')
         removals.setdefault(req_id, set()).add(acceptance_id)
+    for req_id in sorted((set(rewrites) | set(removals)) & set(blocks)):
+        touched = {f'{m.group(1)}.{m.group(2)}' for m in map(_ACCEPTANCE_ID_RE.match, rewrites.get(req_id, [])) if m} | removals.get(req_id, set())
+        ids = [a for a, _ in _acceptance_units(readme[blocks[req_id][0] + 1:blocks[req_id][1]]) if a]
+        for acceptance_id in sorted(touched):
+            if ids.count(acceptance_id) > 1:
+                problems.append(f'現在形の {acceptance_id} が {ids.count(acceptance_id)} 行ある。手で直してから当てる')
     if problems:
         return None, problems
     replacements: dict[str, list[str] | None] = {}

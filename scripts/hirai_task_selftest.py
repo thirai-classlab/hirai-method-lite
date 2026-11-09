@@ -3138,10 +3138,14 @@ def main() -> int:
 
         def _bundle_lists_body_paths_without_reads() -> None:
             expect = ['docs/4-domains/chat/README.md:411-423', 'docs/harness/doc-formats.md', 'docs/4-domains/chat/README.md#7.-要件と受入']
+            tree = _ds_tree({'docs/4-domains/chat/README.md': 'x\n', 'docs/harness/doc-formats.md': 'x\n'})
             for body in (_mark('TBL-01', 'tbl@PR9') + BODY_WITH_PATHS, '旧い本文\n' + BODY_WITH_PATHS):
-                lines = gh_task.reading_bundle_lines(body)
+                lines = gh_task.reading_bundle_lines(body, tree)
                 assert lines[0].startswith('読む束なし') and '3 件' in lines[0], lines
                 assert [x.strip().lstrip('- ').strip() for x in lines[1:]] == expect, lines
+            # 指摘 2: 作業ツリーの根に無い path は「まだ無い」として分けて出す
+            lines = gh_task.reading_bundle_lines('旧い\ndocs/draft/new.md と docs/harness/doc-formats.md\n', tree)
+            assert lines[-1] == '  - docs/draft/new.md（まだ無い）' and '  - docs/harness/doc-formats.md' in lines, lines
             # reads= があれば本文の path は出さない
             with_reads = gh_task.reading_bundle_lines(_mark('TBL-01', 'tbl@PR9', READS) + BODY_WITH_PATHS)
             assert with_reads[0].startswith('読む束（2 件') and not any('doc-formats' in x for x in with_reads), with_reads
@@ -3666,6 +3670,47 @@ def main() -> int:
             _assert_merge_refused(_merge_draft(cross), 1, '重複')
 
         t('design-merge: ブロックの後ろの関係ない行と、同じ ID の重複（区分をまたぐものも）は何も書かず exit 1', _design_merge_refuses_stray_lines_and_duplicates)
+
+        README_DUP = (
+            '# 提案（proposal）\n\nid_prefix: PROP\ndomain: chat\nstatus: 現在形\nrev: 3\n\n## 7. 要件と受入\n\n'
+            '### 要件 CHAT-R9: 開封する\n- CHAT-R9.5 Given a When b Then 開封の口\n- CHAT-R9.5 Given c When d Then 未読を作らない\n\n'
+            '### 要件 CHAT-R10: 別\n- CHAT-R10.1 Given a When b Then c\n\n## 8. 上の層との差分\n\nなし\n')
+
+        def _design_merge_refuses_duplicate_current_acceptance_id() -> None:
+            # 指摘 1: 現在形に同じ受入 ID が 2 行ある要件への変更・削除は、黙って片方だけ当てず exit 1
+            change = '### 変更された要件\n\n### 要件 CHAT-R9: 新しい文\n- CHAT-R9.5 Given NEW When x Then y\n'
+            _assert_merge_refused(_merge_draft(change), 1, '2 行ある', README_DUP)
+            _assert_merge_refused(_merge_draft('### 削除された要件\n\n- CHAT-R9.5（x）\n'), 1, '2 行ある', README_DUP)
+
+        t('design-merge: 現在形に同じ受入 ID が 2 行ある要件の変更・受入の削除は、何も書かず exit 1', _design_merge_refuses_duplicate_current_acceptance_id)
+
+        def _design_merge_refuses_empty_or_old_text_heading() -> None:
+            # 指摘 3・8: 見出しの文が空（受入だけを変えたつもり）は要件の文を消すので exit 1。指摘 4: 「変更前は」入りの見出しも exit 1
+            for heading in ('', '   '):
+                delta = '### 変更された要件\n\n### 要件 CHAT-R1:' + heading + '\n- CHAT-R1.1 Given d When e Then g\n'
+                _assert_merge_refused(_merge_draft(delta), 1, '文が空')
+            old = '### 変更された要件\n\n### 要件 CHAT-R2: 新しい文（変更前は「古い文」・`:49`）\n- CHAT-R2.1 Given x When y Then z\n'
+            _assert_merge_refused(_merge_draft(old), 1, '変更前')
+
+        t('design-merge: 変更の見出しの文が空・「変更前」入りなら、何も書かず exit 1', _design_merge_refuses_empty_or_old_text_heading)
+
+        def _design_merge_refuses_multi_id_deleted_line() -> None:
+            # 指摘 5: 1 行に ID が 2 つ以上の削除は一部だけ当てず exit 1。理由の括弧の中の ID は数えない
+            for line in ('- CHAT-R2.1・CHAT-R2.2（理由）', '- CHAT-R2, CHAT-R3', '- CHAT-R2.1 CHAT-R3.1'):
+                _assert_merge_refused(_merge_draft('### 削除された要件\n\n' + line + '\n'), 1, '要件ブロック')
+
+        t('design-merge: 削除の 1 行に ID が 2 つ以上あれば、何も書かず exit 1（括弧の理由の ID は数えない）', _design_merge_refuses_multi_id_deleted_line)
+
+        def _design_merge_unmatched_h3_ends_block() -> None:
+            # 指摘 6: 見出しの正規表現に当たらない `### ` は前の要件のブロックの終わり。消した要件と一緒に消えない
+            readme = README_BEFORE.replace(
+                '### 要件 CHAT-R3: 参加者を返す',
+                '### 要件 CHAT-R2・CHAT-R3: 案内（→ 別の領域）\n案内の文\n\n### 要件 CHAT-R3: 参加者を返す')
+            _, _, after, _ = _merge(_merge_draft('### 削除された要件\n\n- CHAT-R2（x）\n'), readme)
+            assert '### 要件 CHAT-R2・CHAT-R3: 案内' in after and '案内の文' in after, after
+            assert '一覧を返す' not in after and 'CHAT-R3.1' in after, after
+
+        t('design-merge: 見出しの形に当たらない ### の直前の要件を消しても、その見出しと文は消えない', _design_merge_unmatched_h3_ends_block)
 
         def _design_merge_second_write_failure_is_reported() -> None:
             # 指摘 8: 書く順は draft → README。README の置き換えが落ちたら draft を元へ戻して exit 1
