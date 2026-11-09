@@ -3208,6 +3208,128 @@ def main() -> int:
 
         t('show: 本文の目印の reads= を読む束として出す', _show_prints_bundle)
 
+        # -- 目印の rev と読む束が古い task（#829・DS-R8.2・DS-R9.3・ADR-0696） --
+        def _readme(rev: int) -> str:  # rmp-app の docs/4-domains/*/README.md の先頭の形
+            return f'# チャット（chat）\n\nid_prefix: CHAT\nkind: 製品の機能\ndomain: chat\nstatus: 現在形\nrev: {rev}\n\n## 1. 概要\nrev: 99\n'
+
+        def _rev_tree(chat: int, proposal: int = 5) -> str:
+            return _ds_tree({
+                'docs/4-domains/chat/README.md': _readme(chat),
+                'docs/4-domains/proposal/README.md': _readme(proposal).replace('chat', 'proposal'),
+            })
+
+        def _with_root(root: str, fn):
+            saved = os.environ.get('HIRAI_TASK_ROOT')
+            os.environ['HIRAI_TASK_ROOT'] = root
+            try:
+                return fn()
+            finally:
+                if saved is None:
+                    os.environ.pop('HIRAI_TASK_ROOT', None)
+                else:
+                    os.environ['HIRAI_TASK_ROOT'] = saved
+
+        def _table_body_writes_readme_rev() -> None:
+            row = dict(id='TBL-01', stream='Infra', reqs='TBL-R1', done='ok')
+            root = _rev_tree(3)
+            body = _with_root(root, lambda: gh_task.table_issue_body(row, 'tbl', 'PR9', 'chat, proposal'))
+            mark = gh_task.parse_task_mark(body)
+            assert mark['rev'] == 'chat:3,proposal:5', body
+            assert mark['domain'] == 'chat, proposal', body
+            for domain in ('—', ''):
+                mark = gh_task.parse_task_mark(_with_root(root, lambda: gh_task.table_issue_body(row, 'tbl', 'PR9', domain)))
+                assert 'rev' not in mark, mark
+            # README が無い領域は書かない（比べられない）。節の中の rev: は読まない
+            mark = gh_task.parse_task_mark(_with_root(root, lambda: gh_task.table_issue_body(row, 'tbl', 'PR9', 'auth（注）, chat（注）')))
+            assert mark['rev'] == 'chat:3', mark
+
+        t('table_issue_body: 目印の rev= に domain ごとの現在形 README の rev を書く（—・README なしは書かない）', _table_body_writes_readme_rev)
+
+        def _rev_drift_compares_per_domain() -> None:
+            root = _rev_tree(4)
+            drift = gh_task.rev_drift({'rev': 'chat:3,proposal:5'}, root)
+            assert drift == [('chat', 3, 4)], drift
+            assert gh_task.rev_drift({'rev': 'chat:4,proposal:5'}, root) == []  # 同じなら出ない
+            assert gh_task.rev_drift({'rev': '1'}, root) == []  # 数字だけの旧い目印は比べない
+            assert gh_task.rev_drift({'rev': 'auth:1'}, root) == []  # README が無い領域は比べない
+            assert gh_task.rev_drift(None, root) == []
+            assert gh_task.rev_drift_text(drift) == '読む束が古い（chat 3→4）'
+
+        t('rev_drift: 目印より新しい領域だけを「chat 3→4」で出す（同じ・数字だけ・README なしは出さない）', _rev_drift_compares_per_domain)
+
+        def _start_refuses_stale_rev_and_keeps_status() -> None:
+            body = _mark('TBL-01', 'tbl@PR9').replace('rev=1', 'rev=chat:3')
+            for approved in (None, '承認 #1'):
+                record: list = []
+                rest_log: list = []
+                gh_task.run_gh = make_write_gh(
+                    {730: dict(title='task' + (' ' + gh_task.OPERATION_MARK if approved else ''),
+                               status=gh_task.READY_STATUS, kind='task', body=body)},
+                    record=record, rest_log=rest_log, graphql_writes=record)
+                buf = io.StringIO()
+                message = ''
+                with redirect_stdout(buf):
+                    try:
+                        _with_root(_rev_tree(4), lambda: gh_task.cmd_start(730, approved))
+                    except gh_task.GhError as exc:
+                        assert exc.code == 2, exc.code
+                        message = str(exc)
+                assert '着手不可' in message and '読む束が古い（chat 3→4）' in message, message
+                assert '読む束（' not in buf.getvalue() and '読む束なし' not in buf.getvalue()
+                assert record == [] and not any(c[0] != 'GET' for c in rest_log), (record, rest_log)  # Status も本文も書いていない
+
+        t('start: 目印の rev より現在形が新しいと「着手不可」で断り、Status も本文も書かない', _start_refuses_stale_rev_and_keeps_status)
+
+        def _start_passes_when_rev_same_or_old_form() -> None:
+            for rev in ('chat:4', '1'):
+                gh_task.run_gh = make_write_gh(
+                    {731: dict(title='task', status=gh_task.READY_STATUS, kind='task',
+                               body=_mark('TBL-01', 'tbl@PR9').replace('rev=1', f'rev={rev}'))}, record=[])
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    rc = _with_root(_rev_tree(4), lambda: gh_task.cmd_start(731, None))
+                assert rc == 0 and f'Status={gh_task.IN_PROGRESS_STATUS}' in buf.getvalue(), buf.getvalue()
+
+        t('start: rev が同じ・数字だけの旧い目印は止まらない', _start_passes_when_rev_same_or_old_form)
+
+        def _coverage_reports_stale_rev_tasks() -> None:
+            files = {}
+            rows = [dict(number=n, status='進行中', kind='task') for n in (41, 42, 43, 44)] + [
+                dict(number=45, status='完了', kind='task', state='CLOSED')]
+            bodies = {
+                41: _mark('TBL-01', 'none@PR1').replace('rev=1', 'rev=chat:3,proposal:5'),
+                42: _mark('TBL-02', 'none@PR1').replace('rev=1', 'rev=chat:4'),
+                43: _mark('TBL-03', 'none@PR1'),
+                44: _mark('TBL-04', 'none@PR1').replace('rev=1', 'rev=proposal:2'),
+                45: _mark('TBL-05', 'none@PR1').replace('rev=1', 'rev=chat:1'),
+            }
+            rc, out, _ = _with_root_cov(files, rows, bodies)
+            assert rc == 0, out  # 報告のみ・常に exit 0（ADR-0699）
+            assert '読む束が古い issue 2 件' in out, out
+            assert '#41 TBL-01（進行中）: 読む束が古い（chat 3→4）' in out, out
+            assert '#44 TBL-04（進行中）: 読む束が古い（proposal 2→5）' in out, out
+            assert '#42 TBL-02' not in out and '#43 TBL-03' not in out and '#45 TBL-05' not in out, out
+
+        def _with_root_cov(files, rows, bodies):
+            real = gh_task._root
+            root = _rev_tree(4)
+            os.makedirs(os.path.join(root, 'docs', 'draft'), exist_ok=True)
+            os.environ['HIRAI_TASK_ROOT'] = root
+            try:
+                return _run_coverage_in(root, files, rows, bodies)
+            finally:
+                os.environ.pop('HIRAI_TASK_ROOT', None)
+
+        def _run_coverage_in(root, files, rows, bodies):
+            calls: list = []
+            gh_task.run_gh = make_ds_board_gh(rows, bodies, calls=calls)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = gh_task.cmd_coverage()
+            return rc, buf.getvalue(), calls
+
+        t('coverage: 現在形の rev が目印より新しい open の issue を「読む束が古い（chat 3→4）」で出す（閉じた・同じ・数字だけは出さない）', _coverage_reports_stale_rev_tasks)
+
         # -- coverage（#816・DS-R2.3） --
         def _cov_draft(status: str, rows: str, *, history: str = '- 2026-10-01 PR #9 の merge で承認', heading: str = '### 11-3. 表',
                        pr: int = 9, header_row: str | None = None, approvals: str | None = None) -> str:

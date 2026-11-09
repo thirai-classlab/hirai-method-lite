@@ -1647,6 +1647,11 @@ def cmd_start(number: int, approved: str | None) -> int:
     if item['blocked_by_open']:
         blockers = ', '.join(f'#{n}' for n in item['blocked_by_open'])
         die(f'#{number} には未完了の blocked by がある: {blockers}', 2)
+    drift = rev_drift(parse_task_mark(item.get('body') or ''))
+    if drift:
+        # Status を書く前に断る（DS-R8.2。断ったときは Status を変えない）。
+        die(f'#{number} は着手不可: {rev_drift_text(drift)}。Status は変えていない。'
+            'issue にコメントして止まり、読む束を読み直してから start をやり直す', 2)
     status = item['fields'].get('Status', '')
     if approved is not None:
         if not has_mark(item['title'], OPERATION_MARK):
@@ -2252,8 +2257,62 @@ def plan_table_rows(rows: list[dict[str, str]], existing: dict[str, int]) -> tup
     return fileable, skipped
 
 
+DOMAIN_README = os.path.join('docs', '4-domains', '{}', 'README.md')
+_README_REV_RE = re.compile(r'^rev:\s*(\d+)\s*$')
+
+
+def domain_names(domain: str) -> list[str]:
+    """提案の `domain:` の値（`chat, proposal`・`notification（注）`）から領域名を出てきた順に重複なく返す。`—` は空。"""
+    names = [re.sub(r'[（(].*$', '', d).strip() for d in (domain or '').split(',')]
+    return list(dict.fromkeys(n for n in names if n and n != '—'))
+
+
+def readme_rev(root: str, domain: str) -> int | None:
+    """現在形 README の先頭の項目 `rev: <n>` を返す。file が無い・`rev:` が無ければ None。"""
+    try:
+        with open(os.path.join(root, DOMAIN_README.format(domain)), encoding='utf-8') as f:
+            for line in f:
+                if line.startswith('## '):
+                    break
+                match = _README_REV_RE.match(line)
+                if match:
+                    return int(match.group(1))
+    except OSError:
+        return None
+    return None
+
+
+def current_rev_field(domain: str, root: str | None = None) -> str:
+    """目印の `rev=` に書く値（ADR-0696）。領域ごとの現在形 README の rev を `chat:3,proposal:5` で。
+    domain が `—`、または README の rev が読めるものが 1 つも無ければ空（rev を書かない）。"""
+    base = root if root is not None else _root()
+    pairs = [(d, readme_rev(base, d)) for d in domain_names(domain)]
+    return ','.join(f'{d}:{r}' for d, r in pairs if r is not None)
+
+
+def rev_drift(mark: dict[str, str] | None, root: str | None = None) -> list[tuple[str, int, int]]:
+    """目印の `rev=chat:3,…` より今の README の rev が大きい領域を (領域, 目印の rev, 今の rev) で返す。
+    `rev=1` のような数字だけの旧い目印・README が読めない領域は比べない（ADR-0696）。"""
+    base = root if root is not None else _root()
+    drift = []
+    for part in ((mark or {}).get('rev', '')).split(','):
+        name, sep, number = part.strip().partition(':')
+        if not sep or not number.strip().isdigit():
+            continue
+        now = readme_rev(base, name.strip())
+        if now is not None and now > int(number):
+            drift.append((name.strip(), int(number), now))
+    return drift
+
+
+def rev_drift_text(drift: list[tuple[str, int, int]]) -> str:
+    return '読む束が古い（' + '・'.join(f'{d} {old}→{new}' for d, old, new in drift) + '）'
+
+
 def table_issue_body(row: dict, slug: str, src_pr: str, domain: str) -> str:
-    fields = [f'id={row["id"]}', 'rev=1', f'stream={row["stream"]}', f'src={slug}@{src_pr}' if src_pr else f'src={slug}']
+    rev = current_rev_field(domain)
+    fields = [f'id={row["id"]}', *([f'rev={rev}'] if rev else []), f'stream={row["stream"]}',
+              f'src={slug}@{src_pr}' if src_pr else f'src={slug}']
     if domain and domain != '—':
         fields.append(f'domain={domain}')
     reqs = ','.join(r.strip() for r in re.split(r'[,、]', row['reqs']) if r.strip() and r.strip() != '—')
@@ -2435,7 +2494,7 @@ def latest_approval_pr(lines: list[str]) -> int | None:
 
 
 def coverage_findings(
-    drafts: dict[str, list[str]], marks: list[dict],
+    drafts: dict[str, list[str]], marks: list[dict], root: str | None = None,
 ) -> dict[str, list]:
     """drafts（slug → 行）と issue の目印（number・state・mark）から、coverage の 3 つの指摘を作る。
     missing: slug → (起票漏れの行, 起票しない行と理由) / stale: 古い版を指す open の issue /
@@ -2445,7 +2504,7 @@ def coverage_findings(
         src = _SRC_RE.match(m['mark'].get('src', ''))
         if src and m['mark'].get('id'):
             by_slug.setdefault(src.group('slug'), {})[m['mark']['id']] = m['number']
-    result: dict[str, list] = {'missing': [], 'unreadable': [], 'stale': [], 'expired': [], 'unknown': []}
+    result: dict[str, list] = {'missing': [], 'unreadable': [], 'stale': [], 'expired': [], 'unknown': [], 'rev_stale': []}
     for slug, lines in sorted(drafts.items()):
         header = _draft_header(lines)
         # 起票漏れを数えるのは承認の提案だけ（取り込み済み・失効は status が承認でないので、ここで外れる。DS-R3.3）。
@@ -2479,6 +2538,9 @@ def coverage_findings(
     for m in marks:
         if m['state'] == 'CLOSED':
             continue
+        drift = rev_drift(m['mark'], root)
+        if drift:  # 現在形の rev が目印より新しい（DS-R9.3）。src が無い目印も対象
+            result['rev_stale'].append({**m, 'drift': drift})
         src = _SRC_RE.match(m['mark'].get('src', ''))
         if not src:
             continue
@@ -2507,12 +2569,13 @@ def cmd_coverage() -> int:
     issues = [i for i in fetch_all_items(project_number) if i.get('type') == 'Issue']
     numbers = [i['number'] for i in issues]
     states = {i['number']: i.get('state') for i in issues}
+    statuses = {i['number']: i.get('status') for i in issues}
     marks = [
-        {'number': n, 'state': states.get(n), 'mark': mark}
+        {'number': n, 'state': states.get(n), 'status': statuses.get(n, ''), 'mark': mark}
         for n, body in sorted(fetch_bodies(numbers).items())
         if (mark := parse_task_mark(body)) is not None
     ]
-    found = coverage_findings(drafts, marks)
+    found = coverage_findings(drafts, marks, _root())
     print(f'coverage（提案 {len(drafts)} 本・目印つき issue {len(marks)} 件）')
     missing_total = 0
     for slug, why in found['unreadable']:
@@ -2532,6 +2595,9 @@ def cmd_coverage() -> int:
     print(f'失効した提案を指す issue {len(found["expired"])} 件')
     for m in found['expired']:
         print(f'  #{m["number"]} {m["mark"].get("id", "")}: src={m["mark"]["src"]}（{DRAFT_DIR_RELATIVE}/ の提案は失効）')
+    print(f'読む束が古い issue {len(found["rev_stale"])} 件（現在形の rev が目印より新しい。着手し直す前に start をやり直す）')
+    for m in found['rev_stale']:
+        print(f'  #{m["number"]} {m["mark"].get("id", "")}（{m.get("status") or "Status なし"}）: {rev_drift_text(m["drift"])}')
     for m in found['unknown']:
         print(f'  （#{m["number"]} の src={m["mark"]["src"]} は {DRAFT_DIR_RELATIVE}/ に file が無い）')
     return 0

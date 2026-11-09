@@ -4,6 +4,16 @@
 
 更新のしかたは [README の「更新する」](README.md#更新する既定では自動で新しくなりません)。**既定では自動更新しない**（v1.13.0 から opt-in で自動にできる）。
 
+## v2.5.0
+目印の `rev=` を現在形の版に結び、版が古い task を `start` が断り `coverage` が出すようにした（rmp-app の design-structure の DS-16 のうち rev の部分。#829・ADR-0696）。
+
+- `new --from-table`（#829）: 目印の `rev=` を、起票した時点の domain ごとの現在形 `docs/4-domains/<領域>/README.md` の先頭の `rev:` で書く（例 `rev=chat:3,proposal:5`）。`domain:` が `—` のとき、README が無い・`rev:` が読めない領域だけのときは `rev=` を書かない（今までの固定の `rev=1` はやめた）。`domain:` の値は `,` で分け、`（注）` は落として領域名にする。
+- `hirai-task start <n>`（#829・DS-R8.2）: 目印の `rev=` が `領域:数字` の形で、今の README の rev がそれより大きいとき、Status も本文も書かずに exit 2 で「着手不可: 読む束が古い（chat 3→4）」と断る（`--approved` も同じ）。数字だけの旧い目印（`rev=1`）と README が読めない領域は比べない。
+- `hirai-task coverage`（#829・DS-R9.3）: 「読む束が古い issue N 件」を足し、open の issue のうち現在形の rev が目印より新しいものを `#n id（Status）: 読む束が古い（chat 3→4）` で出す。報告のみで常に exit 0。
+- selftest: 目印への rev の書き込み・rev の比べ方・`start` の断り（Status を書かない）・`start` が止まらない場合・`coverage` の出力の 5 case を足した。
+- 未実装（設計か ADR に根拠が無く、要判断）: `start` の `[要判断]`・失効・取り込み済みの検出、`ready` の「旧い形」の印、`start` の「別の会話が進行中の可能性」。
+- **導入先で要る操作。** プラグインを上げて新しい会話を開く（`/hirai-lite:update`）。
+
 ## v2.4.0
 設計の読む束と、設計と issue の突き合わせ・影響の注記・現在形への取り込みの道具を足した（rmp-app の design-structure の DS-06・DS-07・DS-08。#816・#817・#818）。読む側の `start`・`show`・`coverage`・`impact` は 2.3.0 の `new --from-table` が書く `rmp-task` の目印を読む。
 
