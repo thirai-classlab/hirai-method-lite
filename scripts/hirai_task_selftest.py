@@ -914,11 +914,11 @@ def _board_checks(t, tmp_dir: str) -> None:
     expected_summary = {
         '着手できる（hirai-task ready が出す）': 1, '進行中': 1, 'レビュー中（merge 待ち）': 1,
         '承認待ちの feature（人がボードで着手可にする）': 1, '承認待ちの task': 2, '判断待ち（裁定を待つ）': 1,
-        '依存待ち': 1, '保留': 1, 'Status 未設定': 1, '着手可なのに着手できない': 4,
-        '[User] の人の作業（open）': 1, '閉じたのに完了でない': 1, '止まっている task（合計）': 10,
+        '依存待ち': 1, '保留': 1, 'Status 未設定': 1, '着手可なのに着手できない': 3,
+        '[User] の人の作業（open）': 1, '閉じたのに完了でない': 1, '止まっている task（合計）': 9,
     }
     expected_not_ready = {
-        '自分に未完了の blocked by': 1, '[User]（人の作業）': 1, '親の feature が着手可でない': 1,
+        '自分に未完了の blocked by': 1, '親の feature が着手可でない': 1,
         '親が feature でない・無い': 1,
     }
 
@@ -968,7 +968,9 @@ def _board_checks(t, tmp_dir: str) -> None:
                     f'要約の「{label}: {count}」が無い:\n{out[:1500]}'
                 )
             wave2 = [line for line in out.splitlines() if line.startswith('- #2 ') and '合計' in line]
-            assert wave2 and '合計 12・open 11・止まっている 8' in wave2[0], f'wave #2 の行の件数が違う: {wave2}'
+            assert wave2 and '合計 12・open 11・止まっている 7' in wave2[0], f'wave #2 の行の件数が違う: {wave2}'
+            assert not re.search(r'^\s*- \[User\]（人の作業）: ', out, re.MULTILINE), \
+                '[User] の着手可を「着手可なのに着手できない」の理由に数えた（人の作業で AI が着手するものではない）'
             assert '循環' in out, '循環している wave の印が無い'
             rc, ready_out = _run_main(['ready'])
             assert rc == 0 and '着手可 1 件' in ready_out and '#30' in ready_out, (
@@ -987,7 +989,7 @@ def _board_checks(t, tmp_dir: str) -> None:
             assert _BOARD_XSS_TITLE not in page and '&lt;script&gt;alert(1)&lt;/script&gt;' in page, '題名をエスケープしていない'
             assert 'javascript:' not in page, 'https の github.com 以外の URL をリンクにした'
             assert f'href="{_BOARD_URL.format(31)}"' in page, 'github.com の issue をリンクにしていない'
-            for heading in ('どこで何件止まっているか', 'wave ごとの件数', 'wave の依存図', '止まっている task（10 件）'):
+            for heading in ('どこで何件止まっているか', 'wave ごとの件数', 'wave の依存図', '止まっている task（9 件）'):
                 assert heading in page, f'HTML に「{heading}」が無い'
             assert 'class="node cycle"' in page, '循環している wave の箱に印が無い'
             assert all('mutation' not in c and '-X' not in c for c in calls), f'読むだけのはずが書き込みを呼んだ: {calls}'
@@ -1062,7 +1064,7 @@ def _board_checks(t, tmp_dir: str) -> None:
             assert max(len(line) for line in lines) <= 44, f'1 行が長い: {max(lines, key=len)!r}'
             assert all(line.count('|') <= 4 for line in lines), '表が 3 列を超えた'
             for want in ('### あなたの番', '承認待ちの feature（ボードで着手可に） 1', '- #21 画面をそろえる作業を始めるか', '  推奨 承認する', '判断待ち（裁定する） 1',
-                         '[User] の作業 1', 'レビュー中（PR の merge） 1', '### 止まっている 10', '| 着手可だが着手できない | 4 |',
+                         '[User] の作業 1', 'レビュー中（PR の merge） 1', '### 止まっている 9', '| 着手可だが着手できない | 3 |',
                          '- #31 T31 自分が止められている（自分の待ち）', '- #35 T35 feature をまたいで待つ ← #40'):
                 assert want in out, f'要約に「{want}」が無い:\n{out}'
             assert '<script>' not in out and '＜script＞' in out, '題名の < > を全角にしていない'
