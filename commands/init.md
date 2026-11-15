@@ -101,7 +101,7 @@ python3 -m json.tool "$D/settings.json" >/dev/null && echo "settings.json は妥
 - **`user` 指定時だけ** `statusLine.command` を `$HOME` を展開した絶対パス (`bash "/…/.claude/statusline.sh"`) に書き換える。素材の `${CLAUDE_PROJECT_DIR}` は開くプロジェクトごとに変わるため、全プロジェクト共通の設定からは使えない。既存 settings.json に差分提示する場合も、`user` 指定時は同じ絶対パスの形で提案する。
 - あった場合は **上書きしない**。素材と突き合わせて差分だけを提示し、承認された分だけ既存 JSON へ追加する。`permissions` キーが無ければ素材の `permissions` をそのまま**新設してよい**。`permissions.deny` / `permissions.ask` があるときは素材にしかないエントリを一覧で出し「この N 件を追記しますか?」と聞き、承認分だけ配列末尾に足す。
   - **既存の `permissions.allow` は 1 件も削らず、並び順も変えない** (素材に `allow` は無いのでそのまま残す)。`deny` / `ask` の既存エントリも同じく保全する。top-level の `ultracode` / `workflowSizeGuideline` / `statusLine` も同じく差分として提示し（素材の `workflowSizeGuideline` は `medium`。導入先が `medium` のときは差分が出ない。素材が `unrestricted` のままだと、/init の回し直しで承認ひとつで `unrestricted` に戻る）、**`ultracode` は利用量が増えるキーなので差分に含まれるときは「入れますか」と必ず聞く。** `hooks` / `env` など素材に無いキーには触れない。
-  - 差分の反映を求めるのは**承認**なので、**判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル。`AskUserQuestion` が使えないときの平文の出し方も同じファイル）。
+  - 差分の反映を求めるのは**承認**なので、**承認カード**（決めること・推奨 / 目的 / 位置 / 承認すると / しないと / 注意 / 詳しく）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル。`AskUserQuestion` が使えないときの平文の出し方も同じファイル）。
 - マージ後は必ず `python3 -m json.tool "$D/settings.json" >/dev/null` を再実行し、exit 0 を確認する。0 以外なら編集前の内容へ戻す。
 
 ## 6. mode.yml / CLAUDE.md / statusline を配置する
@@ -136,8 +136,8 @@ P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&
 SCOPE=; if [ "$SCOPE" = user ]; then echo "skip 設計メモ / 記録帳 (全プロジェクト共通には作らない)"; elif ls -d .claude/tasks .claude/draft .claude/rules-reference 2>/dev/null | grep -q .; then echo "skip 旧レイアウト — .claude/ の書類を /hirai-lite:update で docs/ へ移してから作る"
 else BASE=docs; mkdir -p "$BASE/draft" "$BASE/rules-reference"; : > "$BASE/draft/.gitkeep"
 [ -e "$BASE/rules-reference/incidents.md" ] || printf '# 事故記録\n\n1 回目はここに 1 行。2 回目で /hirai-lite:add-rule に回す。\n\n| 日付 | 事象 | 影響 | 直し方 | 再発回数 |\n|-----|------|------|-------|--------|\n' > "$BASE/rules-reference/incidents.md"
-[ -e "$BASE/rules-reference/approval-template.md" ] || cp "$P/docs/rules-reference/approval-template.md" "$BASE/rules-reference/approval-template.md"
-ls "$BASE/rules-reference/incidents.md" "$BASE/rules-reference/approval-template.md" && ls -d "$BASE/draft"
+[ -e "$BASE/rules-reference/approval-template.md" ] || cp "$P/docs/rules-reference/approval-template.md" "$BASE/rules-reference/approval-template.md"; [ -e "$BASE/rules-reference/glossary.md" ] || cp "$P/docs/rules-reference/glossary.md" "$BASE/rules-reference/glossary.md"
+ls "$BASE/rules-reference/incidents.md" "$BASE/rules-reference/approval-template.md" "$BASE/rules-reference/glossary.md" && ls -d "$BASE/draft"
 fi
 ```
 
@@ -172,7 +172,7 @@ bash の出力は作業ログであって報告ではない。**最後に必ず�
 ✅ プロジェクト情報の下書きを置きました → CLAUDE.md（中身は次回に伺って埋めます）
 ✅ やることの管理先を案内します → GitHub Project（立ち上げは /hirai-lite:project-setup。作成から項目までを自動で行います）
 ✅ 設計メモの置き場を作りました → docs/draft/
-✅ 困ったことの記録帳と、承認をお願いするときの型を置きました → docs/rules-reference/
+✅ 困ったことの記録帳と、承認をお願いするときの型（承認カード）と、進め方の用語集を置きました → docs/rules-reference/
 ✅ statusLine（画面下部の情報表示）を有効にしました（進め方・残り容量・やること の数が見えます）
 
 すでにあったファイルは変更していません（3 件）。
@@ -189,7 +189,7 @@ docs/ の書類を埋めます。**
 - `imported AGENTS.md` と出たときは CLAUDE.md の行に 1 行足す: `   AGENTS.md も読まれるよう、先頭で読み込んでいます（Codex など他のエージェントと同じ指示を共有できます）`。手順 5 で `removed … statusLine` と出たときは statusLine の行を `✅ 画面下部の表示は、いまの表示（ユーザー設定）のままにしました。/hirai-lite:config で切り替えられます` に差し替える。
 - `CLAUDE.md` がすでにあった場合は、その 2 行を出さず「そのままにしたもの」に数える (中身は 1 バイトも触っていない)。手順 1 で「すでに一式が入っています」と伝えた再実行のときは、1 行目を `すでに入っている一式を確認しました。変更はありません。` にし、`✅` 行を出さずに「そのままにしたもの」の件数と一覧だけを書く。
 - `user` 指定時は 1 行目を `すべてのプロジェクトで使えるようにしました。` にし、パスを `~/.claude/…` に差し替え、**やることの管理先 / 設計メモの置き場 / 困ったことの記録帳の 3 行を省く**。代わりに 1 行足す: `やることの管理先と設計メモは、プロジェクトごとの中身なので案内していません（各プロジェクトで /hirai-lite:init を実行すると案内します）。`
-- 手順 8 の警告が出ていたら、報告の末尾にその全文をそのまま貼る。中身が違うファイルがあれば末尾に 1 行足し、**手順 5 の承認の型（判断材料 5 項目 → `AskUserQuestion`）で**指示を待ってから書き換える。例: `.claude/settings.json はすでにあり、中身が違います。足したい安全設定が 4 件あります。入れてよいですか?`
+- 手順 8 の警告が出ていたら、報告の末尾にその全文をそのまま貼る。中身が違うファイルがあれば末尾に 1 行足し、**手順 5 の承認の型（承認カード → `AskUserQuestion`）で**指示を待ってから書き換える。例: `.claude/settings.json はすでにあり、中身が違います。足したい安全設定が 4 件あります。入れてよいですか?`
 - 途中で止まったら同じ調子で「何が起きたか」「どうすればよいか」「ここまでに置いたもの」を書く。例: `⚠️ 安全設定のファイル (.claude/settings.json) が読めませんでした。書き方が壊れている可能性があります。中身を直すか、別名に退避してから /hirai-lite:init をもう一度実行してください。ここまでに置いたもの: ルール 5 件 / 設計メモの置き場`
 
 ## 10. 案件を伺い、CLAUDE.md と docs/ を埋める（第 2 段階）

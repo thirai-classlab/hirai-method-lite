@@ -57,11 +57,11 @@ description: セッションで確定した意思決定・教訓・ルールを�
 
 判断に迷う具体例と、層を間違えた時に起きることは [`references/placement.md`](references/placement.md) にある。
 
-### 3.5 承認は判断材料つきで求める
+### 3.5 承認はカードで求める
 
-T0 / T1 / `settings.json` への追加を提案するときは、**何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか** の 5 点を本文に示してから `AskUserQuestion`（承認する / 承認しない / 修正して提案し直す）を出す（`rules/core.md`「承認は判断材料つきで求める」）。**「どうやるか」には層と、予算の現在値 → 追加後の値を数字で書く。**
+T0 / T1 / `settings.json` への追加を提案するときは、承認カード（**決めること・推奨 / 目的 / 位置 / 承認すると / しないと / 注意 / 詳しく**）を本文に示してから `AskUserQuestion`（承認する / 承認しない / 修正して提案し直す）を出す（`rules/core.md`「承認はカードで求める」）。**「位置」には層を、「承認すると」には予算の現在値 → 追加後の値を数字で書く。**
 
-この型は**ルール追加に限らずすべての承認に効く汎用規範**なので、本体はこの skill ではなく T2 に置いてある → **`docs/rules-reference/approval-template.md`**（書き方・記入例 3 つ・悪い例と良い例・使う場面の一覧）。**承認不要なもの（T2 と `docs/` への追記、ルールの削除）にこの型は使わない。**
+この型は**ルール追加に限らずすべての承認に効く汎用規範**なので、本体はこの skill ではなく T2 に置いてある → **`docs/rules-reference/approval-template.md`**（書き方・記入例 5 つ・悪い例と良い例・使う場面の一覧）。**承認不要なもの（T2 と `docs/` への追記、ルールの削除）にこの型は使わない。**
 
 ## 4. どう書くか
 
@@ -92,4 +92,4 @@ T0 / T1 / `settings.json` への追加を提案するときは、**何をした�
 
 - [`references/official-sources.md`](references/official-sources.md) — `[a]`〜`[i]` の URL・逐語引用・取得日
 - [`references/placement.md`](references/placement.md) — 置き場の判断例、層を間違えた時に起きること、`/state save` から呼ばれたときの手順
-- `docs/rules-reference/approval-template.md`（T2、この skill の外）— 承認テンプレート 5 項目の書き方・記入例・使う場面。承認は全作業に効く汎用規範なので skill には入れていない
+- `docs/rules-reference/approval-template.md`（T2、この skill の外）— 承認カード・判断カード・人の作業カードの書き方・記入例・使う場面。承認は全作業に効く汎用規範なので skill には入れていない

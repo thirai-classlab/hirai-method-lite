@@ -59,15 +59,26 @@ STATUS_OPTIONS = (
 )
 KIND_OPTIONS = (('wave', 'BLUE', '並びの段'), ('feature', 'GREEN', 'wave × 機能。着手の承認の単位'),
                 ('task', 'GRAY', 'PR 1 本で閉じる作業'), ('設計メモ', 'YELLOW', '止めた設計'))
+# 承認カード（approval-template.md）を承認ビューで読むための項目。`hirai-task card <n> --sync` が書く。
+HEADLINE_FIELD = 'ひとこと'
+RECOMMEND_FIELD = '推奨'
+RECOMMEND_OPTIONS = (('承認する', 'GREEN', 'カードの推奨'), ('条件つき', 'YELLOW', '条件はカードの 1 行目'),
+                     ('承認しない', 'GRAY', '取り下げを勧める'))
 # project-setup.md 6 章。
 VIEWS = (
-    ('承認', '種別:feature status:承認待ち,着手可'),
+    ('承認', '種別:feature status:承認待ち'),
     ('裁定', 'status:判断待ち'),
     ('取り込み', 'is:pr is:open'),
     ('全体', '種別:wave'),
     ('止まっているもの', '種別:task status:依存待ち,判断待ち,保留'),
     ('保留中の設計メモ', '種別:設計メモ status:保留'),
+    # 人の作業（[User]・[操作]）。題名の部分一致は公式の `field:*TEXT*` の形だけを使う（OR の「,」と * の
+    # 組み合わせは docs に無いので 2 枚に分ける。2026-11-15、docs.github.com の Filtering projects で確認）。
+    ('人の作業', 'is:open title:*User*'),
+    ('人の操作', 'is:open title:*操作*'),
 )
+# 前の版の値。今の絞り込みがこれと同じときだけ新しい値へ書き換える（利用者が変えた値は変えない）。
+OLD_VIEW_FILTERS = {'承認': ('種別:feature status:承認待ち,着手可',)}
 # project-setup.md 3 章。
 WORKFLOWS = (
     ('Item added to project', '対象は issue だけ（PR は除く）。Set Status = 承認待ち'),
@@ -241,12 +252,14 @@ def plan_existing(project: dict, ctx: dict, *, fresh: bool) -> tuple[list[dict],
         steps.append({'kind': 'link', 'summary': f'Project をリポ {ctx["repo"]} に紐づける',
                       'command': f'gh project link {num} --owner {own} --repo {ctx["name"]}'})
     for name, wanted, dtype in ((STATUS_FIELD, STATUS_OPTIONS, 'SINGLE_SELECT'),
-                                (KIND_FIELD, KIND_OPTIONS, 'SINGLE_SELECT'), (ORDER_FIELD, None, 'NUMBER')):
+                                (KIND_FIELD, KIND_OPTIONS, 'SINGLE_SELECT'), (ORDER_FIELD, None, 'NUMBER'),
+                                (HEADLINE_FIELD, None, 'TEXT'), (RECOMMEND_FIELD, RECOMMEND_OPTIONS, 'SINGLE_SELECT')):
         field = project['fields'].get(name)
         if field is None:
             opts = ','.join(w[0] for w in wanted) if wanted else ''
+            what = '単一選択: ' + opts if opts else {'NUMBER': '数値', 'TEXT': '文字'}[dtype]
             steps.append({'kind': 'field-create', 'field': name, 'dataType': dtype, 'optionNames': opts,
-                          'summary': f'項目「{name}」（{"単一選択: " + opts if opts else "数値"}）を作る',
+                          'summary': f'項目「{name}」（{what}）を作る',
                           'command': f'gh project field-create {num} --owner {own} --name {name} --data-type {dtype}'
                                      + (f' --single-select-options {opts}' if opts else '')})
         elif field['type'] != dtype:
@@ -263,6 +276,11 @@ def plan_existing(project: dict, ctx: dict, *, fresh: bool) -> tuple[list[dict],
         elif not (view.get('filter') or '').strip():  # 作ったが絞り込みを入れ損ねたビュー。空だけは入れて立て直す
             steps.append({'kind': 'view-filter', 'name': name, 'viewId': view.get('id'), 'filter': flt,
                           'summary': f'ビュー「{name}」に絞り込み {flt} を入れる（いまは絞り込みなし）',
+                          'command': 'gh api graphql（updateProjectV2View）'})
+        elif (view.get('filter') or '').strip() in OLD_VIEW_FILTERS.get(name, ()):
+            old = view['filter'].strip()
+            steps.append({'kind': 'view-filter', 'name': name, 'viewId': view.get('id'), 'filter': flt,
+                          'summary': f'ビュー「{name}」の絞り込みを前の版の {old} から {flt} に変える',
                           'command': 'gh api graphql（updateProjectV2View）'})
         elif (view.get('filter') or '').strip() != flt:
             conflicts.append({'what': f'ビュー「{name}」の絞り込みが違う', 'where': view_url(ctx, view),
@@ -293,6 +311,10 @@ def checklist(project: dict | None, ctx: dict, route: str) -> list[dict]:
                  'value': '階層 On・並べ替えなし', 'state': '画面で On にする（API で設定できない）'})
     rows.append({'what': 'wave の並び', 'where': view_url(ctx, whole),
                  'value': '全体ビューで wave の行を並べ替える（行の並び = wave の並び）', 'state': '人が決める'})
+    approval = next((v for v in (project or {}).get('views', []) if v['name'] == '承認'), None)
+    rows.append({'what': f'承認ビューに項目「{HEADLINE_FIELD}」「{RECOMMEND_FIELD}」の列を出す', 'where': view_url(ctx, approval),
+                 'value': '列の + から 2 つ足す（承認カードの決めることと推奨。スマートフォンでもこの 2 列で判断する）',
+                 'state': '画面で足す（この道具は列の表示を変えない）'})
     return rows
 
 
@@ -498,7 +520,7 @@ sys.stderr.write("fake gh: unexpected " + " ".join(argv)); sys.exit(9)
 AUTH_OK = "github.com\n  ✓ Logged in to github.com account me (keyring)\n  - Token scopes: 'gist', 'project', 'repo'\n"
 
 
-def _proj(number, org=True, repos=(), status=(), kind=None, order=False, views=(), workflows=None, owner='acme'):
+def _proj(number, org=True, repos=(), status=(), kind=None, order=False, views=(), workflows=None, owner='acme', cards=False):
     fields = [{'id': 'F_t', 'name': 'Title', 'dataType': 'TITLE'}]
     if status is not None:
         fields.append({'id': 'F_s', 'name': STATUS_FIELD, 'dataType': 'SINGLE_SELECT',
@@ -508,6 +530,11 @@ def _proj(number, org=True, repos=(), status=(), kind=None, order=False, views=(
                        'options': [{'id': f'k{i}', 'name': n, 'color': 'BLUE', 'description': ''} for i, n in enumerate(kind)]})
     if order:
         fields.append({'id': 'F_o', 'name': ORDER_FIELD, 'dataType': 'NUMBER'})
+    if cards:
+        fields.append({'id': 'F_h', 'name': HEADLINE_FIELD, 'dataType': 'TEXT'})
+        fields.append({'id': 'F_r', 'name': RECOMMEND_FIELD, 'dataType': 'SINGLE_SELECT',
+                       'options': [{'id': f'r{i}', 'name': n, 'color': 'GRAY', 'description': ''}
+                                   for i, (n, _c, _d) in enumerate(RECOMMEND_OPTIONS)]})
     return {'id': f'PVT_{number}', 'number': number, 'title': f'p{number}',
             'url': f'https://github.com/{"orgs" if org else "users"}/{owner}/projects/{number}',
             'repositories': {'nodes': [{'nameWithOwner': r} for r in repos]}, 'fields': {'nodes': fields},
@@ -558,7 +585,7 @@ def selftest() -> int:
     full = ['承認待ち', '着手可', '判断待ち', '依存待ち', '進行中', 'レビュー中', '完了', '保留']
     wf_all = {n: True for n, _ in WORKFLOWS}
     done = _proj(7, repos=('acme/app',), status=full, kind=['wave', 'feature', 'task', '設計メモ'], order=True,
-                 views=VIEWS, workflows=wf_all)
+                 views=VIEWS, workflows=wf_all, cards=True)
     empty = _state([])
     new_pq = _pq(_proj(3, status=list(NEW_PROJECT_STATUS), views=[('View 1', '')]))
 
@@ -581,10 +608,15 @@ def selftest() -> int:
 
     rc, out, calls = run_case({'graphql': {'state': empty}}, [])
     expect('dry-run（Project なし・組織）は書き込みを 1 回も呼ばない', (0, []), (rc, writes(calls)))
-    expect('dry-run は作成・紐づけ・項目 2・Status・ビュー 6 を計画する', (True, True, 2, True, 6),
+    expect('dry-run は作成・紐づけ・項目 4・Status・ビュー 8 を計画する', (True, True, 4, True, 8),
            ('gh project create --owner acme' in out, 'gh project link <番号> --owner acme --repo app' in out,
             out.count('gh project field-create'), '既定 Todo・In Progress・Done は置き換える' in out, out.count('createProjectV2View')))
     expect('組織の URL は orgs/', True, 'https://github.com/orgs/acme/projects/<作った番号>/workflows' in out)
+    expect('項目「ひとこと」は文字（TEXT）・「推奨」は 3 択で作る', (True, True),
+           (f'--name {HEADLINE_FIELD} --data-type TEXT' in out,
+            f'--name {RECOMMEND_FIELD} --data-type SINGLE_SELECT --single-select-options 承認する,条件つき,承認しない' in out))
+    expect('人の作業・人の操作のビューは、公式に書かれた形（is:open と title:*文字*）だけで絞る', (True, True),
+           ('ビュー「人の作業」（絞り込み is:open title:*User*）' in out, 'ビュー「人の操作」（絞り込み is:open title:*操作*）' in out))
     rc, out, calls = run_case({'graphql': {'state': _state([], org=False, viewer='acme')}}, [])
     expect('個人（本人）は --owner @me・URL は users/', (0, True, True),
            (rc, 'gh project create --owner @me' in out, 'https://github.com/users/acme/projects/' in out))
@@ -597,7 +629,8 @@ def selftest() -> int:
     rc, out, calls = run_case(sc, ['--apply', '--title', 'X'])
     seq = [c['tag'] or ' '.join(c['argv'][:2]) for c in calls]
     expect('--apply（新規）の順番', ['auth status', 'state', 'project create', 'project', 'project link', 'update-field',
-                                    'project field-create', 'project field-create'] + ['create-view', 'update-view'] * 6 + ['project'],
+                                    'project field-create', 'project field-create', 'project field-create', 'project field-create']
+           + ['create-view', 'update-view'] * 8 + ['project'],
            seq)
     create = next(c['argv'] for c in calls if c['argv'][:2] == ['project', 'create'])
     expect('--apply の作成は owner と題名を渡す', ['--owner', 'acme', '--title', 'X'], create[2:6])
@@ -614,7 +647,7 @@ def selftest() -> int:
                       'create-view': {'data': {'createProjectV2View': {'projectV2View': {'id': 'NV', 'number': 9}}}},
                       'update-view': {'data': {}}}}
     rc, out, calls = run_case(sc, [])
-    expect('一部ある Project の dry-run は足りない分だけ（項目 1・選択肢 2・ビュー 4）で書かない', (0, 1, 2, 4, []),
+    expect('一部ある Project の dry-run は足りない分だけ（項目 3・選択肢 2・ビュー 6）で書かない', (0, 3, 2, 6, []),
            (rc, out.count('gh project field-create'), out.count('updateProjectV2Field'), out.count('createProjectV2View'), writes(calls)))
     expect('食い違うビューは変えずに表へ出し、自動化の On/Off を読む', (True, True, True),
            ('ビュー「裁定」の絞り込みが違う' in out, 'Off → On にする' in out, 'On（設定値は画面で確かめる）' in out))
@@ -660,13 +693,27 @@ def selftest() -> int:
     rc, out, calls = run_case({'graphql': {'state': _state([])}}, [], extra={'HIRAI_TASK_PROJECT': 'x'})
     expect('HIRAI_TASK_PROJECT が番号でないなら exit 2 で gh を呼ばない', (2, 0), (rc, len(calls)))
 
-    tpl = _proj(1, owner='tpl', status=full, kind=['wave', 'feature', 'task', '設計メモ'], order=True, views=VIEWS[:5])
+    tpl = _proj(1, owner='tpl', status=full, kind=['wave', 'feature', 'task', '設計メモ'], order=True, views=VIEWS[:-1], cards=True)
     rc, out, calls = run_case({'graphql': {'state': empty, 'project': _pq(tpl)}}, ['--from-template', 'tpl/1'])
     expect('テンプレートの dry-run は複製・紐づけ・足りないビュー 1 だけで、書かない', (0, True, 1, 0, []),
            (rc, 'gh project copy 1 --source-owner tpl --target-owner acme' in out, out.count('createProjectV2View'),
             out.count('field-create'), writes(calls)))
     expect('テンプレートの経路は Auto-add を画面の作業に回す', True, 'On にする（複製では引き継がれない）' in out)
-    copied = _proj(4, status=full, kind=['wave', 'feature', 'task', '設計メモ'], order=True, views=VIEWS[:5])
+    expect('承認ビューに「ひとこと」「推奨」の列を出す作業を画面の表に出す', True,
+           f'承認ビューに項目「{HEADLINE_FIELD}」「{RECOMMEND_FIELD}」の列を出す' in out)
+    copied = _proj(4, status=full, kind=['wave', 'feature', 'task', '設計メモ'], order=True, views=VIEWS[:-1], cards=True)
+    old_view = _proj(8, repos=('acme/app',), status=full, kind=['wave', 'feature', 'task', '設計メモ'], order=True, cards=True,
+                     views=[('承認', OLD_VIEW_FILTERS['承認'][0])] + list(VIEWS[1:]))
+    rc, out, calls = run_case({'graphql': {'state': _state([old_view]), 'project': _pq(old_view), 'update-view': {'data': {}}}},
+                              ['--apply'])
+    upd = [c['vars'] for c in calls if c['tag'] == 'update-view']
+    expect('承認ビューの絞り込みが旧い値なら新しい値へ書き換える（作り直さない）',
+           (0, [{'viewId': 'V0', 'filter': dict(VIEWS)['承認']}], []), (rc, upd, [c for c in calls if c['tag'] == 'create-view']))
+    own = _proj(9, repos=('acme/app',), status=full, kind=['wave', 'feature', 'task', '設計メモ'], order=True, cards=True,
+                views=[('承認', '種別:feature status:承認待ち label:ui')] + list(VIEWS[1:]))
+    rc, out, calls = run_case({'graphql': {'state': _state([own]), 'project': _pq(own)}}, [])
+    expect('承認ビューの絞り込みが利用者の値なら書き換えず、食い違いとして表に出す', (0, [], True),
+           (rc, writes(calls), 'ビュー「承認」の絞り込みが違う' in out))
     sc = {'copy': {'number': 4}, 'graphql': {'state': empty, 'project': [_pq(tpl), _pq(copied), _pq(copied)],
                                               'create-view': {'data': {'createProjectV2View': {'projectV2View': {'id': 'NV'}}}},
                                               'update-view': {'data': {}}}}
@@ -676,7 +723,7 @@ def selftest() -> int:
                                                                           'project link', 'create-view', 'update-view', 'project'], seq)
     rc, out, _ = run_case({'graphql': {'state': _state([done])}}, ['--json'])
     parsed = json.loads(out) if rc == 0 else {}
-    expect('--json は機械可読（route・steps・checklist）', ('existing', 0, 7),
+    expect('--json は機械可読（route・steps・checklist）', ('existing', 0, 8),
            (parsed.get('route'), len(parsed.get('steps', [1])), len(parsed.get('checklist', []))))
     if failures:
         print(f'FAIL: hirai_project_setup selftest（{len(failures)} 件）')

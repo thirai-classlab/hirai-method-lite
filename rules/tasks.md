@@ -20,7 +20,7 @@ paths:
 - **未承認は draft に留める**: 承認前の設計は issue にせず、user レビューに出す ／ 例: 検討中の案は draft のまま ／ 失効: なし
 - **止めた設計は保留の issue**: 着手しない設計は種別「設計メモ」・Status「保留」の issue にし、理由と再開条件を本文に書く ／ 例: 「保留理由: 外部 API の仕様未確定 / 再開条件: v2 API 公開」 ／ 失効: なし
 
-- **承認は判断材料つきで求める**: メインエージェントは、着手 / 完了 / 優先順の変更 / draft 承認を求めるとき 5 項目を示す ／ 例: 型と記入例は `docs/rules-reference/approval-template.md` ／ 失効: なし
+- **承認はカードで求める**: メインエージェントは、着手 / 完了 / 優先順の変更 / draft 承認を求めるとき承認カードを示す ／ 例: 型と記入例は `docs/rules-reference/approval-template.md` ／ 失効: なし
 
 ---
 背景・過去の経緯・事故記録: `docs/rules-reference/`

@@ -36,6 +36,7 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 
 - **Status**（単一選択・8 値）: 承認待ち / 着手可 / 判断待ち / 依存待ち / 進行中 / レビュー中 / 完了 / 保留
 - **種別**（単一選択・4 値）: wave / feature / task / 設計メモ
+- **ひとこと**（文字）・**推奨**（単一選択・3 値: 承認する / 条件つき / 承認しない）: 承認待ちの feature の本文の先頭にある承認カード（`docs/rules-reference/approval-template.md`）の「決めること」と「推奨」。`hirai-task card <番号> --sync` が写す。承認ビューにこの 2 列を出せば、本文を開かずに判断できる（v2.8.0）
 - **着手順**（数値・任意）: task の行に入れる。ある Project では `hirai-task ready` が小さい順に出し、値の無い行は後ろに回る（同じ値・無い行どうしは wave の並び順）。wave・feature に入れても効かない。型は Number にする（Text では読まない）
 
 | Status | 入るとき | 動かすもの |
@@ -60,30 +61,37 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 - **task**: 種別 task の issue。feature の sub-issue にする。起票は `/hirai-lite:new-task`（`hirai-task new`）が種別と親を付けて Project に入れる
 - **期日**: Milestone は期日のある出す段だけに付ける
 
-## 6. ビュー 6 枚
+## 6. ビュー 8 枚
 
 | ビュー | 絞り込み | 見るもの |
 |---|---|---|
-| 承認 | `種別:feature status:承認待ち,着手可` | 着手の承認を待つ feature |
+| 承認 | `種別:feature status:承認待ち`（列に「ひとこと」「推奨」） | 着手の承認を待つ feature。カードの決めることと推奨で判断する |
 | 裁定 | `status:判断待ち` | 人の答えを待つ問い |
 | 取り込み | `is:pr is:open` | merge を待つ PR |
 | 全体 | 階層 On・`種別:wave`・並べ替えなし | wave を並び順に並べ、開くと feature と task の帯 |
 | 止まっているもの | `種別:task status:依存待ち,判断待ち,保留` | 待っている task |
 | 保留中の設計メモ | `種別:設計メモ status:保留` | 止めた設計 |
+| 人の作業 | `is:open title:*User*` | 人が手を動かす作業（`[User]`）。人の作業カードを読んで行う |
+| 人の操作 | `is:open title:*操作*` | 人の資格で行う操作（`[操作]`） |
 
 - 機能をまたいで見るとき: `種別:feature title:*認証*` のように絞る
+- 承認ビューの絞り込みは v2.7.0 まで `種別:feature status:承認待ち,着手可` だった。`hirai-task setup` は、今の値が前の版の値のときだけ新しい値へ書き換え、利用者が変えた値は食い違いとして表に出す
+- 人の作業・人の操作の 2 枚に分けるのは、題名の部分一致の `field:*TEXT*` は公式の Filtering projects にあるが、`*` と OR の `,` を組み合わせた書き方は書かれていないため（2026-11-15 確認）。`User`・`操作` を題名に含む別の行も出る
 - 帯は直下の子だけを数える。wave の行は feature が閉じた数、feature の行は task の完了の割合
 
 ## 7. 画面でしか付けられない 3 つ
 
-ビュー 6 枚の作成と、名前・レイアウト・絞り込み・表示する項目（`visibleFieldIds`）は API で変えられる（`createProjectV2View`・`updateProjectV2View`。`hirai-task setup` が行う）。下の 3 つを変える入力は API に無い（2026-11-15 に GraphQL のスキーマ `UpdateProjectV2ViewInput`・`ProjectV2ViewConfigurationInput` と [リファレンス](https://docs.github.com/en/graphql/reference/projects) で確認）ので、人が画面で付ける。
+ビュー 8 枚の作成と、名前・レイアウト・絞り込み・表示する項目（`visibleFieldIds`）は API で変えられる（`createProjectV2View`・`updateProjectV2View`。`hirai-task setup` が行う）。下の 3 つを変える入力は API に無い（2026-11-15 に GraphQL のスキーマ `UpdateProjectV2ViewInput`・`ProjectV2ViewConfigurationInput` と [リファレンス](https://docs.github.com/en/graphql/reference/projects) で確認）ので、人が画面で付ける。
 
 1. **階層表示**: 全体ビューで Hierarchy を On にする
 2. **並べ替え**: wave の並びを決める（全体ビューは並べ替えなしで、Project の行の並びに従う）
 3. **グループ化**: 種別でのグループ化は、どのビューに付けるかが決まっていない。付けるなら人が画面で決める
 
+このほか、承認ビューに「ひとこと」「推奨」の列を出すのも画面で行う（表示する項目は API でも変えられるが、`hirai-task setup` は利用者のビューの列を変えない。`setup` の画面の作業の表に出る）。
+
 ## 8. 立ち上げ後の確かめ
 
 - `hirai-task ready` が、着手できる task を出す（空でもエラーにならない）
+- `hirai-task card --lint` が、承認待ちの feature・判断待ち・人の作業に要るカードの抜けを出す（直したら承認カードは `hirai-task card <番号> --sync`）
 - テスト用 issue を 1 本作って Project に入れ、Status が承認待ちになる
 - テスト用 PR に `Closes #<番号>` を書いて出し、レビュー中 → merge で完了と動く
