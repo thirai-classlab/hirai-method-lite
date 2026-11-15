@@ -58,7 +58,7 @@ else
   if [ -n "$list" ] && [ -f "$list" ]; then
     task_line="やること: $(harness_open_tasks "$list") 件 (${list#"$root"/})"
   else
-    task_line="やること一覧はまだありません (/new-task で作れます)"
+    task_line="やること一覧はまだありません (/hirai-lite:new-task で作れます)"
   fi
 fi
 # **ここに >/dev/null 2>&1 を付けない。** 関数自身が内部で出力を抑えて detach しているため
@@ -105,7 +105,7 @@ done
 echo "[harness] 進め方: ${mode_line}"
 echo "[harness] ${task_line}"
 if [ -n "$state" ]; then
-  echo "[harness] 前回の続き: ${state} (/state resume で読み込めます)"
+  echo "[harness] 前回の続き: ${state} (/hirai-lite:state resume で読み込めます)"
 else
   echo "[harness] 前回の続き: なし"
 fi

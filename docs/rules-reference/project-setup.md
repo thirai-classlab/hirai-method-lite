@@ -2,6 +2,8 @@
 
 `/hirai-lite:init` が案内する、GitHub の形（GitHub Project にやることを載せる形）の立ち上げ手順。設定のファイルは作らない。共通の仕組みはプラグインに入っており、案件ごとの中身（wave・feature・順番・期日）は Project の中に持つ。
 
+**自動で立ち上げる（v2.7.0）**: `/hirai-lite:project-setup`（中身は `hirai-task setup`）が、下の手順 1 と 3（Project の作成・リポへの紐づけ・項目と Status の 8 値）と 6 章のビュー 6 枚を API で行う。最初は計画を出すだけで、承認してから書き込む。すでに Project があれば、足りないものだけを足す。組織のテンプレートの Project があれば `--from-template <owner>/<番号>` で複製する（ビュー・項目・auto-add 以外の自動化を引き継ぐ。[GitHub Docs: Copying an existing project](https://docs.github.com/en/issues/planning-and-tracking-with-projects/creating-projects/copying-an-existing-project)）。画面でしかできない作業（手順 2 と 7 章）は、URL と設定値の表で出す。
+
 ## 1. 立ち上げの 4 手順
 
 1. Project を作り、リポに紐づける
@@ -18,7 +20,7 @@
 
 ## 3. 組込の自動化 4 本の設定値（画面で On にする）
 
-Project の Workflows で次の 4 本を On にする。トークンは要らない。
+Project の Workflows で次の 4 本を On にする。トークンは要らない。**API では On にできない**（GraphQL にあるのは読むことと `deleteProjectV2Workflow` だけ。2026-11-15 に [リファレンス](https://docs.github.com/en/graphql/reference/projects) で確認）。`hirai-task setup` は URL と設定値を表で出す。
 
 | 自動化 | 設定値 | 効果 |
 |---|---|---|
@@ -74,7 +76,7 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 
 ## 7. 画面でしか付けられない 3 つ
 
-API で付けられるかは未検証。付けられない前提で、ビューを作ったあと人が画面で付けて見る。
+ビュー 6 枚の作成と、名前・レイアウト・絞り込み・表示する項目（`visibleFieldIds`）は API で変えられる（`createProjectV2View`・`updateProjectV2View`。`hirai-task setup` が行う）。下の 3 つを変える入力は API に無い（2026-11-15 に GraphQL のスキーマ `UpdateProjectV2ViewInput`・`ProjectV2ViewConfigurationInput` と [リファレンス](https://docs.github.com/en/graphql/reference/projects) で確認）ので、人が画面で付ける。
 
 1. **階層表示**: 全体ビューで Hierarchy を On にする
 2. **並べ替え**: wave の並びを決める（全体ビューは並べ替えなしで、Project の行の並びに従う）

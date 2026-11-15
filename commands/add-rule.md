@@ -24,7 +24,7 @@ bash "$P/scripts/scope-check.sh" .claude "$HOME/.claude"
 5. No → 工程 ② へ。
 
 ## ② 重複・矛盾検査
-`CLAUDE.md` と `$R/*.md` (`$R` は冒頭で解決した置き場) を全部 Read し、既存ルールを箇条書きで数え上げて新ルール案と照合する。**Read した件数が 0 件なら照合できていない** ので、置き場の解決からやり直す (「既存ルール無し」と結論づけない)。
+`CLAUDE.md` と `$R/*.md` (`$R` は冒頭で解決した置き場) を全部 Read し、既存ルールを箇条書きで数え上げて新ルール案と照合する。**Read した件数が 0 件なら照合できていない** ので、置き場の解決からやり直す (「既存ルール無し」と結論づけない)。あわせて組み込みの `/doctor prompt-audit "$R"`（Claude Code 2.1.283 以降の skill）を回し、古い書き方・存在しない参照・矛盾の指摘のうち新ルール案に関わるものを照合結果に足す。修正案はここでは当てない（当てるなら別の承認にする）。
 - 同趣旨の既存ルールあり → **既存行を書き換える案**にする。新規行は追加しない。
 - 反対の指示をする既存ルールあり → どちらを失効させるか user に選ばせ、失効側を `.claude/rules-archive/<元ファイル名>.md` へ移す案にする。
 - どちらでもない → 工程 ③ へ。
@@ -43,23 +43,24 @@ bash "$P/scripts/scope-check.sh" .claude "$HOME/.claude"
 - 禁止語彙を `grep -E '適切に|必要に応じて|可能な限り|十分に|慎重に'` で検査する。1 件でもヒットしたら書き直して再検査する。
 
 ## ⑤ 予算チェック
-T0 実測 (frontmatter に `paths:` を持たないファイルの合計) を測る。`CLAUDE.md` も置き場に合わせて 2 通りあるので、在るものだけを足す。
+T0 実測 (frontmatter に `paths:` を持たないファイルの合計) を測る。`CLAUDE.md` も置き場に合わせて 2 通りあるので、在るものだけを足す。`AGENTS.md` も、CLAUDE.md が無ければそのまま、あれば `@AGENTS.md` で毎回読まれるので足す（CLAUDE.md が取り込んでいないときは多めに出る）。
 ```bash
 P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 . "$P/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"
-for f in CLAUDE.md "$HOME/.claude/CLAUDE.md" "$R"/*.md; do
+for f in CLAUDE.md "$HOME/.claude/CLAUDE.md" AGENTS.md .claude/AGENTS.md "$R"/*.md; do  # AGENTS.md は直接か @AGENTS.md で毎回読まれる
   [ -f "$f" ] || continue
   head -5 "$f" | grep -q '^paths:' || wc -c "$f"
 done | awk '{s+=$1} END {print "T0 bytes:", s, "≈ tokens:", int(s/3)}'
 ```
 **`T0 bytes:` が空 or 0 なら測れていない** (置き場の解決に失敗している)。その値で「空きあり」と判定しない。
+上の値は概算 (bytes÷3)。実測も並べるときは、user に `/context all` を打ってもらい (組み込みのコマンドで Claude からは呼べない)、Memory files の行の tokens を概算の横に出す。auto memory (`MEMORY.md`) も毎回読まれる量なので、ここに含めて見る。
 T1 は対象 1 ファイルのみ同じ式で測る。追加案の推定バイト数を足して判定する。
 - T0 追加後 ≤ 10,000 tokens かつ T1 追加後 ≤ 2,000 tokens → 工程 ⑥ へ。T0 が 6,000 tokens を超えていれば「警告域: 降格候補を 1 件決めてから足す」と伝える。
 - 超過 → **削除候補を提示する**。既存 T0 ルールを「最終発火日が古い順」「失効条件が既に成立している順」で並べ、上位 3 件を `候補 N: <ルール名> (<tokens> 相当) → T1 降格 or 削除` の形で出し user に 1 件選ばせる。選ばれた 1 件を降格・削除してから追加する。「どれも消さない」と答えたら**追加を中止**して終了する。
 
 ## ⑥ 配置と検証
 1. 「失効条件はいつ成立しますか?」と聞き ④ の `失効:` を確定する。
-2. **承認を求める。** 本文に次の 5 点を**この語で**示してから `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）を出す。**5 項目は PR か issue の本文に書き、チャットには決めてほしいこととリンクだけを 5 行以内で書く**（選択肢の説明文に詰め込むと切り詰められて肝心の数字が消える）。型と記入例は `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル）。
+2. **承認を求める。** 本文に次の 5 点を**この語で**示してから `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）を出す。**5 項目は PR か issue の本文に書き、チャットには決めてほしいこととリンクだけを 5 行以内で書く**（選択肢の説明文に詰め込むと切り詰められて肝心の数字が消える）。型と記入例（`AskUserQuestion` が使えないときの平文の出し方も）は `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル）。
    - **何をしたいか** — 追加する行の**全文**と配置先のフルパス（「1 件足します」では判断できない）
    - **なぜ** — このセッションで観測した事実。① で聞いた「何回目か」を含める
    - **しないとどうなる** — 放置した結果。**確かめていないなら「〜の可能性がある」と書く**
@@ -70,12 +71,12 @@ T1 は対象 1 ファイルのみ同じ式で測る。追加案の推定バイ�
 3. 承認後にファイルへ追記する。T1 は対象ファイル冒頭に `paths:` frontmatter があることを確認し、無ければ追加する。
 4. **ロード検証**: user に新しいセッションを開いてもらい、次を実測する。
    - T0 → 新セッション冒頭で当該ルール文字列がコンテキストに載る。
-   - T1 → 新セッション冒頭では載らず、`paths:` の glob に一致するファイルを Read した後に載る。
+   - T1 → 新セッション冒頭では載らず、`paths:` の glob に一致するファイルを Read・Write・Edit したか、Bash の単一ファイルの読み (`cat`・`head` など) で開いた後に載る (Claude Code 2.1.293 以降。それより前は Read のときだけ)。
 5. 実測が想定と食い違えば frontmatter を修正して 4 をやり直す。想定どおりなら完了報告 1 行を出す。
 
 ## 対話イメージ
 ```
-/add-rule "タスク完了 commit に list.md を含める"
+/hirai-lite:add-rule "タスク完了 commit に list.md を含める"
 
 ① 分類    : 何回目ですか? → 2 回目 / 不可逆操作ですか? → No
    置き場   : .claude/rules (このプロジェクト) / 重なりなし

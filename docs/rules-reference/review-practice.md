@@ -20,8 +20,9 @@
 
 **どう対処するか**:
 
-- コスト削減で reviewer を絞るときも、**`code-reviewer` は最後の巡まで残す**
-- `code-reviewer` のプロンプトに「再書き込み・往復変換・環境差の能動再現を行え」と明示する
+- コスト削減で reviewer を絞るときも、**正しさの観点（v2.7.0 からは組み込みの `/code-review`）は最後の巡まで残す**
+- 組み込みのうち、Claude が回せるのは `/code-review`（正しさ）と `/simplify` だけ（どちらも bundled skill）。`/simplify` は直しまで当てるので並列レビューの観点には入れず、指摘の対応が終わってから単独で回す。`/security-review` は利用者が打つ組み込みのコマンドで Claude からは呼べないので、脆弱性の観点は観点を指示した reviewer で立て、`/security-review` は merge 前に利用者に打ってもらう（2026-11-15、https://code.claude.com/docs/en/commands で確認）
+- 正しさの観点の reviewer に「再書き込み・往復変換・環境差の能動再現を行え」と明示する（`/code-review` を回すときも指示に添える）
 - 2 人の再現結果が矛盾したら、指摘を退けずに**当時のコードを取り出して同一環境で測り直す**
 
 **出典**: 旧ハーネス memory `feedback_code_reviewer_deep_test_advantage` (2026-05-27)。
@@ -94,7 +95,7 @@
 
 **なぜ**: 固定の登録表は、不要な reviewer を動員する (コスト) か、領域固有の reviewer を落とす (レビュー不足) かのどちらかになる。適切な顔ぶれは UI / DB / API / 言語 / セキュリティの含有量で変わる。
 
-**どう選ぶか**: テスト観点の基礎 (`tdd-guide` / `test-automator` / `qa-expert` / `pr-test-analyzer`) に、対象領域の reviewer を足す。UI なら `ui-designer` / `accessibility-tester` / `e2e-runner`、スキーマなら `database-reviewer`、API なら `api-designer`、言語別 reviewer、認証や入力を触るなら `security-reviewer`。
+**どう選ぶか**: テスト観点の基礎 (`tdd-guide` / `test-automator` / `qa-expert` / `pr-test-analyzer`) に、対象領域の reviewer を足す。UI なら `ui-designer` / `accessibility-tester` / `e2e-runner`、スキーマなら `database-reviewer`、API なら `api-designer`、言語別 reviewer、認証や入力を触るなら脆弱性の観点の reviewer（merge 前に利用者が組み込みの `/security-review` も打つ）。
 
 **人数の下限を数値で決めない**: 旧ハーネスは「5 人以上」という数値を規範に直書きし、その結果**設定ファイル側の上限値が無視される**事故を起こした (2026-05-30)。数を規範に埋め込むと、数を満たすこと自体が目的化する。
 

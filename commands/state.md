@@ -4,7 +4,7 @@ description: セッション状態を .claude/state/latest.md に保存 (/state 
 
 # /state save | /state resume [loop]
 
-第 1 引数で分岐する。`save` なら「保存」節、`resume` なら「再開」節を実行する。引数が空、または `save` / `resume` のどちらでもない場合は `使い方: /state save | /state resume [loop]` と 1 行返して停止する。
+第 1 引数で分岐する。`save` なら「保存」節、`resume` なら「再開」節を実行する。引数が空、または `save` / `resume` のどちらでもない場合は `使い方: /hirai-lite:state save | /hirai-lite:state resume [loop]` と 1 行返して停止する。
 
 ---
 
@@ -56,7 +56,7 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 10. **自動で書いてよいもの**（承認不要。**追記のみ**で、既存行の書き換え・削除はしない）。
     - 事故 1 回目 / 背景・経緯 / 詳細 → 事故記録（`tasks-path.sh` の `harness_incidents_file "$PWD"` が返すパス。通常は `docs/rules-reference/incidents.md`）か `docs/rules-reference/` の該当ファイル
     - 意思決定の記録 → `docs/` の該当ファイル（技術判断なら `docs/architecture.md`）
-11. **ルールの追加（T0 / T1 / `settings.json`）は自分で書かない。** 本文に **何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか** の 5 点をこの語で示し（型と記入例は `docs/rules-reference/approval-template.md`）、そのうえで `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）を出す。5 項目は本文に書き、選択肢の説明文に詰め込まない。**承認されたものだけ** `/hirai-lite:add-rule "<ルール案 1 行>"` に渡す（分類 → 重複検査 → 層決定 → 記述最適化 → 予算 → 配置とロード検証の 6 工程）。承認が得られなければ 1 バイトも書かない（`_meta.md` 条 8）。ここで自前の追記手順を作らない。実際に出す文面の例:
+11. **ルールの追加（T0 / T1 / `settings.json`）は自分で書かない。** 本文に **何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか** の 5 点をこの語で示し（型と記入例、選ぶ UI が使えないときの平文の出し方は `docs/rules-reference/approval-template.md`）、そのうえで `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）を出す。5 項目は本文に書き、選択肢の説明文に詰め込まない。**承認されたものだけ** `/hirai-lite:add-rule "<ルール案 1 行>"` に渡す（分類 → 重複検査 → 層決定 → 記述最適化 → 予算 → 配置とロード検証の 6 工程）。承認が得られなければ 1 バイトも書かない（`_meta.md` 条 8）。ここで自前の追記手順を作らない。実際に出す文面の例:
 
     ```
     ### 提案: bash の grep -c の戻り値を T1 に足す
@@ -82,7 +82,7 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 - `ls .claude/state/latest.md` が exit 0。
 - `head -1 .claude/state/latest.md` が `# session state` で始まる。
 - `wc -l .claude/state/latest.md` が 120 以下。
-- 「次回に効くもの」を仕分け済み。0 件ならその旨を 1 行出した。1 件以上なら T2 / `docs/` は追記済み、ルール案は承認を取ったものだけ `/add-rule` に渡した。
+- 「次回に効くもの」を仕分け済み。0 件ならその旨を 1 行出した。1 件以上なら T2 / `docs/` は追記済み、ルール案は承認を取ったものだけ `/hirai-lite:add-rule` に渡した。
 
 4 つ成立したら、次の「利用者へ出す案内」を応答本文に出す。
 
@@ -115,7 +115,7 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 
 ## 手順
 
-1. `.claude/state/latest.md` を Read する。ファイルが無ければ「保存された state が無い。/state save で作る」と報告して終了する。
+1. `.claude/state/latest.md` を Read する。ファイルが無ければ「保存された state が無い。/hirai-lite:state save で作る」と報告して終了する。
 2. `git rev-parse --abbrev-ref HEAD` を実行し、state に書かれた branch と突き合わせる。不一致なら state の branch 名を提示し「切替えますか?」と聞く。承認されたら `git switch <state の branch>` を実行する。承認が無ければ現 branch のまま 3 へ進む。
 3. `git log --oneline -1` を実行し、HEAD を突き合わせる。state の HEAD と一致しなければ、`git log --oneline <state の hash>..HEAD` で state 保存後に積まれた commit を列挙し、チャットに提示する。
 
@@ -134,12 +134,12 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 
 ## loop 引数
 
-`/state resume loop` で呼ばれた場合、6 のサマリ出力後に mode（進め方）を `loop`（自動で進む）へ書き換え（書き込み先は決め打ちせず `tasks-path.sh` の `harness_mode_write_file "$PWD"` が返す**すでに在る側**。`/hirai-lite:config` と同じ経路）、`hirai-task ready` の結果を上から順に着手する。`command -v hirai-task` が無ければ「hirai-task が見つからない (PATH に入っていない)」と報告して終了する。一覧が空になったら、その旨を報告して停止する。
+`/state resume loop` で呼ばれた場合、6 のサマリ出力後に mode（進め方）を `loop`（自動で進む）へ書き換え（書き込み先は決め打ちせず `tasks-path.sh` の `harness_mode_write_file "$PWD"` が返す**すでに在る側**。`/hirai-lite:config` と同じ経路）、`hirai-task ready` の結果を上から順に着手する。`command -v hirai-task` が無ければ「hirai-task が見つからない (PATH に入っていない)」と報告して終了する。一覧が空になったら、その旨を報告して停止する。続けるのを仕組みに任せたいときは、組み込みの `/goal hirai-task ready が空で、着手した task はすべて PR を出した` を打つよう 1 行で案内する（`/goal` は Claude からは呼べない）。
 
 loop 実行を止める条件は 3 つ。
 - user が停止を指示した。
 - 同一のエラー文字列で 3 回連続して失敗した。
-- context 使用率が 50% に達した (この場合は `/state save` を実行してから停止する)。
+- context 使用率が 50% に達した (この場合は `/hirai-lite:state save` を実行してから停止する)。
 
 ## 判定できる終了条件 (resume)
 

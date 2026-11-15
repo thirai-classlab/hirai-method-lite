@@ -35,7 +35,7 @@ APPROVAL_TEMPLATE='docs/rules-reference/approval-template.md'
 #   その除外理由に「手順 8」と書いていた (実際の差分承認は手順 5、手順 8 は二重ロード検査)。
 #   v1.14.2 で誤記ごと解消し、検査対象に入れた。
 #   update.md / new-task.md は承認を求める箇所を持たない (報告して止まるだけ)。
-APPROVAL_SITES='init.md add-rule.md state.md config.md new-draft.md start-task.md finish-task.md commit.md rules-audit.md verify.md'
+APPROVAL_SITES='init.md add-rule.md state.md config.md new-draft.md start-task.md finish-task.md commit.md rules-audit.md verify.md project-setup.md'
 
 # smoke 自体は外部通信しない。更新検知を要する case 7/8 だけが個別に on を渡す。
 export HARNESS_UPDATE_CHECK=off
@@ -579,7 +579,7 @@ case_3() {
   first="$(TMPDIR="$td" HC_CONTEXT_RATIO=0.85 bash "$HOOKS/context-budget.sh" <<< '{"session_id":"smoke-over"}' 2>&1)"
   second="$(TMPDIR="$td" HC_CONTEXT_RATIO=0.85 bash "$HOOKS/context-budget.sh" <<< '{"session_id":"smoke-over"}' 2>&1)"
   rm -rf "$td"
-  if ! printf '%s' "$first" | grep -q '/state save'; then fail 3 "閾値超過で 1 度だけ発火" "1 回目が無出力"; return; fi
+  if ! printf '%s' "$first" | grep -q '/hirai-lite:state save'; then fail 3 "閾値超過で 1 度だけ発火" "1 回目が無出力"; return; fi
   if [ -n "$second" ]; then fail 3 "閾値超過で 1 度だけ発火" "2 回目も出力: $second"; return; fi
 
   # --- 画面下部と自動処理が同じ使用率を出す (v1.9.0 の不具合の再発検査) ---------------
@@ -856,7 +856,7 @@ case_5() {
   pass 5 "T0 層の rule は許可リストどおり ${n} 本 <= ${T0_MAX} (${names# }) / core.md に承認の 1 行 (5 項目入り・2 行以内) / tasks.md から T2 テンプレートへのポインタ / project-setup.md に 4 手順・自動化 4 本・ビュー 6 枚・画面でしか付けられない 3 つ / T2 は GitHub の形が主で台帳の形は区別つき"
 }
 
-# ---------- case 6: 数の予算 (hook<=5 / command<=12 / skill<=3 / smoke case<=10) ----------
+# ---------- case 6: 数の予算 (hook<=5 / skill<=3 / smoke case<=10。command は v2.7.0 で上限を外し、数だけ出す) ----------
 # hook は hooks/*.sh だけを数える (hooks.json は宣言であって hook スクリプトではない)。
 # skill は skills/<名前>/SKILL.md を数える。本体は呼ばれた時だけ読まれるが name と
 # description は常に載るため、数を予算で抑える (rules/_meta.md 「数の予算」)。
@@ -866,8 +866,8 @@ case_6() {
   cmds="$(find "$ROOT/commands" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
   skills="$(find "$ROOT/skills" -maxdepth 2 -name 'SKILL.md' 2>/dev/null | wc -l | tr -d ' ')"
   cases="$(grep -c '^case_[0-9][0-9]*()' "$here/smoke.sh" 2>/dev/null | tr -d ' ')"
-  local msg="hook=${hooks}/5 command=${cmds}/12 skill=${skills}/3 smoke case=${cases}/10"
-  if [ "${hooks:-0}" -gt 5 ] || [ "${cmds:-0}" -gt 12 ] || [ "${skills:-0}" -gt 3 ] \
+  local msg="hook=${hooks}/5 command=${cmds} skill=${skills}/3 smoke case=${cases}/10"
+  if [ "${hooks:-0}" -gt 5 ] || [ "${skills:-0}" -gt 3 ] \
      || [ "${cases:-0}" -gt 10 ]; then
     fail 6 "数の予算" "$msg"; return
   fi
@@ -877,7 +877,7 @@ case_6() {
   # 説明文は毎セッション載る (rules/_meta.md 「数の予算」) ので、
   # 壊れた skill は予算だけ食って何もしない状態になる。
   local want sf nm ds bad6=""
-  for want in grilling context-engineering; do
+  for want in grilling context-engineering github-project; do
     sf="$ROOT/skills/$want/SKILL.md"
     if [ ! -f "$sf" ]; then bad6="$bad6 ${want}:SKILL.md が無い"; continue; fi
     nm="$(awk 'NR==1&&$0!="---"{exit} NR>1&&/^---[[:space:]]*$/{exit} sub(/^name:[[:space:]]*/,""){print;exit}' "$sf")"
@@ -898,7 +898,7 @@ case_6() {
   fi
   if [ -n "$bad6" ]; then fail 6 "同梱 skill が実在し出典を持つ" "不備:$bad6"; return; fi
 
-  pass 6 "数の予算 ${msg} / 同梱 skill 2 件の name はフォルダ名と一致し description を持つ / 出典 URL 4 件が残っている"
+  pass 6 "数の予算 ${msg} / 同梱 skill 3 件の name はフォルダ名と一致し description を持つ / 出典 URL 4 件が残っている"
 }
 
 # 更新検知 case (7/8) 用の作業 dir を組む。プラグインと同じ配置 (hooks/ scripts/ VERSION) にする。
@@ -1121,7 +1121,7 @@ case_8() {
     printf '%s' "$cached_v" > "$dir/latest"
     date +%s > "$dir/stamp"          # 期限内にして通信を起こさない
     out="$(run_session_start "$tmp" "$td" "on")"
-    want="[harness] 更新あり v${local_v} → v${cached_v} (/update で適用)"
+    want="[harness] 更新あり v${local_v} → v${cached_v} (/hirai-lite:update で適用)"
     if [ "$expect" = "yes" ]; then
       if ! printf '%s\n' "$out" | grep -qF "$want"; then
         fail 8 "新版で 1 行通知" "local=${local_v} cached=${cached_v} で期待行が無い: $out"; failed=1; break
@@ -1484,7 +1484,7 @@ print(" ".join(k for k in ("commands", "agents", "hooks") if k in m))
   fi
   # 並び: 節の見出し → 0 件なら書かない → 承認を取る → /add-rule へ渡す
   for marker in '次回に効くものを置く' '0 件なら' 'AskUserQuestion' 'hirai-lite:add-rule'; do
-    off="$(grep -obF -m1 "$marker" "$sm" 2>/dev/null | cut -d: -f1)"
+    off="$(grep -obF -m1 "$marker" "$sm" 2>/dev/null | head -n 1 | cut -d: -f1)"  # -m1 は 1 行の中の一致をすべて出す
     if [ -z "$off" ]; then bad="$bad state.md:[${marker}]が無い"; continue; fi
     if [ "$off" -le "$prev" ]; then bad="$bad state.md:[${marker}]の順序が逆"; fi
     prev="$off"

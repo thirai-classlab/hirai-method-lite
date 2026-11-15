@@ -20,10 +20,10 @@ exit code が 2 (プラグイン本体が見つからない) なら、その場�
 
 引数が空なら `hirai-task today` の結果から 進行中 の id を選び、どの id を完了させるか聞き返して停止する。
 
-1. issue `<task-id>` の本文の「完了条件」の節から検証コマンドを取り出す（`gh issue view <task-id> --json body --jq .body` などで読む）。1 つずつ実行し、1 つでも exit code が 0 以外なら、その出力の末尾 20 行を提示して停止する。完了条件が書かれていなければ `/verify` を実行し、build / test / lint が全部 exit 0 になることを確認する。
+1. issue `<task-id>` の本文の「完了条件」の節から検証コマンドを取り出す（`gh issue view <task-id> --json body --jq .body` などで読む）。1 つずつ実行し、1 つでも exit code が 0 以外なら、その出力の末尾 20 行を提示して停止する。完了条件が書かれていなければ `/hirai-lite:verify` を実行し、build / test / lint が全部 exit 0 になることを確認する。
 2. PR の `Closes` と base を確かめる。`gh pr view --json baseRefName,closingIssuesReferences` を実行する。`baseRefName` が既定ブランチ（`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` で引く）でない、または `closingIssuesReferences` が空なら、base を既定ブランチに直すか `Closes #<task-id>` を足すよう案内して停止する。
 3. `hirai-task review <task-id>` を呼ぶ（Status を レビュー中 に書くだけの補助。2 の確認はこのコマンドの役目ではない）。進行中の task にだけ使える（承認待ち・着手可などからは exit 2）。`command -v hirai-task` が無ければ「hirai-task が見つからない（PATH に入っていない）」と報告して終了する。
-4. 台帳は読まない・書かない（GHP の形は台帳を持たない）。実装の commit は通常の作業中（`/commit` 等）に作られている前提とし、ここでは新たに commit を作らない。
+4. 台帳は読まない・書かない（GHP の形は台帳を持たない）。実装の commit は通常の作業中（`/hirai-lite:commit` 等）に作られている前提とし、ここでは新たに commit を作らない。
 
 判定できる終了条件: 1・2 の確認が exit 0、かつ `hirai-task review` が exit 0 だったこと。1 つでも成立しなければ原因を 1 行で報告して停止する。
 
@@ -47,9 +47,9 @@ exit code が 2 (プラグイン本体が見つからない) なら、その場�
 
 1. `docs/tasks/task-<task-id>-<slug>.md` を Read し、`完了条件:` に書かれた検証コマンドを取り出す。
 2. 検証コマンドを 1 つずつ実行する。1 つでも exit code が 0 以外なら、その出力の末尾 20 行を提示して停止する。status は更新しない。
-3. 検証コマンドが書かれていない場合は `/verify` を実行し、build / test / lint が全部 exit 0 になることを確認する。
+3. 検証コマンドが書かれていない場合は `/hirai-lite:verify` を実行し、build / test / lint が全部 exit 0 になることを確認する。
 4. 全ステップの status が `完了` になっているかタスクファイルで確認する。`進行中` が残っていれば残り step 名を列挙して user に確認を取る。
-   **承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル）。 「何をしたいか」には残 step 名と、それでも完了とする範囲を書く。
+   **承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル。`AskUserQuestion` が使えないときの平文の出し方も同じファイル）。 「何をしたいか」には残 step 名と、それでも完了とする範囲を書く。
 5. `docs/tasks/list.md` の `<task-id>` 行の status 列を `完了` に書き換える。
 6. **完了 commit に台帳を含める**。以下 3 種を 1 つの commit にまとめる。
 
@@ -82,4 +82,4 @@ git show --stat --name-only HEAD | grep 'docs/tasks/list.md'
 
 ## push は別扱い
 
-feature branch への `git push` と `gh pr create` はここでは実行しない。user が push を指示した時点で実行する。既定ブランチへの push と `gh pr merge` は user 承認を取る。元に戻せない操作なので、**承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル）。
+feature branch への `git push` と `gh pr create` はここでは実行しない。user が push を指示した時点で実行する。既定ブランチへの push と `gh pr merge` は user 承認を取る。元に戻せない操作なので、**承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル。`AskUserQuestion` が使えないときの平文の出し方も同じファイル）。

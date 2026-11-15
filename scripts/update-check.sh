@@ -165,7 +165,7 @@ harness_update_notice() (
   cur="$(harness_local_version "$root")" || return 0
   new="$(harness_cached_version "$root")" || return 0
   harness_semver_gt "$new" "$cur" || return 0
-  printf '[harness] 更新あり v%s → v%s (/update で適用)\n' "$cur" "$new"
+  printf '[harness] 更新あり v%s → v%s (/hirai-lite:update で適用)\n' "$cur" "$new"
 )
 
 # --- 画面下部 (statusline) へ更新の有無を渡すフラグ -------------------------

@@ -29,20 +29,7 @@
 
 ## Rules index
 
-T0 は毎セッション常時ロード（合計 6,000 tokens で警告 / 10,000 tokens が上限）。T1 は `paths:` に該当するファイルを触った時のみロードされる。
-
-| 層 | ファイル | ロード条件 | 内容 |
-|---|---|---|---|
-| T0 | `CLAUDE.md`（本ファイル） | 常時 | プロジェクト固有情報 + rules index |
-| T0 | `.claude/rules/_meta.md` | 常時 | ルール追加のルール 9 条 / 層定義 / 記述テンプレート |
-| T0 | `.claude/rules/core.md` | 常時 | 全作業に例外なく効く行動規範 |
-| T1 | `.claude/rules/tasks.md` | `docs/{tasks,draft}/**` + `.claude/{tasks,draft}/**` | GitHub Project でのやること管理と draft 承認の運用 |
-| T1 | `.claude/rules/code.md` | `src/**`, `tests/**` | 実装とレビューの運用 |
-| T1 | `.claude/rules/ops.md` | `.github/**`, `infra/**`, `*.tf` | CI / インフラの運用 |
-| T2 | `docs/rules-reference/**` | 明示 Read のみ | 背景・事故記録・詳細手順 |
-| T3 | `.claude/rules-archive/**` | ロードしない | 失効ルールの履歴 |
-
-`.claude/rules/` の中身は プラグイン `hirai-lite` の `/init` が配置する。ルールの追加は `.claude/rules/_meta.md` のパイプライン（`/add-rule`）を通す。`@import` は使わない。
+決まりごとは `.claude/rules/` にあり、プラグイン `hirai-lite` の `/hirai-lite:init` が置く。層・予算・追加の手順は `.claude/rules/_meta.md`。毎回読まれるのは本ファイルと `_meta.md`・`core.md` で、`tasks.md`・`code.md`・`ops.md` は `paths:` に当たるファイルを読む・書くときだけ読まれる。背景と事故記録は `docs/rules-reference/`（必要なときだけ読む）。ルールの追加は `/hirai-lite:add-rule` を通す。`@import` は使わない（例外は `@AGENTS.md` だけ）。
 
 ## Documents index
 

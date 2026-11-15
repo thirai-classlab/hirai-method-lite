@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# UserPromptSubmit hook: context 使用率が閾値以上になった最初の 1 回だけ /state save を促す。
+# UserPromptSubmit hook: context 使用率が閾値以上になった最初の 1 回だけ /hirai-lite:state save を促す。
 #
 # 使用率の計算は **scripts/context-usage.sh に集約している**。画面下部 (scripts/statusline.sh) と
 # 同じ関数を通すので、同じ瞬間に別々の数字が出ることはない (v1.9.0 まではここだけ
@@ -54,5 +54,5 @@ flag="$flag_dir/ctx-$(printf '%s' "$session" | tr -c 'A-Za-z0-9_.-' '_').fired"
 : > "$flag" 2>/dev/null || exit 0
 
 echo "[harness] context 使用率が ${pct}% (閾値 $(harness_ctx_threshold)% / 窓 ${window} tokens${estimated}) に達しました。"
-echo "[harness] このターン内で /state save を実行し、新セッションで /state resume するか継続するかを提案してください。"
+echo "[harness] このターン内で /hirai-lite:state save を実行し、新セッションで /hirai-lite:state resume するか継続するかを提案してください。"
 exit 0

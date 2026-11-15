@@ -1,6 +1,6 @@
 # 出典（Anthropic 公式）
 
-`SKILL.md` の `[a]`〜`[i]` に対応する。**取得日 2026-09-07**（WebFetch で取得）。引用は原文（英語）のまま載せる。訳や要約だけを残すと、次に読む人が原文にあたれない。
+`SKILL.md` の `[a]`〜`[i]` に対応する。**取得日 2026-09-07**（WebFetch で取得。`[c]` は 2026-11-15 に取り直した）。引用は原文（英語）のまま載せる。訳や要約だけを残すと、次に読む人が原文にあたれない。
 
 ---
 
@@ -55,7 +55,11 @@
 
 > "Rules can be scoped to specific files using YAML frontmatter with the `paths` field. These conditional rules only apply when Claude is working with files matching the specified patterns."
 
-> "Path-scoped rules trigger when Claude reads files matching the pattern, not on every tool use."
+> "A path-scoped rule loads when Claude uses the Read, Write, or Edit tool on a matching file. It also loads when Claude views a matching file with a Bash command that counts as a read, such as `cat` or `head` on a single file."
+
+> "Each pattern is relative to the rule's base directory: Project rules: the directory that contains the rule's `.claude` folder / User-level rules: the session's primary working directory"
+
+（2026-09-07 の版にあった "Path-scoped rules trigger when Claude reads files matching the pattern, not on every tool use." は 2026-11-15 の版に無い。Write・Edit で読むようになったのは Claude Code 2.1.288、Bash の単一ファイルの読みは 2.1.293 から。）
 
 > "Rules load into context every session or when matching files are opened. For task-specific instructions that don't need to be in context all the time, use skills instead, which only load when you invoke them or when Claude determines they're relevant to your prompt."
 
