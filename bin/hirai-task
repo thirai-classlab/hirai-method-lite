@@ -6,6 +6,8 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
   読む側: ready / pending / blocked / show <issue> / memos / unblocked / coverage / impact <draft>
   書く側: new / add / set / start / review / done / reopen（approve は廃止）/ design-merge <draft>（file だけ書く）
   会話の最初と merge の直後: comments / close-parents / align / today / after-merge
+  全体像: board（HTML・--text の木・--summary の要約。--publish <issue> で要約を issue の目印の間に書く）
+  立ち上げ: setup（GitHub Project の作成・紐づけ・項目・ビュー。既定は計画だけで、--apply で書く。scripts/hirai_project_setup.py）
   ほか: sync（field・option の id の取り直し）/ --selftest（gh を使わない自己検査）
 
 なぜ script にするか:
@@ -196,6 +198,18 @@ memos / today / after-merge）:
     どちらも「今の対象」を表す（dry-run の計算を JSON にしたもの）。`--json` は
     書き込まないので、実際に書いたかどうかとは無関係（上の「書き込みの許可」）。
 
+board（全体像のコンソール）:
+  items を頁送りで全部読み、open の issue と全 wave の blocked by（fetch_extras）、wave の本文を引く。
+  取った板は共有の置き場の gh-board-cache.json に残し、10 分以内でリポと Project の指定
+  （HIRAI_TASK_PROJECT。無ければ auto）が同じなら gh を叩かずに使う（--refresh で取り直す。
+  --from <json> は残した板から描き gh を叩かない）。blocked by の打ち切り・gh の失敗・errors は
+  「0 件」と描かずに exit 1 で、良い残した板は上書きしない。着手できるか（ready_block_reason）と
+  wave が出たか（wave_has_exited）はここで ready と同じ判定をして、描く側（scripts/hirai_board.py。
+  ネットワークに出ない）へ渡す。既定は HTML を共有の置き場の board.html に書き、パスと 1 行の
+  要約を出す。--text は木、--summary はスマホで読む Markdown。書き込みは --publish <issue> だけで、
+  その issue の本文の `<!-- hirai-board:start -->` と `<!-- hirai-board:end -->` の間だけを
+  要約で置き換える（目印が無ければ末尾に足す。目印の外は変えない。PR・閉じた issue・別 repo は exit 2）。
+
 落ちる条件:
   呼び出し方の誤り（引数不正 / 未知のサブコマンド）        → exit 2
   gh が失敗した / issue が Projects に載っていない          → exit 1
@@ -215,8 +229,9 @@ import subprocess
 import sys
 
 # 利用者の手元にも、プラグインの置き場所にも .pyc（__pycache__）を作らない。
-# 以降の import（自己検査・bin/hirai-task の読み込み）にも効かせるため import の直後に置く。
+# 以降の import（自己検査・bin/hirai-task の読み込み・board の描く側）にも効かせるため import の直後に置く。
 sys.dont_write_bytecode = True
+import tempfile
 import time
 import urllib.parse
 
@@ -1158,24 +1173,46 @@ def ready_rows(
             continue
         if i.get('kind') != TASK_KIND or i.get('status') != READY_STATUS:
             continue
-        if has_mark(i.get('title') or '', USER_MARK):
-            continue
-        parent_number = i.get('parent_number')
-        parent = items_by_number.get(parent_number)
-        if parent is None or parent.get('kind') != FEATURE_KIND or parent.get('status') != READY_STATUS:
-            continue
-        if (extras.get(i['number']) or {}).get('blocked_by_open', 0) > 0:
-            continue
-        if (extras.get(parent_number) or {}).get('blocked_by_open', 0) > 0:
-            continue
-        wave_ancestor = _ancestor_number_of_kind(parent_number, items_by_number, WAVE_KIND)
-        if wave_ancestor is not None and preceding_wave_unresolved(
-            wave_ancestor, items_by_number, children_of, bodies, extras,
-        ):
+        if ready_block_reason(i, items_by_number, children_of, extras, bodies):
             continue
         rows.append(i)
     rows.sort(key=ready_sort_key(items))
     return rows
+
+
+# ready に出ない理由（board が「着手可なのに着手できない」を理由ごとに数える。文言は board の要約の行名）
+NOT_READY_USER = '[User]（人の作業）'
+NOT_READY_NO_FEATURE = '親が feature でない・無い'
+NOT_READY_FEATURE_NOT_READY = '親の feature が着手可でない'
+NOT_READY_OWN_BLOCKER = '自分に未完了の blocked by'
+NOT_READY_FEATURE_BLOCKER = '親の feature に未完了の blocked by'
+NOT_READY_WAVE = '先の wave が出ていない'
+
+
+def ready_block_reason(
+    i: dict, items_by_number: dict[int, dict], children_of: dict[int, list[int]],
+    extras: dict[int, dict], bodies: dict[int, str],
+) -> str:
+    """open の task が ready に出ない理由（出るなら空文字）。Status と種別は見ない（呼び出し側が絞る）。
+    ready_rows と board が同じ判定を使う（ready と board の「着手できる」の数をずらさない）。"""
+    if has_mark(i.get('title') or '', USER_MARK):
+        return NOT_READY_USER
+    parent_number = i.get('parent_number')
+    parent = items_by_number.get(parent_number)
+    if parent is None or parent.get('kind') != FEATURE_KIND:
+        return NOT_READY_NO_FEATURE
+    if parent.get('status') != READY_STATUS:
+        return NOT_READY_FEATURE_NOT_READY
+    if (extras.get(i['number']) or {}).get('blocked_by_open', 0) > 0:
+        return NOT_READY_OWN_BLOCKER
+    if (extras.get(parent_number) or {}).get('blocked_by_open', 0) > 0:
+        return NOT_READY_FEATURE_BLOCKER
+    wave_ancestor = _ancestor_number_of_kind(parent_number, items_by_number, WAVE_KIND)
+    if wave_ancestor is not None and preceding_wave_unresolved(
+        wave_ancestor, items_by_number, children_of, bodies, extras,
+    ):
+        return NOT_READY_WAVE
+    return ''
 
 
 def ready_warnings(items: list[dict], extras: dict[int, dict] | None = None) -> list[str]:
@@ -4498,6 +4535,293 @@ def cmd_after_merge(pr_number: int) -> int:
 
 
 # ── 入口 ────────────────────────────────────────────────────────────
+# ── board（全体像のコンソール。描くのは scripts/hirai_board.py。書き込みは --publish だけ） ──
+# 取った板（items・blocked by・wave の本文）を共有の置き場に 1 本残し、10 分以内でリポと Project の
+# 指定が同じなら gh を叩かずに使う。HTML の既定の書き出し先も同じ置き場（作業ツリーの外。
+# worktree をまたいで同じ Project を見るので共有の側）。
+BOARD_CACHE = os.path.join(_shared_state_dir(), 'gh-board-cache.json')
+BOARD_HTML = os.path.join(_shared_state_dir(), 'board.html')
+BOARD_CACHE_SECONDS = 10 * 60
+BOARD_START = '<!-- hirai-board:start -->'
+BOARD_END = '<!-- hirai-board:end -->'
+_BOARD_CACHE_VERSION = 1
+_BOARD_USAGE = (
+    '使い方: hirai-task board [--out <path>] [--refresh | --from <json>]   （HTML を書く）\n'
+    '        hirai-task board --summary [--refresh | --from <json>]       （スマホで読む要約）\n'
+    '        hirai-task board --text [--wave N | --feature N | --task N] [--refresh | --from <json>]\n'
+    '        hirai-task board [--summary] --publish <issue>               （要約を issue の目印の間に書く。いつも取り直す）'
+)
+_BOARD_VALUE_FLAGS = ('--out', '--from', '--wave', '--feature', '--task', '--publish')
+_BOARD_NUMBER_FLAGS = ('--wave', '--feature', '--task', '--publish')
+_ISSUE_URL_RE = re.compile(r'^https://github\.com/([^/]+/[^/]+)/(?:issues|pull)/\d+\Z')
+_NO_REPO_MESSAGE = (
+    'リポを決められない（git remote の origin が github.com を指していない）。'
+    'HIRAI_TASK_REPO=<owner>/<repo> で指定できる'
+)
+
+
+def parse_board_args(argv: list[str]) -> dict:
+    """board の引数を、gh を叩く前に全部確かめる（誤りは exit 2）。"""
+    opts: dict = {'text': False, 'summary': False, 'refresh': False, 'out': None, 'from': None,
+                  'publish': None, 'scope': None}
+    args = list(argv)
+    while args:
+        flag = args.pop(0)
+        if flag in ('--text', '--summary', '--refresh'):
+            if opts[flag[2:]]:
+                die(f'{flag} が 2 回ある\n{_BOARD_USAGE}', 2)
+            opts[flag[2:]] = True
+            continue
+        if flag not in _BOARD_VALUE_FLAGS:
+            die(f'未知の引数: {flag}\n{_BOARD_USAGE}', 2)
+        if not args or args[0].startswith('--'):
+            die(f'{flag} に値が要る\n{_BOARD_USAGE}', 2)
+        value = args.pop(0)
+        if flag in _BOARD_NUMBER_FLAGS and (not re.fullmatch(r'[0-9]+', value) or int(value) < 1):
+            die(f'{flag} は 1 以上の issue 番号（{value} は不正）', 2)
+        if flag in ('--wave', '--feature', '--task'):
+            if opts['scope'] is not None:
+                die('--wave・--feature・--task は同時に使えない', 2)
+            opts['scope'] = (flag[2:], int(value))
+        elif opts[flag[2:]] is not None:
+            die(f'{flag} が 2 回ある\n{_BOARD_USAGE}', 2)
+        else:
+            opts[flag[2:]] = int(value) if flag == '--publish' else value
+    _check_board_combination(opts)
+    return opts
+
+
+def _check_board_combination(opts: dict) -> None:
+    if opts['scope'] and not opts['text']:
+        die('--wave・--feature・--task は --text と一緒に使う', 2)
+    if sum(1 for key in ('text', 'summary') if opts[key]) + (opts['publish'] is not None) > 1 \
+            and not (opts['summary'] and opts['publish'] is not None and not opts['text']):
+        die('--text・--summary・--publish は 1 つだけ（--publish は --summary の中身を書く）', 2)
+    if opts['out'] and (opts['text'] or opts['summary'] or opts['publish'] is not None):
+        die('--out は HTML の書き出し先。--text・--summary・--publish とは一緒に使わない', 2)
+    if opts['from'] and opts['refresh']:
+        die('--from と --refresh は同時に使えない（--from は gh を叩かない）', 2)
+    if opts['from'] and opts['publish'] is not None:
+        die('--publish は --from と一緒に使わない（保存した古い板を issue に載せない）', 2)
+
+
+def _board_key() -> str:
+    return f'{REPO}#{PROJECT_NUMBER_OVERRIDE or "auto"}'
+
+
+def _same_repo(item: dict, repo: str) -> bool:
+    """この repo の issue か（URL が無い行は同じ repo とみなす）。別 repo の行の blocked by は引かない
+    （この repo の番号として引くと、別の issue に当たるか、引けずに落ちる）。"""
+    match = _ISSUE_URL_RE.match(item.get('url') or '')
+    return match is None or match.group(1).lower() == repo.lower()
+
+
+def fetch_board_snapshot() -> dict:
+    """板を 1 回取る（読むだけ）。open の issue と全 wave の blocked by、wave の本文を引く。
+    blocked by が打ち切られていたら「0 件」と描かずに exit 1（gh の失敗・errors は graphql が exit 1）。"""
+    project_number = discover_project_number()
+    items = fetch_all_items(project_number)
+    issues = [i for i in items if i.get('type') == 'Issue' and i.get('number') is not None and _same_repo(i, REPO)]
+    waves = [i['number'] for i in issues if i.get('kind') == WAVE_KIND]
+    extras = fetch_extras([i['number'] for i in issues if i.get('state') != 'CLOSED'] + waves)
+    truncated = sorted(n for n, extra in extras.items() if extra.get('blocked_by_truncated'))
+    if truncated:
+        die('blocked by を数え切れなかった（30 件超）: ' + ', '.join(f'#{n}' for n in truncated)
+            + '。止まっているかの判定が嘘になるので描かない', 1)
+    bodies = fetch_bodies(waves)
+    now = time.time()
+    return {
+        'version': _BOARD_CACHE_VERSION, 'key': _board_key(), 'repo': REPO, 'project': project_number,
+        'fetched_epoch': now,
+        'fetched_at': datetime.datetime.fromtimestamp(now).astimezone().strftime('%Y-%m-%d %H:%M:%S %z'),
+        'items': items, 'extras': {str(k): v for k, v in extras.items()},
+        'bodies': {str(k): v for k, v in bodies.items()},
+    }
+
+
+def board_snapshot_problem(snap) -> str:
+    """読み込んだ板の形を確かめる（壊れていれば理由、良ければ空文字）。"""
+    if not isinstance(snap, dict):
+        return '中身が object でない'
+    if snap.get('version') != _BOARD_CACHE_VERSION:
+        return f"版が違う（{snap.get('version')}）"
+    for key, kind in (('items', list), ('extras', dict), ('bodies', dict), ('repo', str), ('key', str),
+                      ('fetched_at', str), ('project', int), ('fetched_epoch', (int, float))):
+        if not isinstance(snap.get(key), kind):
+            return f'{key} が無いか形が違う'
+    for item in snap['items']:
+        if not isinstance(item, dict) or not isinstance(item.get('number'), (int, type(None))) \
+                or not all(isinstance(item.get(k) or '', str) for k in ('title', 'status', 'kind', 'state', 'url')):
+            return 'items の行の形が違う'
+    for table in (snap['extras'], snap['bodies']):
+        if not all(re.fullmatch(r'[0-9]+', k) for k in table):
+            return 'extras か bodies の鍵が issue 番号でない'
+    if not all(isinstance(v, dict) for v in snap['extras'].values()):
+        return 'extras の値の形が違う'
+    return ''
+
+
+def _read_board_json(path: str) -> tuple[dict | None, str]:
+    try:
+        with open(path, encoding='utf-8') as f:
+            snap = json.load(f)
+    except (OSError, ValueError) as exc:
+        return None, f'読めない（{exc}）'
+    problem = board_snapshot_problem(snap)
+    return (None, problem) if problem else (snap, '')
+
+
+def _usable_board_cache() -> dict | None:
+    """残した板を使えるか: 形が正しく、リポと Project の指定が同じで、10 分以内。"""
+    if not os.path.isfile(BOARD_CACHE):
+        return None
+    snap, _problem = _read_board_json(BOARD_CACHE)
+    if snap is None or snap['key'] != _board_key() or snap['repo'] != REPO:
+        return None
+    age = time.time() - snap['fetched_epoch']
+    return snap if 0 <= age < BOARD_CACHE_SECONDS else None
+
+
+def _write_atomic(path: str, text: str) -> None:
+    """一時ファイルに書いてから置き換える（同時に 2 本走っても、読む側が書きかけを見ない）。"""
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix='.hirai-board-', suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def board_view(snap: dict, how: str) -> dict:
+    """描く側へ渡す形。ready と同じ判定（ready_block_reason）と wave が出たか（wave_has_exited）を
+    ここで計算し、描く側は判定を持たない（ready と board の数をずらさない）。"""
+    items, repo = snap['items'], snap['repo']
+    extras = {int(k): v for k, v in snap['extras'].items()}
+    bodies = {int(k): v for k, v in snap['bodies'].items()}
+    issues = [i for i in items if i.get('type') == 'Issue' and i.get('number') is not None and _same_repo(i, repo)]
+    skipped = {
+        'PR': sum(1 for i in items if i.get('type') == 'PullRequest'),
+        '番号の無い行（下書き）': sum(1 for i in items if i.get('number') is None),
+        '別 repo の issue': sum(1 for i in items if i.get('type') == 'Issue' and not _same_repo(i, repo)),
+    }
+    items_by_number, children_of = _board_index(issues)
+    not_ready = {}
+    for i in issues:
+        if i.get('state') == 'CLOSED' or i.get('status') != READY_STATUS or (i.get('kind') or '') in EXCLUDE_KINDS:
+            continue
+        reason = ready_block_reason(i, items_by_number, children_of, extras, bodies) \
+            if i.get('kind') == TASK_KIND else '種別が task でない（空を含む。ready に出ない）'
+        if reason:
+            not_ready[i['number']] = reason
+    waves = [i['number'] for i in issues if i.get('kind') == WAVE_KIND]
+    wave_exit = {}
+    for n in waves:
+        met, line = wave_has_exited(n, items_by_number, children_of, bodies)
+        wave_exit[n] = {'met': met, 'line': line, 'human': bool(_HUMAN_JUDGMENT_LINE_RE.search(bodies.get(n, '') or ''))}
+    return {
+        'repo': repo, 'project': snap['project'], 'fetched_at': snap['fetched_at'], 'how': how,
+        'age_minutes': max(0, int((time.time() - snap['fetched_epoch']) // 60)),
+        'rows_total': len(items), 'skipped': skipped, 'issues': issues,
+        'blockers': {n: x.get('blocked_by_open_numbers') or [] for n, x in extras.items()},
+        'open_prs': {n: x.get('open_pr_numbers') or [] for n, x in extras.items()},
+        'wave_blockers': {n: _blocking_wave_numbers(n, items_by_number, extras) for n in waves},
+        'not_ready': not_ready, 'ready': [i['number'] for i in ready_rows(issues, extras, bodies)],
+        'wave_exit': wave_exit,
+    }
+
+
+def splice_board_section(body: str, content: str) -> str:
+    """本文の目印の間だけを content に置き換える（目印の外は 1 バイトも変えない）。目印が無ければ
+    末尾に足す。目印が片方だけ・順が逆なら exit 2（どこまでが置き場か決められない）。"""
+    block = f'{BOARD_START}\n{content.strip()}\n{BOARD_END}'
+    start = body.find(BOARD_START)
+    end = body.find(BOARD_END, start + len(BOARD_START)) if start >= 0 else -1
+    if start >= 0 and end >= 0:
+        return body[:start] + block + body[end + len(BOARD_END):]
+    if start >= 0 or BOARD_END in body:
+        die(f'本文の目印が片方だけか順が逆（{BOARD_START} … {BOARD_END}）。直してから回す（何も書いていない）', 2)
+    if not body:
+        return block + '\n'
+    return body + ('\n' if body.endswith('\n') else '\n\n') + block + '\n'
+
+
+def publish_board(number: int, content: str) -> str:
+    """要約を issue の本文の目印の間に書く（board の書き込みはこれだけ）。PR・閉じた issue・
+    別 repo の issue には書かない（exit 2）。取れなければ exit 1（rest が落とす）。"""
+    issue = rest('GET', f'repos/{REPO}/issues/{number}')
+    if 'pull_request' in issue:
+        die(f'#{number} は PR。issue の番号を渡す（何も書いていない）', 2)
+    if not (issue.get('repository_url') or '').lower().endswith(f'/repos/{REPO}'.lower()):
+        die(f'#{number} は {REPO} の issue でない（移された issue か）。何も書いていない', 2)
+    if issue.get('state') != 'open':
+        die(f'#{number} は閉じている。開いている issue を渡す（何も書いていない）', 2)
+    body = issue.get('body') or ''
+    new_body = splice_board_section(body, content)
+    if new_body == body:
+        return f'#{number} の本文は変わらない（書き込みなし）'
+    rest('PATCH', f'repos/{REPO}/issues/{number}', {'body': new_body})
+    return f"#{number} の本文の目印の間を書き換えた: {issue.get('html_url') or ''}"
+
+
+def _load_board_module():
+    scripts_dir = os.path.join(_plugin_root(), 'scripts')
+    if not os.path.isfile(os.path.join(scripts_dir, 'hirai_board.py')):
+        die(f'描く側が見つからない: {scripts_dir}/hirai_board.py', 1)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    import hirai_board
+    return hirai_board
+
+
+def _board_snapshot(opts: dict) -> tuple[dict, str]:
+    if opts['from']:
+        if not os.path.isfile(opts['from']):
+            die(f"--from のファイルが無い: {opts['from']}", 2)
+        snap, problem = _read_board_json(opts['from'])
+        if snap is None:
+            die(f'--from の JSON を読めない: {problem}', 1)
+        return snap, 'from'
+    if not REPO:
+        die(_NO_REPO_MESSAGE, 2)
+    # --publish は issue の本文に載せるので、控えが新しくても取り直す（書き込みのあとの古い Status を載せない）。
+    snap = None if opts['refresh'] or opts['publish'] is not None else _usable_board_cache()
+    if snap is not None:
+        return snap, 'cached'
+    snap = fetch_board_snapshot()
+    _write_atomic(BOARD_CACHE, json.dumps(snap, ensure_ascii=False))
+    return snap, 'fetched'
+
+
+def cmd_board(opts: dict) -> int:
+    board = _load_board_module()
+    data = board_view(*_board_snapshot(opts))
+    if opts['text']:
+        try:
+            text = board.render_text(data, opts['scope'])
+        except board.ScopeError as exc:
+            die(str(exc), 2)
+        print(text, end='')
+        return 0
+    if opts['summary'] or opts['publish'] is not None:
+        content = board.render_summary_md(data)
+        message = publish_board(opts['publish'], content) if opts['publish'] is not None else ''
+        print(content, end='')
+        if message:
+            print(message)
+        return 0
+    out = os.path.abspath(opts['out'] or BOARD_HTML)
+    _write_atomic(out, board.render_html(data))
+    print(board.source_note(data))
+    print(f'書いた: {out}')
+    print(board.summary_line(data))
+    return 0
+
+
 def _parse_issue_number(text: str) -> int:
     try:
         return int(text)
@@ -4531,6 +4855,17 @@ def refresh_board_counts() -> None:
         return
 
 
+def _load_setup_module():
+    """GitHub Project の立ち上げ（scripts/hirai_project_setup.py）。repo と Project の決め方はモジュールが持つ。"""
+    scripts_dir = os.path.join(_plugin_root(), 'scripts')
+    if not os.path.isfile(os.path.join(scripts_dir, 'hirai_project_setup.py')):
+        die(f'立ち上げの道具が見つからない: {scripts_dir}/hirai_project_setup.py', 1)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    import hirai_project_setup
+    return hirai_project_setup
+
+
 def _run_selftest() -> int:
     """gh を使わない自己検査（scripts/hirai_task_selftest.py）を走らせる。"""
     scripts_dir = os.path.join(_plugin_root(), 'scripts')
@@ -4539,7 +4874,9 @@ def _run_selftest() -> int:
     sys.dont_write_bytecode = True  # プラグインの置き場所に __pycache__ を作らない
     sys.path.insert(0, scripts_dir)
     import hirai_task_selftest
-    return hirai_task_selftest.main()
+    code = hirai_task_selftest.main()
+    setup_code = _load_setup_module().selftest()  # setup は別モジュールで、自前の偽の gh を持つ
+    return code or setup_code
 
 
 def main(argv: list[str]) -> int:
@@ -4552,7 +4889,10 @@ def main(argv: list[str]) -> int:
         '           set <issue> <field> <value> | sync\n'
         '           coverage | impact <draft の path> | design-merge <draft の path>\n'
         '           comments | close-parents [--json] | align [--json] | unblocked | memos\n'
-        '           today | after-merge <PR番号>'
+        '           today | after-merge <PR番号>\n'
+        '           board [--text [--wave N|--feature N|--task N] | [--summary] [--publish <issue>]]'
+        ' [--out <path>] [--refresh | --from <json>]\n'
+        '           setup [--title <名前>] [--from-template <owner>/<番号>] [--apply] [--json]'
     )
     if not argv:
         die(usage, 2)
@@ -4561,11 +4901,12 @@ def main(argv: list[str]) -> int:
         return _run_selftest()
     if sub == 'design-merge':  # ローカルの file だけを書く。GitHub も repo の判定も要らない。
         return cmd_design_merge(tail)
+    if sub == 'board':  # 引数は gh より先に確かめる。--from は repo の判定も要らない（cmd_board が見る）。
+        return cmd_board(parse_board_args(tail))
+    if sub == 'setup':  # 既定は計画だけ。--apply で書く。repo・Project の判定と前提の検査はモジュールが持つ。
+        return _load_setup_module().main(tail)
     if not REPO:
-        die(
-            'リポを決められない（git remote の origin が github.com を指していない）。'
-            'HIRAI_TASK_REPO=<owner>/<repo> で指定できる', 2,
-        )
+        die(_NO_REPO_MESSAGE, 2)
     if sub == 'ready':
         return cmd_ready()
     if sub == 'pending':

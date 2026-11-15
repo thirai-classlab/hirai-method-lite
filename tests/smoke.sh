@@ -35,7 +35,7 @@ APPROVAL_TEMPLATE='docs/rules-reference/approval-template.md'
 #   その除外理由に「手順 8」と書いていた (実際の差分承認は手順 5、手順 8 は二重ロード検査)。
 #   v1.14.2 で誤記ごと解消し、検査対象に入れた。
 #   update.md / new-task.md は承認を求める箇所を持たない (報告して止まるだけ)。
-APPROVAL_SITES='init.md add-rule.md state.md config.md new-draft.md start-task.md finish-task.md commit.md rules-audit.md verify.md'
+APPROVAL_SITES='init.md add-rule.md state.md config.md new-draft.md start-task.md finish-task.md commit.md rules-audit.md verify.md project-setup.md'
 
 # smoke 自体は外部通信しない。更新検知を要する case 7/8 だけが個別に on を渡す。
 export HARNESS_UPDATE_CHECK=off

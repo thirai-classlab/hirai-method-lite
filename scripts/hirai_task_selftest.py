@@ -766,6 +766,379 @@ def make_new_board_gh(
     return fake_run_gh
 
 
+# ── board（全体像のコンソール）の検査 ───────────────────────────
+_BOARD_URL = 'https://github.com/example-org/example-repo/issues/{}'
+_BOARD_XSS_TITLE = '<script>alert(1)</script>'
+
+
+def _board_rows() -> list[dict]:
+    """wave 4（うち 2 本は循環）・feature 3・task 15（種別なし 1 を含む）・PR 1 の偽の板。
+    期待する件数は _board_checks の EXPECTED_SUMMARY に書く。"""
+    def row(number, kind, status='', parent=None, title=None, state='OPEN', url=None, typename='Issue'):
+        return {'number': number, 'kind': kind, 'status': status, 'parent_number': parent,
+                'title': title or f'row {number}', 'state': state, 'type': typename,
+                'url': _BOARD_URL.format(number) if url is None else url}
+    return [
+        row(1, 'wave', '完了', title='W1 はじまり'),
+        row(2, 'wave', '着手可', title='W2 つづき'),
+        row(3, 'wave', '承認待ち', title='W3 循環の片方'),
+        row(4, 'wave', '承認待ち', title='W4 循環のもう片方'),
+        row(10, 'feature', '完了', 1, 'F1 済み', state='CLOSED'),
+        row(11, 'task', '完了', 10, state='CLOSED'),
+        row(12, 'task', '完了', 10, state='CLOSED'),
+        row(20, 'feature', '着手可', 2, 'F2 進める'),
+        row(21, 'feature', '承認待ち', 2, 'F3 承認待ち'),
+        row(30, 'task', '着手可', 20, 'T30 着手できる'),
+        row(31, 'task', '着手可', 20, 'T31 自分が止められている'),
+        row(32, 'task', '着手可', 20, '[User] T32 申込'),
+        row(33, 'task', '進行中', 20),
+        row(34, 'task', 'レビュー中', 20),
+        row(35, 'task', '依存待ち', 20, 'T35 feature をまたいで待つ'),
+        row(36, 'task', '判断待ち', 20),
+        row(37, 'task', '保留', 20, 'T37 Project 外を待つ'),
+        row(70, 'task', '進行中', 20, 'T70 閉じたのに完了でない', state='CLOSED'),
+        row(40, 'task', '承認待ち', 21, _BOARD_XSS_TITLE, url='javascript:alert(1)'),
+        row(41, 'task', '着手可', 21, 'T41 親が承認待ち'),
+        row(52, 'task', '', 21, 'T52 Status 未設定'),
+        row(50, 'task', '着手可', None, 'T50 親なし'),
+        row(51, '', '承認待ち', None, 'T51 種別なし'),
+        row(60, '', '', None, 'PR 60', typename='PullRequest'),
+    ]
+
+
+# 番号 → [(blocker, state)]
+_BOARD_BLOCKERS = {2: [(1, 'OPEN')], 3: [(4, 'OPEN')], 4: [(3, 'OPEN')],
+                   31: [(33, 'OPEN')], 35: [(40, 'OPEN')], 37: [(999, 'OPEN')], 12: [(11, 'CLOSED')]}
+_BOARD_BODIES = {1: '- 出る条件のコマンド: exit 0（2026-11-01・abc1234）'}
+
+
+def make_console_gh(calls: list, *, mode: str = 'ok', blockers: dict | None = None, issues: dict | None = None):
+    """board が引く 4 種（discover・items・blockedBy の束・本文の束）に答える偽 gh。
+    呼ばれた引数を calls に積む（2 回目に gh を叩いていないことを数で見る）。
+    mode: ok / fail（exit 1）/ errors（errors 入りの JSON）/ truncated（blockedBy の totalCount > nodes）。
+    issues は --publish が読み書きする issue（REST の GET・PATCH。PATCH は body を書き換える。無い番号は 404）。"""
+    rows = _board_rows()
+    blockers = _BOARD_BLOCKERS if blockers is None else blockers
+
+    def node_of(r: dict) -> dict:
+        values = [{'__typename': 'ProjectV2ItemFieldSingleSelectValue', 'name': v, 'field': {'name': f}}
+                  for f, v in (('Status', r['status']), (gh_task.KIND_FIELD, r['kind'])) if v]
+        return {'id': f"ITEM_{r['number']}", 'fieldValues': {'nodes': values}, 'content': {
+            '__typename': r['type'], 'number': r['number'], 'title': r['title'], 'state': r['state'],
+            'url': r['url'], 'parent': {'number': r['parent_number']} if r['parent_number'] else None}}
+
+    def fake_run_gh(args: list[str], input_text: str | None = None) -> tuple[int, str, str]:
+        joined = ' '.join(args)
+        calls.append(joined)
+        if mode == 'fail':
+            return 1, '', 'HTTP 502: boom'
+        if mode == 'errors':
+            return 0, json.dumps({'errors': [{'message': 'something went wrong'}]}), ''
+        if len(args) >= 4 and args[:2] == ['api', '-X']:
+            match = re.match(r'^repos/example-org/example-repo/issues/(\d+)$', args[3])
+            issue = (issues or {}).get(int(match.group(1))) if match else None
+            if issue is None:
+                return 1, '', 'gh: Not Found (HTTP 404)'
+            if args[2] == 'PATCH':
+                issue['body'] = json.loads(input_text)['body']
+            return 0, json.dumps(issue), ''
+        if re.search(r'\bi0:', joined):
+            numbers = [int(x) for x in re.findall(r'issue\(number:\s*(\d+)\)', joined)]
+            data = {}
+            for k, number in enumerate(numbers):
+                if 'blockedBy' in joined:
+                    nodes = [{'number': b, 'state': s} for b, s in blockers.get(number, [])]
+                    total = len(nodes) + (40 if mode == 'truncated' and number == 31 else 0)
+                    data[f'i{k}'] = {'issue': {'number': number,
+                                               'blockedBy': {'totalCount': total, 'nodes': nodes},
+                                               'closedByPullRequestsReferences': {'nodes': []}}}
+                else:
+                    data[f'i{k}'] = {'issue': {'number': number, 'body': _BOARD_BODIES.get(number, '')}}
+            return 0, json.dumps({'data': data}), ''
+        if 'projectsV2' in joined:
+            return _discovery_response(7)
+        if 'items(first:' in joined:
+            return 0, json.dumps({'data': {'repository': {'projectV2': {'items': {
+                'pageInfo': {'hasNextPage': False, 'endCursor': None},
+                'nodes': [node_of(r) for r in rows]}}}}}), ''
+        return 1, '', f'unhandled fake gh call (board): {joined[:160]}'
+
+    return fake_run_gh
+
+
+def _run_main(argv: list[str]) -> tuple[int, str]:
+    """main を _entry と同じ exit code の決め方で走らせ、(exit code, 標準出力) を返す。"""
+    out = io.StringIO()
+    try:
+        with redirect_stdout(out):
+            rc = gh_task.main(argv)
+    except gh_task.GhError as exc:
+        return exc.code, out.getvalue() + str(exc)
+    return rc, out.getvalue()
+
+
+def _board_checks(t, tmp_dir: str) -> None:
+    """board の検査一式。控えと HTML の置き場を一時ディレクトリへ差し替えて走らせる。"""
+    orig = (gh_task.run_gh, gh_task.BOARD_CACHE, gh_task.BOARD_HTML, gh_task.PROJECT_NUMBER_OVERRIDE)
+    base = tempfile.mkdtemp(dir=tmp_dir)
+    gh_task.BOARD_CACHE = os.path.join(base, 'state', 'gh-board-cache.json')
+    gh_task.BOARD_HTML = os.path.join(base, 'state', 'board.html')
+    calls: list[str] = []
+
+    store: dict[int, dict] = {}
+
+    def use(mode: str = 'ok', blockers: dict | None = None) -> None:
+        gh_task.run_gh = make_console_gh(calls, mode=mode, blockers=blockers, issues=store)
+
+    def writes() -> list:
+        return [c for c in calls if 'mutation' in c or re.search(r'-X (?!GET)', c)]
+
+    def fresh() -> None:
+        for path in (gh_task.BOARD_CACHE, gh_task.BOARD_HTML):
+            if os.path.exists(path):
+                os.remove(path)
+        calls.clear()
+        use()
+
+    expected_summary = {
+        '着手できる（hirai-task ready が出す）': 1, '進行中': 1, 'レビュー中（merge 待ち）': 1,
+        '承認待ちの feature（人がボードで着手可にする）': 1, '承認待ちの task': 2, '判断待ち（裁定を待つ）': 1,
+        '依存待ち': 1, '保留': 1, 'Status 未設定': 1, '着手可なのに着手できない': 4,
+        '[User] の人の作業（open）': 1, '閉じたのに完了でない': 1, '止まっている task（合計）': 10,
+    }
+    expected_not_ready = {
+        '自分に未完了の blocked by': 1, '[User]（人の作業）': 1, '親の feature が着手可でない': 1,
+        '親が feature でない・無い': 1,
+    }
+
+    try:
+        def _first_fetch_then_cache() -> None:
+            fresh()
+            rc, out = _run_main(['board'])
+            assert rc == 0, f'exit {rc}: {out}'
+            first = len(calls)
+            assert first > 0, '1 回目に gh を叩いていない'
+            assert os.path.isfile(gh_task.BOARD_HTML), 'HTML を書いていない'
+            assert gh_task.BOARD_HTML in out and '取り直した' in out, f'出力にパスか出どころが無い: {out}'
+            rc, out = _run_main(['board'])
+            assert (rc, len(calls)) == (0, first), f'10 分以内の 2 回目で gh を叩いた（{first} → {len(calls)}）'
+            assert '残した JSON を使用（0 分前）' in out, f'残した JSON を使ったと出ていない: {out}'
+            rc, out = _run_main(['board', '--text'])
+            assert (rc, len(calls)) == (0, first), '--text の 2 回目で gh を叩いた'
+            assert '残した JSON を使用（0 分前）' in out.splitlines()[0], f'1 行目に出どころが無い: {out[:200]}'
+            rc, _ = _run_main(['board', '--refresh'])
+            assert rc == 0 and len(calls) > first, '--refresh で取り直していない'
+            again = len(calls)
+            other = os.path.join(base, 'from', 'b.html')
+            rc, out = _run_main(['board', '--from', gh_task.BOARD_CACHE, '--out', other])
+            assert (rc, len(calls)) == (0, again) and os.path.isfile(other), '--from が gh を叩いたか HTML を書かない'
+            gh_task.PROJECT_NUMBER_OVERRIDE = '7'
+            rc, _ = _run_main(['board'])
+            gh_task.PROJECT_NUMBER_OVERRIDE = ''
+            assert rc == 0 and len(calls) > again, 'Project の指定が変わったのに残した JSON を使った'
+            with open(gh_task.BOARD_CACHE, encoding='utf-8') as f:
+                snap = json.load(f)
+            snap['fetched_epoch'] -= 11 * 60
+            with open(gh_task.BOARD_CACHE, 'w', encoding='utf-8') as f:
+                json.dump(snap, f)
+            before = len(calls)
+            rc, _ = _run_main(['board'])
+            assert rc == 0 and len(calls) > before, '11 分前の残した JSON を使った'
+
+        t('board: 1 回目は gh を叩き、10 分以内の 2 回目と --from は叩かず、--refresh・Project の違い・11 分前は取り直す',
+          _first_fetch_then_cache)
+
+        def _summary_counts() -> None:
+            fresh()
+            rc, out = _run_main(['board', '--text'])
+            assert rc == 0, f'exit {rc}: {out}'
+            for label, count in {**expected_summary, **expected_not_ready}.items():
+                assert re.search(rf'^\s*- {re.escape(label)}: {count}(?:\D|$)', out, re.MULTILINE), (
+                    f'要約の「{label}: {count}」が無い:\n{out[:1500]}'
+                )
+            wave2 = [line for line in out.splitlines() if line.startswith('- #2 ') and '合計' in line]
+            assert wave2 and '合計 12・open 11・止まっている 8' in wave2[0], f'wave #2 の行の件数が違う: {wave2}'
+            assert '循環' in out, '循環している wave の印が無い'
+            rc, ready_out = _run_main(['ready'])
+            assert rc == 0 and '着手可 1 件' in ready_out and '#30' in ready_out, (
+                f'ready と board の「着手できる」がずれた: {ready_out}'
+            )
+
+        t('board: 要約の件数（止まっている区分・着手できない理由）と wave ごとの件数が偽の板と一致し、ready と同じ数',
+          _summary_counts)
+
+        def _html_escapes_and_links() -> None:
+            fresh()
+            rc, _ = _run_main(['board'])
+            assert rc == 0
+            with open(gh_task.BOARD_HTML, encoding='utf-8') as f:
+                page = f.read()
+            assert _BOARD_XSS_TITLE not in page and '&lt;script&gt;alert(1)&lt;/script&gt;' in page, '題名をエスケープしていない'
+            assert 'javascript:' not in page, 'https の github.com 以外の URL をリンクにした'
+            assert f'href="{_BOARD_URL.format(31)}"' in page, 'github.com の issue をリンクにしていない'
+            for heading in ('どこで何件止まっているか', 'wave ごとの件数', 'wave の依存図', '止まっている task（10 件）'):
+                assert heading in page, f'HTML に「{heading}」が無い'
+            assert 'class="node cycle"' in page, '循環している wave の箱に印が無い'
+            assert all('mutation' not in c and '-X' not in c for c in calls), f'読むだけのはずが書き込みを呼んだ: {calls}'
+            assert 'name="viewport" content="width=device-width,initial-scale=1"' in page, 'viewport の meta が無い'
+            assert '<div class="scroll"><svg' in page and '<div class="scroll"><table' in page, '図と表を横スクロールの箱に入れていない'
+
+        t('board: HTML は題名をエスケープし、https の github.com だけをリンクにし、書き込みを呼ばない', _html_escapes_and_links)
+
+        def _failures_keep_good_cache() -> None:
+            fresh()
+            assert _run_main(['board'])[0] == 0
+            with open(gh_task.BOARD_CACHE, 'rb') as f:
+                good = f.read()
+            for mode in ('fail', 'errors', 'truncated'):
+                use(mode)
+                out_path = os.path.join(base, f'bad-{mode}', 'b.html')
+                rc, out = _run_main(['board', '--refresh', '--out', out_path])
+                assert rc == 1, f'{mode}: exit {rc}（期待 1）: {out}'
+                with open(gh_task.BOARD_CACHE, 'rb') as f:
+                    assert f.read() == good, f'{mode}: 良い残した JSON を上書きした'
+                assert not os.path.exists(out_path), f'{mode}: 落ちたのに HTML を書いた'
+            use()
+
+        t('board: gh の失敗・errors・blocked by の打ち切りは exit 1 で、良い残した JSON を上書きせず HTML も書かない',
+          _failures_keep_good_cache)
+
+        def _bad_args_exit_2_without_gh() -> None:
+            fresh()
+            present = os.path.join(base, 'present.json')  # 在るファイル（無いファイルの exit 2 で偶然通らないように）
+            with open(present, 'w', encoding='utf-8') as f:
+                f.write('{}')
+            for argv in (['--wave', '0'], ['--wave', 'abc'], ['--wave', '2'], ['--text', '--wave', '2', '--task', '30'],
+                         ['--from', present, '--refresh'], ['--bogus'], ['--out'], ['--text', '--out', 'x.html'],
+                         ['--text', '--text'], ['--task', '٣', '--text'], ['--summary', '--text'],
+                         ['--summary', '--out', 'x.html'], ['--publish', '0'], ['--publish', '90', '--from', present],
+                         ['--publish', '90', '--text'], ['--publish', '90', '--out', 'x.html'],
+                         ['--text', '--summary', '--publish', '90']):
+                rc, out = _run_main(['board', *argv])
+                assert rc == 2, f'{argv}: exit {rc}（期待 2）: {out}'
+            assert calls == [], f'不正な引数で gh を叩いた: {calls}'
+            rc, _ = _run_main(['board', '--from', os.path.join(base, 'no-such.json')])
+            assert rc == 2 and calls == [], '--from の無いファイルが exit 2 でない'
+            broken = os.path.join(base, 'broken.json')
+            with open(broken, 'w', encoding='utf-8') as f:
+                f.write('{"items": 3}')
+            rc, _ = _run_main(['board', '--from', broken])
+            assert rc == 1 and calls == [], '--from の壊れた JSON が exit 1 でない'
+
+        t('board: 不正な引数と無い --from は exit 2、壊れた --from は exit 1 で、どれも gh を叩かない', _bad_args_exit_2_without_gh)
+
+        def _text_scopes() -> None:
+            fresh()
+            rc, out = _run_main(['board', '--text', '--task', '35'])
+            marked = [line for line in out.splitlines() if '←' in line]
+            assert rc == 0 and len(marked) == 1 and '#35' in marked[0], f'--task の印が 1 行でない: {marked}'
+            assert not any(line.startswith('- #1 ') for line in out.splitlines()), '--task の木に別の wave が混ざった'
+            rc, out = _run_main(['board', '--text', '--wave', '1'])
+            assert rc == 0 and 'F1 済み' in out and 'F2 進める' not in out, '--wave がその wave に絞っていない'
+            rc, out = _run_main(['board', '--text', '--feature', '21'])
+            assert rc == 0 and 'T41 親が承認待ち' in out and 'T30 着手できる' not in out, '--feature がその feature に絞っていない'
+            for argv in (['--task', '999'], ['--task', '50'], ['--wave', '20'], ['--feature', '2']):
+                rc, out = _run_main(['board', '--text', *argv])
+                assert rc == 2, f'{argv}: 木を決められない番号が exit {rc}（期待 2）: {out}'
+
+        t('board: --text の --task は印を 1 行に付け、--wave・--feature はその下に絞り、決められない番号は exit 2', _text_scopes)
+
+        def _summary_markdown() -> None:
+            fresh()
+            rc, out = _run_main(['board', '--summary'])
+            assert rc == 0, f'exit {rc}: {out}'
+            lines = out.splitlines()
+            assert max(len(line) for line in lines) <= 44, f'1 行が長い: {max(lines, key=len)!r}'
+            assert all(line.count('|') <= 4 for line in lines), '表が 3 列を超えた'
+            for want in ('### あなたの番', '承認待ちの feature（ボードで着手可に） 1', '- #21 F3 承認待ち', '判断待ち（裁定する） 1',
+                         '[User] の作業 1', 'レビュー中（PR の merge） 1', '### 止まっている 10', '| 着手可だが着手できない | 4 |',
+                         '- #31 T31 自分が止められている（自分の待ち）', '- #35 T35 feature をまたいで待つ ← #40'):
+                assert want in out, f'要約に「{want}」が無い:\n{out}'
+            assert '<script>' not in out and '＜script＞' in out, '題名の < > を全角にしていない'
+            with open(gh_task.BOARD_CACHE, encoding='utf-8') as f:
+                snap = json.load(f)
+            for item in snap['items']:
+                if item['number'] == 37:
+                    item['status'] = '進行中'
+            snap['items'] += [dict(snap['items'][0], number=80 + k, title=f'待ち {k}', kind='task', status='依存待ち',
+                                   parent_number=20, url=_BOARD_URL.format(80 + k)) for k in range(7)]
+            alt = os.path.join(base, 'alt.json')
+            with open(alt, 'w', encoding='utf-8') as f:
+                json.dump(snap, f, ensure_ascii=False)
+            rc, out = _run_main(['board', '--summary', '--from', alt])
+            assert rc == 0 and '| 保留 |' not in out, f'0 件の区分を省いていない:\n{out}'
+            assert '#### 依存待ち 8' in out and '- ほか 3 件' in out, f'上位 5 件と残りの件数になっていない:\n{out}'
+            assert writes() == [], f'--publish なしで書き込みを呼んだ: {writes()}'
+
+        t('board: --summary は 1 行 44 字以内・表 2 列で、あなたの番・止まっている区分（0 件は省く）・上位 5 件を出し、書き込まない',
+          _summary_markdown)
+
+        def _publish_only_between_markers() -> None:
+            fresh()
+            api = 'https://api.github.com/repos/example-org/example-repo'
+            store.clear()
+            store.update({
+                90: {'state': 'open', 'repository_url': api, 'html_url': _BOARD_URL.format(90),
+                     'body': f'前の文\r\n{gh_task.BOARD_START}\n古い\n{gh_task.BOARD_END}\n後ろの文'},
+                91: {'state': 'open', 'repository_url': api, 'body': '本文だけ'},
+                92: {'state': 'closed', 'repository_url': api, 'body': 'x'},
+                93: {'state': 'open', 'repository_url': api, 'body': 'x', 'pull_request': {}},
+                94: {'state': 'open', 'repository_url': 'https://api.github.com/repos/other/repo', 'body': 'x'},
+                95: {'state': 'open', 'repository_url': api, 'body': f'x\n{gh_task.BOARD_START}\ny'},
+            })
+            rc, out = _run_main(['board', '--publish', '90'])
+            body = store[90]['body']
+            assert rc == 0 and '## 進捗 Project #7' in body and '古い' not in body, f'差し替わっていない: {body!r} {out}'
+            assert body.startswith(f'前の文\r\n{gh_task.BOARD_START}\n') and body.endswith(f'{gh_task.BOARD_END}\n後ろの文'), (
+                f'目印の外が変わった: {body!r}'
+            )
+            assert len(writes()) == 1, f'PATCH が {len(writes())} 回'
+            assert _run_main(['board', '--publish', '90'])[0] == 0 and store[90]['body'] == body and len(writes()) == 1, (
+                '2 回目で本文が変わったか、同じ中身を書き直した'
+            )
+            assert _run_main(['board', '--publish', '91'])[0] == 0, '目印の無い issue に書けない'
+            first = store[91]['body']
+            assert first.startswith(f'本文だけ\n\n{gh_task.BOARD_START}\n') and first.endswith(f'{gh_task.BOARD_END}\n'), (
+                f'目印を末尾に足していない: {first!r}'
+            )
+            rc, _ = _run_main(['board', '--publish', '91', '--refresh'])
+            assert rc == 0 and len(store[91]['body']) == len(first), '2 回目（取り直し）で本文が増えた'
+            before = {k: dict(v) for k, v in store.items()}
+            done = len(writes())
+            for number, code in ((92, 2), (93, 2), (94, 2), (95, 2), (999, 1)):
+                rc, out = _run_main(['board', '--publish', str(number)])
+                assert rc == code, f'#{number}: exit {rc}（期待 {code}）: {out}'
+            assert len(writes()) == done and store == before, '書いてはいけない issue に書いた'
+
+        t('board: --publish は目印の間だけを差し替え（外は 1 バイトも変えず・2 回目で増えず）、閉じた・PR・別 repo・片方の目印・'
+          '取れない issue には書かない', _publish_only_between_markers)
+
+        def _summary_titles_make_no_mentions_or_links() -> None:
+            board_mod = gh_task._load_board_module()
+            got = board_mod.short('@octocat ![x](http://e.invalid/x.png) [a](http://e.invalid) |b| `c` <!-- x -->', 200)
+            for ch in ('@', '[', ']', '|', '`', '<', '>'):
+                assert ch not in got, f'要約の題名に {ch!r} が残った（通知・リンク・表の崩れ・目印を作れる）: {got!r}'
+            assert 'octocat' in got and 'http://e.invalid' in got, f'題名の中身まで消した: {got!r}'
+
+        t('board: 要約の題名は @ の通知・リンク・画像・表の区切り・コード・目印を作らない（文字は残す）',
+          _summary_titles_make_no_mentions_or_links)
+
+        def _publish_always_refetches() -> None:
+            fresh()
+            api = 'https://api.github.com/repos/example-org/example-repo'
+            store.clear()
+            store.update({90: {'state': 'open', 'repository_url': api, 'html_url': _BOARD_URL.format(90), 'body': '本文'}})
+            assert _run_main(['board', '--summary'])[0] == 0
+            seen = len(calls)
+            rc, out = _run_main(['board', '--publish', '90'])
+            assert rc == 0, f'exit {rc}: {out}'
+            assert any('graphql' in c for c in calls[seen:]), '控えが新しくても --publish は取り直す（古い Status を本文に載せない）'
+
+        t('board: --publish は 10 分以内の控えがあっても取り直してから書く', _publish_always_refetches)
+    finally:
+        gh_task.run_gh, gh_task.BOARD_CACHE, gh_task.BOARD_HTML, gh_task.PROJECT_NUMBER_OVERRIDE = orig
+
+
 def _expect_exit(fn, expected_code: int) -> None:
     try:
         fn()
@@ -7037,6 +7410,8 @@ def main() -> int:
             assert status == '', f'控えが作業ツリーに現れて追跡の対象になった: {status!r}'
 
         t('控えは git ディレクトリの下に置き、worktree で共有し、作業ツリーを汚さない', _state_dirs_live_in_git_dir)
+
+        _board_checks(t, cache_tmp_dir)
     finally:
         gh_task.run_gh = orig_run_gh
         gh_task.PROJECT_NUMBER_OVERRIDE = orig_override
