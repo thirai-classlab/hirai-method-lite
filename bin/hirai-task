@@ -4895,6 +4895,10 @@ def board_view(snap: dict, how: str) -> dict:
     for i in issues:
         if i.get('state') == 'CLOSED' or i.get('status') != READY_STATUS or (i.get('kind') or '') in EXCLUDE_KINDS:
             continue
+        if has_mark(i.get('title') or '', USER_MARK):
+            # [User] は人の作業で、AI が着手するものではない。「着手可なのに着手できない」に数えず、
+            # 「[User] の人の作業」の区分にだけ出す（ready の判定 ready_block_reason は変えない）。
+            continue
         reason = ready_block_reason(i, items_by_number, children_of, extras, bodies) \
             if i.get('kind') == TASK_KIND else '種別が task でない（空を含む。ready に出ない）'
         if reason:

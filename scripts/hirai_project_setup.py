@@ -16,7 +16,8 @@ Project の選び方も同じ: HIRAI_TASK_PROJECT があればその番号、無
 （選択肢を足すときは既存の選択肢を id ごと渡す。id を渡さないと、その値を持つ行の値が消える）。
 
 API でできる（--apply で自動にする）: Project の作成か複製、リポへの紐づけ、項目「種別」「着手順」、
-Status の 8 値、ビュー 8 枚とその絞り込み（承認ビューは前の版の値のときだけ書き換える）、カードを写す項目「ひとこと」「推奨」。
+Status の 8 値、ビュー 8 枚とその絞り込み（承認ビューは前の版の値のときだけ書き換える）、カードを写す項目「ひとこと」「推奨」と、
+承認ビューのその 2 列（今の列の後ろに足す。v2.8.1）。
 画面に残る（確認リストに出す）: 組込の自動化の On と設定値（API は読むのと消すのだけ）、
 全体ビューの階層表示（Hierarchy）・並べ替え・グループ化（ビューの設定の API は表示する項目だけ）。
 出典（2026-11-15 に確かめた）:
@@ -90,7 +91,7 @@ WORKFLOWS = (
     ('Auto-add sub-issues to project', 'On のまま'),
 )
 NEW_PROJECT_STATUS = ('Todo', 'In Progress', 'Done')  # 作った直後の既定（行が無いので置き換えてよい）
-MUTATION_TAGS = ('update-field', 'create-view', 'update-view')
+MUTATION_TAGS = ('update-field', 'create-view', 'update-view', 'update-view-columns')
 READ_TAGS = ('state', 'project')  # 読むだけの問い合わせ。selftest はこれ以外をすべて書き込みとみなす
 WRITE_SUBCOMMANDS = ('create', 'copy', 'link', 'field-create')
 
@@ -170,7 +171,7 @@ FRAGMENT = '''fragment P on ProjectV2 { id number title url
   repositories(first: 20) { nodes { nameWithOwner } }
   fields(first: 50) { nodes { ... on ProjectV2FieldCommon { id name dataType }
     ... on ProjectV2SingleSelectField { options { id name color description } } } }
-  views(first: 50) { nodes { id number name filter } }
+  views(first: 50) { nodes { id number name filter fields(first: 50) { nodes { ... on ProjectV2FieldCommon { id name } } } } }
   workflows(first: 30) { nodes { name enabled } } }'''
 STATE_QUERY = '''#hps:state
 query($owner:String!, $name:String!) { viewer { login } repositoryOwner(login:$owner) { __typename }
@@ -189,6 +190,12 @@ mutation($projectId:ID!, $name:String!) {
 UPDATE_VIEW = '''#hps:update-view
 mutation($viewId:ID!, $filter:String!) {
   updateProjectV2View(input:{viewId:$viewId, filter:$filter}) { projectV2View { id } } }'''
+# 列（表示する項目）。渡した一覧がそのまま列になるので、今の列の後ろに足した一覧を渡す（今の列を消さない）。
+# 2026-11-15、rmp-app の Project #7 の view 5 でこの mutation を当てて、足した列が末尾に出ることを確かめた。
+UPDATE_VIEW_COLUMNS = '''#hps:update-view-columns
+mutation($viewId:ID!, $fields:[ID!]) {
+  updateProjectV2View(input:{viewId:$viewId, configuration:{visibleFieldIds:$fields}}) { projectV2View { id } } }'''
+APPROVAL_VIEW = '承認'
 
 
 def normalize(node: dict | None) -> dict | None:
@@ -288,7 +295,19 @@ def plan_existing(project: dict, ctx: dict, *, fresh: bool) -> tuple[list[dict],
         elif (view.get('filter') or '').strip() != flt:
             conflicts.append({'what': f'ビュー「{name}」の絞り込みが違う', 'where': view_url(ctx, view),
                               'value': flt, 'state': f'いまは {view.get("filter") or "（なし）"}。変えていない'})
+    # 承認ビューに承認カードの 2 列（ひとこと・推奨）を出す。作るビューは列がまだ無いので、作ったあとで足す。
+    shown = {f.get('name') for f in view_columns(have.get(APPROVAL_VIEW))}
+    add = [n for n in (HEADLINE_FIELD, RECOMMEND_FIELD) if n not in shown]
+    if add:
+        steps.append({'kind': 'view-columns', 'name': APPROVAL_VIEW, 'add': add,
+                      'summary': f'ビュー「{APPROVAL_VIEW}」に列 {"・".join(add)} を出す（今の列は消さず、末尾に足す）',
+                      'command': 'gh api graphql（updateProjectV2View の configuration.visibleFieldIds）'})
     return steps, conflicts
+
+
+def view_columns(view: dict | None) -> list[dict]:
+    """ビューに今見えている項目（{id, name}）を並びのまま。"""
+    return [f for f in ((view or {}).get('fields') or {}).get('nodes') or [] if f and f.get('id')]
 
 
 def view_url(ctx: dict, view: dict | None) -> str:
@@ -314,10 +333,6 @@ def checklist(project: dict | None, ctx: dict, route: str) -> list[dict]:
                  'value': '階層 On・並べ替えなし', 'state': '画面で On にする（API で設定できない）'})
     rows.append({'what': 'wave の並び', 'where': view_url(ctx, whole),
                  'value': '全体ビューで wave の行を並べ替える（行の並び = wave の並び）', 'state': '人が決める'})
-    approval = next((v for v in (project or {}).get('views', []) if v['name'] == '承認'), None)
-    rows.append({'what': f'承認ビューに項目「{HEADLINE_FIELD}」「{RECOMMEND_FIELD}」の列を出す', 'where': view_url(ctx, approval),
-                 'value': '列の + から 2 つ足す（承認カードの決めることと推奨。スマートフォンでもこの 2 列で判断する）',
-                 'state': '画面で足す（この道具は列の表示を変えない）'})
     return rows
 
 
@@ -346,6 +361,19 @@ def execute(step: dict, project: dict, ctx: dict) -> None:
         graphql(UPDATE_VIEW, {'viewId': view['id'], 'filter': step['filter']})
     elif step['kind'] == 'view-filter':
         graphql(UPDATE_VIEW, {'viewId': step['viewId'], 'filter': step['filter']})
+    elif step['kind'] == 'view-columns':
+        # 項目とビューはこの回に作ったかもしれないので、id を読み直してから足す
+        fresh = read_project(ctx['owner'], project['number'])
+        view = next((v for v in fresh['views'] if v.get('name') == step['name']), None)
+        missing = [n for n in step['add'] if not (fresh['fields'].get(n) or {}).get('id')]
+        if view is None or missing:
+            raise SetupError(f'ビュー「{step["name"]}」に列を足せない（'
+                             + ('ビューが無い' if view is None else '項目が無い: ' + '・'.join(missing)) + '）', 1)
+        columns = view_columns(view)
+        names = {f.get('name') for f in columns}
+        add = [fresh['fields'][n]['id'] for n in step['add'] if n not in names]
+        if add:
+            graphql(UPDATE_VIEW_COLUMNS, {'viewId': view['id'], 'fields': [f['id'] for f in columns] + add})
     step['done'] = True
 
 
@@ -510,7 +538,9 @@ if argv[:2] == ["auth", "status"]:
         sys.stderr.write("unknown flag: --active"); sys.exit(1)
     sys.stderr.write(sc.get("auth", "")); sys.exit(sc.get("auth_rc", 0))
 if tag:
-    out = sc["graphql"][tag]
+    out = sc["graphql"].get(tag, {"data": {}} if tag.startswith(("update-", "create-")) else None)
+    if out is None:
+        sys.stderr.write("fake gh: no answer for " + tag); sys.exit(9)
     print(json.dumps(out[min(seen, len(out) - 1)] if isinstance(out, list) else out)); sys.exit(0)
 if argv[:2] in (["project", "create"], ["project", "copy"]):
     print(json.dumps(sc[argv[1]])); sys.exit(0)
@@ -523,7 +553,8 @@ sys.stderr.write("fake gh: unexpected " + " ".join(argv)); sys.exit(9)
 AUTH_OK = "github.com\n  ✓ Logged in to github.com account me (keyring)\n  - Token scopes: 'gist', 'project', 'repo'\n"
 
 
-def _proj(number, org=True, repos=(), status=(), kind=None, order=False, views=(), workflows=None, owner='acme', cards=False):
+def _proj(number, org=True, repos=(), status=(), kind=None, order=False, views=(), workflows=None, owner='acme', cards=False,
+          view_cards=None):
     fields = [{'id': 'F_t', 'name': 'Title', 'dataType': 'TITLE'}]
     if status is not None:
         fields.append({'id': 'F_s', 'name': STATUS_FIELD, 'dataType': 'SINGLE_SELECT',
@@ -541,7 +572,11 @@ def _proj(number, org=True, repos=(), status=(), kind=None, order=False, views=(
     return {'id': f'PVT_{number}', 'number': number, 'title': f'p{number}',
             'url': f'https://github.com/{"orgs" if org else "users"}/{owner}/projects/{number}',
             'repositories': {'nodes': [{'nameWithOwner': r} for r in repos]}, 'fields': {'nodes': fields},
-            'views': {'nodes': [{'id': f'V{i}', 'number': i + 1, 'name': n, 'filter': f} for i, (n, f) in enumerate(views)]},
+            'views': {'nodes': [{'id': f'V{i}', 'number': i + 1, 'name': n, 'filter': f, 'fields': {'nodes': (
+                [{'id': 'F_t', 'name': 'Title'}, {'id': 'F_s', 'name': STATUS_FIELD}]
+                + ([{'id': 'F_h', 'name': HEADLINE_FIELD}, {'id': 'F_r', 'name': RECOMMEND_FIELD}]
+                   if (cards if view_cards is None else view_cards) and n == '承認' else []))}}
+                for i, (n, f) in enumerate(views)]},
             'workflows': {'nodes': [{'name': n, 'enabled': e} for n, e in (workflows or {}).items()]}}
 
 
@@ -628,14 +663,16 @@ def selftest() -> int:
     rc, out, calls = run_case({'graphql': {'state': _state([], org=False, viewer='other')}}, ['--apply'])
     expect('個人で本人でないなら --apply は exit 1 で何も書かない', (1, []), (rc, writes(calls)))
 
-    sc = {'create': {'number': 3}, 'graphql': {'state': empty, 'project': [new_pq, new_pq],
+    built = _pq(_proj(3, status=full, kind=['wave', 'feature', 'task', '設計メモ'], order=True, cards=True, view_cards=False,
+                      views=VIEWS))  # 作ったあとの読み直し（列はまだ出ていない）
+    sc = {'create': {'number': 3}, 'graphql': {'state': empty, 'project': [new_pq, built, built],
                                                 'create-view': {'data': {'createProjectV2View': {'projectV2View': {'id': 'NV', 'number': 9}}}},
                                                 'update-view': {'data': {}}, 'update-field': {'data': {}}}}
     rc, out, calls = run_case(sc, ['--apply', '--title', 'X'])
     seq = [c['tag'] or ' '.join(c['argv'][:2]) for c in calls]
     expect('--apply（新規）の順番', ['auth status', 'state', 'project create', 'project', 'project link', 'update-field',
                                     'project field-create', 'project field-create', 'project field-create', 'project field-create']
-           + ['create-view', 'update-view'] * 8 + ['project'],
+           + ['create-view', 'update-view'] * 8 + ['project', 'update-view-columns', 'project'],
            seq)
     create = next(c['argv'] for c in calls if c['argv'][:2] == ['project', 'create'])
     expect('--apply の作成は owner と題名を渡す', ['--owner', 'acme', '--title', 'X'], create[2:6])
@@ -668,7 +705,7 @@ def selftest() -> int:
                                                                 (['project', 'create'], ['project', 'link'], ['project', 'copy'])])
 
     # 前の --apply で作ったビューに絞り込みを入れ損ねた（updateProjectV2View の失敗）ときの立て直し
-    blank = _proj(6, repos=('acme/app',), status=full, kind=['wave', 'feature', 'task', '設計メモ'], order=True,
+    blank = _proj(6, repos=('acme/app',), status=full, kind=['wave', 'feature', 'task', '設計メモ'], order=True, cards=True,
                   views=[(n, '' if n == '止まっているもの' else f) for n, f in VIEWS])
     sc = {'graphql': {'state': _state([blank]), 'project': _pq(blank), 'update-view': {'data': {}}}}
     rc, out, calls = run_case(sc, [])
@@ -704,8 +741,17 @@ def selftest() -> int:
            (rc, 'gh project copy 1 --source-owner tpl --target-owner acme' in out, out.count('createProjectV2View'),
             out.count('field-create'), writes(calls)))
     expect('テンプレートの経路は Auto-add を画面の作業に回す', True, 'On にする（複製では引き継がれない）' in out)
-    expect('承認ビューに「ひとこと」「推奨」の列を出す作業を画面の表に出す', True,
+    expect('承認ビューの列は画面の作業の表に出さない（API で出す）', False,
            f'承認ビューに項目「{HEADLINE_FIELD}」「{RECOMMEND_FIELD}」の列を出す' in out)
+    shown = _proj(10, repos=('acme/app',), status=full, kind=['wave', 'feature', 'task', '設計メモ'], order=True, cards=True,
+                  view_cards=False, views=VIEWS, workflows=wf_all)
+    rc, out, calls = run_case({'graphql': {'state': _state([shown]), 'project': _pq(shown)}}, [])
+    expect('承認ビューに列が見えていなければ、計画に「列を出す」手順が出る（書かない）', (0, True, []),
+           (rc, f'ビュー「承認」に列 {HEADLINE_FIELD}・{RECOMMEND_FIELD} を出す' in out, writes(calls)))
+    rc, out, calls = run_case({'graphql': {'state': _state([shown]), 'project': _pq(shown)}}, ['--apply'])
+    cols = [c['vars'] for c in calls if c['tag'] == 'update-view-columns']
+    expect('列を出すのは今の列の後ろに 2 つを足した一覧（今の列は消さない・並びを変えない）',
+           (0, [{'viewId': 'V0', 'fields': ['F_t', 'F_s', 'F_h', 'F_r']}]), (rc, cols))
     copied = _proj(4, status=full, kind=['wave', 'feature', 'task', '設計メモ'], order=True, views=VIEWS[:-1], cards=True)
     old_view = _proj(8, repos=('acme/app',), status=full, kind=['wave', 'feature', 'task', '設計メモ'], order=True, cards=True,
                      views=[('承認', OLD_VIEW_FILTERS['承認'][0])] + list(VIEWS[1:]))
@@ -728,7 +774,7 @@ def selftest() -> int:
                                                                           'project link', 'create-view', 'update-view', 'project'], seq)
     rc, out, _ = run_case({'graphql': {'state': _state([done])}}, ['--json'])
     parsed = json.loads(out) if rc == 0 else {}
-    expect('--json は機械可読（route・steps・checklist）', ('existing', 0, 8),
+    expect('--json は機械可読（route・steps・checklist）', ('existing', 0, 7),
            (parsed.get('route'), len(parsed.get('steps', [1])), len(parsed.get('checklist', []))))
     if failures:
         print(f'FAIL: hirai_project_setup selftest（{len(failures)} 件）')
