@@ -1,5 +1,6 @@
 ---
 description: ハーネス (プラグイン hirai-lite) を最新版に更新し、旧レイアウトの書類を docs/ へ移し、rules を再配置し、プラグイン所有の 3 ファイルを入れ替えて、VERSION で版が上がったことを検証する。
+disable-model-invocation: true
 ---
 
 # /update
@@ -11,7 +12,7 @@ description: ハーネス (プラグイン hirai-lite) を最新版に更新し�
 | プラグイン所有 | `statusline.sh` / `tasks-path.sh` / `context-usage.sh` | **配布版で上書きする**（中身が違えば `.bak` に控えを取ってから） |
 | 利用者所有 | `rules/*.md` / `settings.json` / `mode.yml` / 台帳 (`list.md` `parking-lot.md`) / `CLAUDE.md` / `docs/` | **上書きしない** |
 
-配置先はプロジェクト側 (`.claude/`) と全プロジェクト共通 (`$HOME/.claude/`) の 2 通りある (`/init` に `user` を付けたかで決まる)。**どちらに置いたかを決め打ちしない。** 手順 4 は両方を見て、**すでに在る側だけ**を入れ替える。`.claude/rules/` は `/add-rule` で育てる利用者の資産なので 1 件も書き換えない。新しい rules を取り込みたいときだけ、取り込む 1 本を自分で消してから手順 3 の `/init` を実行する。
+配置先はプロジェクト側 (`.claude/`) と全プロジェクト共通 (`$HOME/.claude/`) の 2 通りある (`/hirai-lite:init` に `user` を付けたかで決まる)。**どちらに置いたかを決め打ちしない。** 手順 4 は両方を見て、**すでに在る側だけ**を入れ替える。`.claude/rules/` は `/add-rule` で育てる利用者の資産なので 1 件も書き換えない。新しい rules を取り込みたいときだけ、取り込む 1 本を自分で消してから手順 3 を実行する。
 **語の使い分け（表示も報告もこれで統一する）。** `移動` は中身が元の場所から消える操作 (`mv`) だけに使う。`控えを作成` / `複製` はコピー (`cp`) で、**元のファイルはそのまま残る**。混ぜて書くと、利用者は自分の資産が消えたと受け取る。
 
 ## 素材行 — プラグイン本体の場所を解決する 1 行
@@ -105,8 +106,7 @@ bash "$P/scripts/scope-check.sh" .claude "$HOME/.claude" .
 
 ## 手順 3: rules を再配置する
 
-**rules はプラグイン更新では導入先に配られない。** 更新後に必ず `/hirai-lite:init` を実行する（全プロジェクト共通 `~/.claude/rules/` に入れている場合は `/hirai-lite:init user`）。どちらに入れたか分からないときは `ls ~/.claude/rules/*.md .claude/rules/*.md 2>/dev/null` で確かめる（両方に出たら二重ロードなので、`/init` の警告に従ってどちらか一方を消す）。
-`/init` は既存ファイルを 1 つも上書きしない。新しい rules を取り込むには、取り込みたいファイルを rules から先に削除してから `/init` を実行する。手順 0 の控えと `diff -ru "$B/rules.project" .claude/rules`（ホーム側なら `diff -ru "$B/rules.home" "$HOME/.claude/rules"`）で突き合わせ、自分の変更が消えていないかを確認する。
+**rules はプラグイン更新では導入先に配られない。** 更新後に必ず `/hirai-lite:init` の第 1 段階を実行する（全プロジェクト共通 `~/.claude/rules/` に入れている場合は `user` を付けたときの手順）。`/hirai-lite:init` は `disable-model-invocation: true` で Claude からは呼べないので、**`$P/commands/init.md` を Read し、その手順 1〜9 をこの場で実行する**（手順 0 の段階の判定は使わず、ヒアリングの手順 10 へは進まない。利用者に打ち直してもらわない）。どちらに入れたか分からないときは `ls ~/.claude/rules/*.md .claude/rules/*.md 2>/dev/null` で確かめる（両方に出たら二重ロードなので、`/init` の警告に従ってどちらか一方を消す）。 `/hirai-lite:init` は既存ファイルを 1 つも上書きしない。新しい rules を取り込むには、取り込みたいファイルを rules から先に削除してから `/hirai-lite:init` を実行する。手順 0 の控えと `diff -ru "$B/rules.project" .claude/rules`（ホーム側なら `diff -ru "$B/rules.home" "$HOME/.claude/rules"`）で突き合わせ、自分の変更が消えていないかを確認する。
 
 ## 手順 4: プラグイン所有の 3 ファイルを入れ替え、足りない参照資料を足す
 
@@ -123,7 +123,7 @@ for D in .claude "$HOME/.claude"; do
 done
 ```
 
-- `same` / `updated` が 1 件も出ない場合は、手順 3 の `/init` がまだ済んでいない。手順 3 に戻る。
+- `same` / `updated` が 1 件も出ない場合は、手順 3 の `/hirai-lite:init` の手順がまだ済んでいない。手順 3 に戻る。
 - 最後に 2 行出力されれば、入れ替え後も画面下部の表示は動いている。出力が無い / エラーになる場合は `cp <その statusline.sh>.bak <その statusline.sh>` で戻し、内容を報告する。
 - `.bak` を作ったときは手順 6 の報告に必ず 1 行入れる。作っていなければ触れない。**入れ替える（上書きする）のはこの 3 本だけ。** 承認の型 (`docs/rules-reference/approval-template.md`) は v1.14.2 で `/init` が配るようになった参照資料で、**それ以前に導入した環境には無い**。在れば 1 バイトも触らず、**無いときだけ足す**（利用者所有ファイルを上書きしないという原則は保ったまま、欠けているものだけ補う）。`docs/rules-reference/` が無い環境（全プロジェクト共通で入れた場合など）には置かない — ポインタの 2 段目「プラグイン同梱の同名ファイル」で解決する。
 
@@ -180,7 +180,7 @@ bash の出力は作業ログであって報告ではない。**最後に必ず�
 
 ## 更新検知について
 
-SessionStart で `[harness] 更新あり vX → vY (/update で適用)` が出た時だけ実行すればよい。検知は 24 時間に 1 回・背景通信で、オフラインでも起動を遅らせない。止めたい場合は `HARNESS_UPDATE_CHECK=off` を環境変数に設定する。
+SessionStart で `[harness] 更新あり vX → vY (/hirai-lite:update で適用)` が出た時だけ実行すればよい。検知は 24 時間に 1 回・背景通信で、オフラインでも起動を遅らせない。止めたい場合は `HARNESS_UPDATE_CHECK=off` を環境変数に設定する。
 **通知が出ないことは「最新である」ことの証明にはならない**（実測で確認済み）。入れた直後の 1 セッション目（表示に使うのは前回の取得結果なので、比べる相手が無い）と、前回の取得から 24 時間の間（その後に新版が出ても次の取得まで気づかない）は必ず沈黙する。いますぐ確かめるには:
 
 ```bash

@@ -21,13 +21,13 @@ git diff --cached --stat
 ```bash
 git add <その単位のファイルを明示列挙>
 git diff --cached --stat          # 意図した file だけが載っていることを確認
-/verify                            # build / test / lint が exit 0
+/hirai-lite:verify                 # build / test / lint が exit 0（素の /verify は組み込みのアプリ確認に当たる）
 git commit -m "<type>: <件名>"
 ```
 
 `git add -A` と `git add .` は使わない。ファイル名を明示して add する。
 
-5. `/verify` が exit 0 以外を返した単位は commit しない。出力末尾 20 行を提示して停止する。
+5. `/hirai-lite:verify` が exit 0 以外を返した単位は commit しない。出力末尾 20 行を提示して停止する。
 6. 全単位の commit 後に結果を検証する。
 
 ```bash
@@ -45,7 +45,7 @@ git status --porcelain            # 出力が空、または意図的に残し�
 
 ## 承認が要る操作
 
-以下は user が承認するまで実行しない。**承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル）。
+以下は user が承認するまで実行しない。**承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル。`AskUserQuestion` が使えないときの平文の出し方も同じファイル）。
 
 - 既定ブランチ（`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` で引く）への push (`git push origin <既定ブランチ>`)
 - `gh pr merge`
@@ -58,4 +58,4 @@ feature branch への `git push` と `gh pr create` は実行してよい。こ�
 
 - `git log --oneline -1` が新しい commit を返す。
 - `git status --porcelain` の出力に、意図せず残ったファイルが無い。
-- 各 commit 時点で `/verify` が exit 0 だった。
+- 各 commit 時点で `/hirai-lite:verify` が exit 0 だった。

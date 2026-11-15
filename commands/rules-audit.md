@@ -1,5 +1,6 @@
 ---
 description: 四半期のルール棚卸し。T0/T1 の全ルールを列挙し、予算残・失効条件・発火実績を点検して削除候補を提示する。
+disable-model-invocation: true
 ---
 
 # /rules-audit
@@ -25,7 +26,7 @@ bash "$P/scripts/scope-check.sh" .claude "$HOME/.claude"
 ```bash
 P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 . "$P/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"
-for f in CLAUDE.md "$HOME/.claude/CLAUDE.md" "$R"/*.md; do
+for f in CLAUDE.md "$HOME/.claude/CLAUDE.md" AGENTS.md .claude/AGENTS.md "$R"/*.md; do  # AGENTS.md は直接か @AGENTS.md で毎回読まれる
   [ -f "$f" ] || continue
   if head -5 "$f" | grep -q '^paths:'; then L=T1; else L=T0; fi
   printf '%s\t%s\t%s bytes\n' "$L" "$f" "$(wc -c < "$f")"
@@ -40,15 +41,17 @@ done
 ```bash
 P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 . "$P/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"
-for f in CLAUDE.md "$HOME/.claude/CLAUDE.md" "$R"/*.md; do
+for f in CLAUDE.md "$HOME/.claude/CLAUDE.md" AGENTS.md .claude/AGENTS.md "$R"/*.md; do  # AGENTS.md は直接か @AGENTS.md で毎回読まれる
   [ -f "$f" ] || continue; head -5 "$f" | grep -q '^paths:' || wc -c "$f"
 done | awk '{s+=$1} END {print "T0:", s, "bytes ≈", int(s/3), "tokens / 警告 6000 / 上限 10000"}'
 for f in "$R"/*.md; do [ -f "$f" ] && head -5 "$f" | grep -q '^paths:' \
   && echo "T1 $f $(( $(wc -c < "$f") / 3 )) tokens / 上限 2000"; done
 ls "$R"/*.md | wc -l                                 # T1 は 6 本まで (導入先の rules)
 ls "$P"/hooks/*.sh | wc -l          # hook は 5 本まで (プラグイン側)
-ls "$P"/commands/*.md | wc -l       # command は 12 個まで (プラグイン側)
+ls "$P"/commands/*.md | wc -l       # command の数 (上限なし。v2.7.0 で外した)
 ```
+
+組み込みの点検も並べる。`/doctor prompt-audit "$R"`（Claude Code 2.1.283 以降の skill）は Claude が回し、古い書き方・存在しない参照・矛盾を修正案つきで受け取る。`/context all`（毎回読まれる量の実測）と `/skill-doctor`（skill ごとの常時の量と使われた回数。手元のターミナルだけで動き、Remote Control 越しでは使えない）は組み込みのコマンドで Claude からは呼べないので、user に打ってもらい結果を貼ってもらう。貼られなければ「未実測」と書いて先へ進む。
 
 ## ③ 失効条件の点検
 
@@ -89,12 +92,13 @@ git log --since='3 months ago' -S'<ルールに出てくる固有語>' --oneline
 2. 発火 0 のもの。
 3. `失効:` の記載が無いもの (記載を足すか削除するかを選ばせる)。
 4. T0 にあるが「どの作業のときだけ必要か」を 1 文で言えるもの (T1 へ降格)。
+5. `/doctor prompt-audit` が古い・矛盾と指したもの、`/skill-doctor` で使われていない skill (表の下に別表で出し、件数と元の指摘の文をそのまま添える)。`/doctor` の checkup が「常時読む指示を skill や入れ子の CLAUDE.md へ移す」と提案しても、T0 の `core.md`・`_meta.md` は毎回読む前提の層なので、そのまま受けずに user に判断を回す。
 
 ## ⑥ 実行
 
 1 と 2 は user 承認なしで削除する。削除したルールは行ごと `$R` と同じ側の `rules-archive/<元ファイル名>.md`
 (`$(dirname "$R")/rules-archive/…`) へ移し、日付と削除理由 1 行を添える。3 と 4 は user に選ばせる。
-**承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル）。 「どうやるか」には T0 の現在値 → 削除後の値を数字で入れる。
+**承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル。`AskUserQuestion` が使えないときの平文の出し方も同じファイル）。 「どうやるか」には T0 の現在値 → 削除後の値を数字で入れる。
 
 削除後に ② を再実行し、T0 tokens が減ったことを実測する。
 
@@ -102,5 +106,5 @@ git log --since='3 months ago' -S'<ルールに出てくる固有語>' --oneline
 
 - ⓪ でルールの置き場を実測し、① の列挙が 1 件以上ある。
 - 結果表を出力した。
-- T0 ≤ 10,000 tokens（6,000 超は警告として報告する）、T1 各 ≤ 2,000 tokens、T1 ≤ 6 本、hook ≤ 5 本、command ≤ 12 個が全部成立する。
+- T0 ≤ 10,000 tokens（6,000 超は警告として報告する）、T1 各 ≤ 2,000 tokens、T1 ≤ 6 本、hook ≤ 5 本が全部成立する（command は上限なし）。
 - 成立しない項目があれば、その項目名と実測値と削除候補を報告して停止する。

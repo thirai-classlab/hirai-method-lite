@@ -262,7 +262,7 @@
 |---|---|
 | 実装（簡単なものを含む）・検証・調査・移植・文書更新 | `sonnet`（既定） |
 | Workflow の各ステップでの実装 | `sonnet` |
-| レビュー（`code-reviewer` / `security-reviewer` 等の観点別レビュー） | 既定 (opus) |
+| レビュー（`/code-review` を回す reviewer・脆弱性の観点の reviewer 等の観点別レビュー） | 既定 (opus) |
 | 設計判断・統合レビュー（複数 reviewer の指摘を集約して判断する工程） | 既定 (opus) |
 
 **Workflow との対応**: `Workflow` ツールの `agent()` 呼び出しにも `model` を指定できる。ステップの実装は `sonnet`、複数ステップの成果を統合・判定する工程は既定のままにする — 委譲の粒度が「1 subagent」でも「Workflow の 1 ステップ」でも同じ基準で判断する。
