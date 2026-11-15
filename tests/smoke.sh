@@ -23,11 +23,12 @@ T0_MAX=3
 T0_BUDGET_WARN=6000
 T0_BUDGET_MAX=10000
 
-# 承認を求めるときに本文へ出す 5 項目。SSoT は T2 の docs/rules-reference/approval-template.md
-# (T0 rules/core.md には 5 項目の名前だけを置く)。承認はルール追加に限らず、タスク・設計・
-# 設定変更・元に戻せない操作にも効く汎用規範なので、本体は skill ではなく T2 に置いてある。
-# 語を変えると「どれが欠けているか」を数えられなくなるので、この語のまま検査する。
-APPROVAL_ITEMS='何をしたいか なぜ しないとどうなる トレードオフ どうやるか'
+# 承認を求めるときに本文へ出す承認カードの語 (v2.8.0。それまでの「判断材料 5 項目」を置き換えた)。
+# SSoT は T2 の docs/rules-reference/approval-template.md (T0 rules/core.md にはカードの名前と
+# 1 行目の形だけを置く)。承認はルール追加に限らず、タスク・設計・設定変更・元に戻せない操作にも
+# 効く汎用規範なので、本体は skill ではなく T2 に置いてある。語を変えると「どれが欠けているか」を
+# 数えられなくなるので、この語のまま検査する。
+APPROVAL_ITEMS='決めること 推奨 目的 位置 承認すると しないと 注意'
 APPROVAL_TEMPLATE='docs/rules-reference/approval-template.md'
 # 承認を求める箇所 (commands/ を全部 grep して洗い出した)。ここに載るコマンドは T2 の型を
 # 参照していなければならない。テンプレートは丸写ししない (2 か所に書くと片方が陳腐化する)。
@@ -35,7 +36,7 @@ APPROVAL_TEMPLATE='docs/rules-reference/approval-template.md'
 #   その除外理由に「手順 8」と書いていた (実際の差分承認は手順 5、手順 8 は二重ロード検査)。
 #   v1.14.2 で誤記ごと解消し、検査対象に入れた。
 #   update.md / new-task.md は承認を求める箇所を持たない (報告して止まるだけ)。
-APPROVAL_SITES='init.md add-rule.md state.md config.md new-draft.md start-task.md finish-task.md commit.md rules-audit.md verify.md project-setup.md'
+APPROVAL_SITES='init.md update.md add-rule.md state.md config.md new-draft.md start-task.md finish-task.md commit.md rules-audit.md verify.md project-setup.md'
 
 # smoke 自体は外部通信しない。更新検知を要する case 7/8 だけが個別に on を渡す。
 export HARNESS_UPDATE_CHECK=off
@@ -795,22 +796,22 @@ case_5() {
   fi
   if [ "$n" -gt "$T0_MAX" ]; then fail 5 "T0 rule <= ${T0_MAX} 本" "${n} 本:${names}"; return; fi
 
-  # 承認の規範は 3 点セットで成り立つ — T0 に 5 項目の名前 (ここ) / T1 からポインタ (ここ) /
+  # 承認の規範は 3 点セットで成り立つ — T0 にカードの語 (ここ) / T1 からポインタ (ここ) /
   # T2 に本体と記入例 (case 10)。T0 側だけ消えると、コマンドを経由しない承認
   # (会話の中でのタスク着手や仕様変更の提案) が素通りする。承認は全作業に起きるので T0 に置く。
   local core="$ROOT/rules/core.md" it bad5="" nline
   if [ ! -f "$core" ]; then fail 5 "rules/core.md が存在する" "無い"; return; fi
-  nline="$(grep -c '承認は判断材料つきで求める' "$core" | tr -d ' ')"
+  nline="$(grep -c '承認はカードで求める' "$core" | tr -d ' ')"
   if [ "${nline:-0}" -eq 0 ]; then
     bad5="承認の 1 行が core.md に無い"
   else
-    # T0 に置いてよいのは 5 項目の名前まで。本体を書き写して T0 を太らせない (2 行以内)。
+    # T0 に置いてよいのはカードの語と 1 行目の形まで。本体を書き写して T0 を太らせない (2 行以内)。
     # その 1 件が占める物理行数 = 見出し行 + 次の箇条書き/空行/見出しに当たるまでの続き行。
     local own
     own="$(awk '
       f && (/^- / || /^[[:space:]]*$/ || /^#/) { exit }
       f { n++ }
-      /承認は判断材料つきで求める/ { f = 1; n = 1 }
+      /承認はカードで求める/ { f = 1; n = 1 }
       END { print n + 0 }
     ' "$core")"
     if [ "${own:-0}" -gt 2 ]; then
@@ -826,11 +827,11 @@ case_5() {
   elif ! grep -qF "$APPROVAL_TEMPLATE" "$tk"; then
     bad5="$bad5 tasks.md:承認テンプレートへのポインタが無い"
   fi
-  # GitHub の形の立ち上げ手順 (T2): 4 手順・自動化 4 本 (設定値つき)・ビュー 6 枚・画面でしか付けられない 3 つ
+  # GitHub の形の立ち上げ手順 (T2): 4 手順・自動化 4 本 (設定値つき)・ビュー 8 枚・画面でしか付けられない 3 つ
   local ps="$ROOT/docs/rules-reference/project-setup.md" it badps=""
   if [ ! -f "$ps" ]; then badps="project-setup.md が無い"
   else
-    for it in 'is:pr' '階層表示' '並べ替え' 'グループ化' '## 1. 立ち上げの 4 手順' '## 6. ビュー 6 枚'; do
+    for it in 'is:pr' '階層表示' '並べ替え' 'グループ化' '## 1. 立ち上げの 4 手順' '## 6. ビュー 8 枚'; do
       grep -qF -- "$it" "$ps" || badps="$badps [${it}]が無い"
     done
     # 章ごとに区切って数える (別の章に同じ語があっても通さない)
@@ -841,7 +842,7 @@ case_5() {
     sec 3 | grep -E '^\| Pull request linked to issue ' | grep -qF 'Set Status = レビュー中' || badps="$badps 3章:Pull request linked の設定値(レビュー中)が無い"
     sec 3 | grep -E '^\| Item closed ' | grep -qF 'Set Status = 完了' && sec 3 | grep -E '^\| Item closed ' | grep -q 'issue だけ' || badps="$badps 3章:Item closed の設定値(issue だけ・完了)が無い"
     sec 3 | grep -E '^\| Auto-add to project ' | grep -qF 'is:pr' || badps="$badps 3章:Auto-add の設定値(is:pr)が無い"
-    [ "$(sec 6 | grep -E '^\| ' | grep -v '^|---' | grep -vc '^| ビュー')" -eq 6 ] || badps="$badps 6章:ビューの表が 6 行でない"
+    [ "$(sec 6 | grep -E '^\| ' | grep -v '^|---' | grep -vc '^| ビュー')" -eq 8 ] || badps="$badps 6章:ビューの表が 8 行でない"
   fi
   if [ -n "$bad5" ]; then fail 5 "承認は T0 に名前 / T1 からポインタ" "$bad5"; return; fi
   if [ -n "$badps" ]; then fail 5 "project-setup.md の立ち上げ手順・自動化・ビュー" "$badps"; return; fi
@@ -853,7 +854,7 @@ case_5() {
   grep -qF '2 つの形の区別' "$rr/task-ledger.md" || badt2="$badt2 task-ledger.md に 2 つの形の区別が無い"
   if [ -n "$badt2" ]; then fail 5 "T2 は GitHub の形が主で、台帳の形は区別して書く" "$badt2"; return; fi
 
-  pass 5 "T0 層の rule は許可リストどおり ${n} 本 <= ${T0_MAX} (${names# }) / core.md に承認の 1 行 (5 項目入り・2 行以内) / tasks.md から T2 テンプレートへのポインタ / project-setup.md に 4 手順・自動化 4 本・ビュー 6 枚・画面でしか付けられない 3 つ / T2 は GitHub の形が主で台帳の形は区別つき"
+  pass 5 "T0 層の rule は許可リストどおり ${n} 本 <= ${T0_MAX} (${names# }) / core.md に承認の 1 行 (カードの 7 語入り・2 行以内) / tasks.md から T2 テンプレートへのポインタ / project-setup.md に 4 手順・自動化 4 本・ビュー 8 枚・画面でしか付けられない 3 つ / T2 は GitHub の形が主で台帳の形は区別つき"
 }
 
 # ---------- case 6: 数の予算 (hook<=5 / skill<=3 / smoke case<=10。command は v2.7.0 で上限を外し、数だけ出す) ----------
@@ -1497,7 +1498,7 @@ print(" ".join(k for k in ("commands", "agents", "hooks") if k in m))
   if [ -n "$bad" ]; then fail 10 "/state save が次回へ効かせる工程を持つ" "$bad"; return; fi
 
   # (e) 承認テンプレート (T2) の本体と、承認を求める全コマンドからのポインタ。
-  # 「〜してよいですか」だけでは承認する側が判断できない (rules/core.md 「承認は判断材料つきで
+  # 「〜してよいですか」だけでは承認する側が判断できない (rules/core.md 「承認はカードで
   # 求める」)。本体は T2 の 1 か所に置き、各コマンドはポインタだけを持つ
   # (丸写しすると片方が陳腐化する)。適用先はルール追加に限らず、タスク着手・完了・設計 draft・
   # 設定変更・元に戻せない操作まで含む。
@@ -1511,6 +1512,56 @@ print(" ".join(k for k in ("commands", "agents", "hooks") if k in m))
   local n_ex; n_ex="$(grep -c '^## 記入例' "$at" | tr -d ' ')"
   [ "${n_ex:-0}" -ge 2 ] || bad="$bad 承認テンプレート:記入例が ${n_ex:-0} 件 (2 件以上要る)"
   grep -q '悪い例' "$at" || bad="$bad 承認テンプレート:悪い例と良い例が無い"
+  # v2.8.0: カードは 3 種 (承認・判断・人の作業) と issue の本文の目印を持ち、記入例のカード自身が
+  # 長さの決まり (値は 1 行 60 字・1 行目は 80 字・全体 400 字) を守る。型の見本が決まりを破ると、
+  # AI はそちらを真似る。進め方の用語集も同梱し、/init が導入先へ配る。
+  for it in '判断カード' '人の作業カード' '<!-- card:approval -->' '<!-- card:decision -->' '<!-- card:work -->' '<!-- /card -->'; do
+    grep -qF -- "$it" "$at" || bad="$bad 承認テンプレート:[${it}]が無い"
+  done
+  local cardbad
+  cardbad="$(python3 - "$at" <<'PYCARD'
+import re, sys
+s = open(sys.argv[1], encoding="utf-8").read()
+out = []
+for m in re.finditer(r"## (記入例 [0-9]+)[^\n]*\n\n```\n(.*?)```", s, re.S):
+    rows = m.group(2).strip("\n").split("\n")
+    if sum(len(r) for r in rows) > 400:
+        out.append(m.group(1) + ":400字超")
+    for i, r in enumerate(rows):
+        val = r.partition(": ")[2]
+        if len(val) > (80 if i == 0 else 60):
+            out.append(m.group(1) + ":" + r.partition(":")[0] + "が長い")
+    if any(r.startswith("承認すると") for r in rows) and not any(("戻せる" in r or "戻せない" in r) for r in rows if r.startswith("承認すると")):
+        out.append(m.group(1) + ":承認すると に戻せるか が無い")
+print(" ".join(out))
+PYCARD
+)"
+  [ -z "$cardbad" ] || bad="$bad 承認テンプレート:記入例のカードが決まりを破る(${cardbad})"
+  # コマンドの中のカードの例も同じ決まりで見る (AI はコマンドの例も真似る)。
+  # 「決めること:」で始まる行から 7 行 (字下げは外す) を 1 枚とみなす。
+  local cmdbad
+  cmdbad="$(python3 - "$ROOT/commands" <<'PYCMD'
+import pathlib, sys
+out = []
+for f in sorted(pathlib.Path(sys.argv[1]).glob("*.md")):
+    rows = f.read_text(encoding="utf-8").split("\n")
+    for i, r in enumerate(rows):
+        if not r.strip().startswith("決めること: "):
+            continue
+        card = [x.strip() for x in rows[i:i + 7]]
+        if sum(len(x) for x in card) > 400:
+            out.append(f.name + ":400字超")
+        for j, x in enumerate(card):
+            if len(x.partition(": ")[2]) > (80 if j == 0 else 60):
+                out.append(f.name + ":" + x.partition(":")[0] + "が長い")
+        if not any(("戻せる" in x or "戻せない" in x) for x in card if x.startswith("承認すると")):
+            out.append(f.name + ":承認すると に戻せるか が無い")
+print(" ".join(out))
+PYCMD
+)"
+  [ -z "$cmdbad" ] || bad="$bad コマンドの中のカードの例が決まりを破る(${cmdbad})"
+  [ -f "$ROOT/docs/rules-reference/glossary.md" ] || bad="$bad 進め方の用語集 (docs/rules-reference/glossary.md) が無い"
+  grep -qF 'rules-reference/glossary.md' "$ROOT/commands/init.md" || bad="$bad /init が進め方の用語集を配らない"
   # ファイルのどこかに path が在るだけでは足りない。承認の場面と結びついていない行
   # (置き場の説明・配置手順など) でも grep は通ってしまい、v1.14.2 で init.md を検査対象に
   # 入れた際に「承認のポインタを消しても、配置手順に同じパスが残っていて PASS する」ことが
@@ -1524,13 +1575,13 @@ print(" ".join(k for k in ("commands", "agents", "hooks") if k in m))
     if [ "${aline:-0}" -eq 0 ]; then
       bad="$bad ${site}:型へのポインタが AskUserQuestion と同じ行に無い"; continue
     fi
-    # 5 項目は同じ行のこともあれば直後の箇条書きのこともある (add-rule.md)。行は問わず、
-    # ファイル内に 5 語すべてが在ることを見る。
+    # カードの語は同じ行のこともあれば直後の箇条書きのこともある (add-rule.md)。行は問わず、
+    # ファイル内に 7 語すべてが在ることを見る。
     for it in $APPROVAL_ITEMS; do
       grep -qF "$it" "$sp" || bad="$bad ${site}:[${it}]が無い"
     done
   done
-  if [ -n "$bad" ]; then fail 10 "承認を求める箇所は判断材料 5 項目を出す" "$bad"; return; fi
+  if [ -n "$bad" ]; then fail 10 "承認を求める箇所は承認カードを出す" "$bad"; return; fi
 
   # 承認の型は**導入先にも要る**。ポインタは「導入先の docs/rules-reference/ (無ければプラグイン
   # 同梱の同名ファイル)」の 2 段書きで必ず解決するが、v1.14.1 まで導入先に実体が無く、1 段目を
@@ -1752,7 +1803,7 @@ JSONEOF
     && pr_bad="$pr_bad 控えが /tmp 直下に置かれている (再起動で消えるうえ他の利用者と混ざる)"
   if [ -n "$pr_bad" ]; then fail 10 "commands はプラグイン本体の場所を素材行で解決する" "$pr_bad"; return; fi
 
-  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) に 5 項目 + AskUserQuestion + 記入例 ${n_ex} 件 + 悪い例/良い例 / 承認を求める ${n_site} コマンドすべてが AskUserQuestion と同じ行にポインタを持ち 5 項目を備える / 手順書の逐語実行で /init は承認の型を導入先へ置き 2 回目は上書きせず user では docs/ を作らず、/update は無いときだけ足し在れば触らず docs/ を新設しない / commands の CLAUDE_PLUGIN_ROOT 無防備使用 0 件・素材行 ${n_boot} 本が 1 種類で \$P を使う全ブロックに在り、未設定でも installed_plugins.json の 2.x 最大版 (辞書順では負ける版で確認) → 2.x キャッシュの最大版の順で解決し harness_plugin_root と一致 / update.md ${n_up} 行 (<=200) / init.md ${n_in} 行 (<=305) / 手順 0 の逐語実行で 控えはコピー (project 側も home 側も元が残る)・置き場は一時領域の rules-backup-*・消えるタイミングを表示 を実挙動で確認 / hirai-task は偽の HOME・gh 無しで --selftest が通り、引数なしと git の外では exit 2、gh を呼ばず、絶対パスを持たない (内部の名前は HIRAI_INTERNAL_WORDS を渡したときだけ見る)"
+  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) にカード 3 種と目印 + カードの 7 語 + AskUserQuestion + 記入例 ${n_ex} 件 (どれも長さの決まりの内) + 悪い例/良い例 + 進め方の用語集 / 承認を求める ${n_site} コマンドすべてが AskUserQuestion と同じ行にポインタを持ちカードの 7 語を備える / 手順書の逐語実行で /init は承認の型を導入先へ置き 2 回目は上書きせず user では docs/ を作らず、/update は無いときだけ足し在れば触らず docs/ を新設しない / commands の CLAUDE_PLUGIN_ROOT 無防備使用 0 件・素材行 ${n_boot} 本が 1 種類で \$P を使う全ブロックに在り、未設定でも installed_plugins.json の 2.x 最大版 (辞書順では負ける版で確認) → 2.x キャッシュの最大版の順で解決し harness_plugin_root と一致 / update.md ${n_up} 行 (<=200) / init.md ${n_in} 行 (<=305) / 手順 0 の逐語実行で 控えはコピー (project 側も home 側も元が残る)・置き場は一時領域の rules-backup-*・消えるタイミングを表示 を実挙動で確認 / hirai-task は偽の HOME・gh 無しで --selftest が通り、引数なしと git の外では exit 2、gh を呼ばず、絶対パスを持たない (内部の名前は HIRAI_INTERNAL_WORDS を渡したときだけ見る)"
 }
 
 case_1; case_2; case_3; case_4; case_5; case_6; case_7; case_8; case_9; case_10

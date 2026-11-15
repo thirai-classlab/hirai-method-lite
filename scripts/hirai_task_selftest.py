@@ -575,6 +575,12 @@ def _command_row(i: dict) -> dict:
             '__typename': 'ProjectV2ItemFieldSingleSelectValue', 'name': i['kind'],
             'field': {'name': gh_task.KIND_FIELD},
         })
+    if i.get('headline'):
+        field_values.append({'__typename': 'ProjectV2ItemFieldTextValue', 'text': i['headline'],
+                             'field': {'name': gh_task.CARD_HEADLINE_FIELD}})
+    if i.get('recommend'):
+        field_values.append({'__typename': 'ProjectV2ItemFieldSingleSelectValue', 'name': i['recommend'],
+                             'field': {'name': gh_task.CARD_RECOMMEND_FIELD}})
     return {
         'id': f"ITEM_{i['number']}",
         'content': {
@@ -592,7 +598,7 @@ def make_command_gh(
     summaries: dict[int, dict] | None = None, extras: dict[int, dict] | None = None,
     closing_refs: dict[int, list[int]] | None = None, project_number: int = 7,
     write_log: list[tuple] | None = None, paginate: dict[str, list] | None = None,
-    children: dict[int, list[dict]] | None = None,
+    children: dict[int, list[dict]] | None = None, field_defs: list[dict] | None = None,
 ):
     """close-parents・align・unblocked・after-merge・today を main([...]) 経由で走らせる
     ための、まとまった偽 gh。write_log には、実際に書き込みが起きたときだけ 1 行ずつ積む
@@ -608,6 +614,7 @@ def make_command_gh(
     extras = extras or {}
     closing_refs = closing_refs or {}
     paginate = paginate or {}
+    field_defs = field_defs if field_defs is not None else _fake_field_defs()
     items_by_number = {i['number']: i for i in items}
     _reset_rest_fields_cache()
     gh_task._owner_type_cache = None
@@ -632,7 +639,7 @@ def make_command_gh(
                     for k in range(total)
                 ]), ''
             if re.search(r'projectsV2/\d+/fields', path):
-                return 0, json.dumps(_fake_rest_field_defs(_fake_field_defs())), ''
+                return 0, json.dumps(_fake_rest_field_defs(field_defs)), ''
             for key, value in paginate.items():
                 if key in path:
                     return 0, json.dumps(value), ''
@@ -707,17 +714,17 @@ def make_command_gh(
                 ),
             )), ''
         if 'project field-list' in joined:
-            return 0, json.dumps({'fields': _fake_field_defs()}), ''
+            return 0, json.dumps({'fields': field_defs}), ''
         if len(args) >= 2 and args[0] == 'api' and args[1] == '-X':
             method, path = args[2], args[3]
             body = json.loads(input_text) if input_text else None
             builtin = _fake_rest_project_call(
-                method, path, body, items_by_number, _fake_field_defs(), None, None, None,
+                method, path, body, items_by_number, field_defs, None, None, None,
             )
             if builtin is not None:
                 if method == 'PATCH' and write_log is not None:
                     for fid_back, value_back in _rest_patch_to_graphql_ids(
-                        _fake_field_defs(), (body or {}).get('fields', []),
+                        field_defs, (body or {}).get('fields', []),
                     ) or []:
                         write_log.append(('item-update', fid_back, value_back))
                 return 0, json.dumps(builtin), ''
@@ -809,7 +816,11 @@ def _board_rows() -> list[dict]:
 # 番号 → [(blocker, state)]
 _BOARD_BLOCKERS = {2: [(1, 'OPEN')], 3: [(4, 'OPEN')], 4: [(3, 'OPEN')],
                    31: [(33, 'OPEN')], 35: [(40, 'OPEN')], 37: [(999, 'OPEN')], 12: [(11, 'CLOSED')]}
-_BOARD_BODIES = {1: '- 出る条件のコマンド: exit 0（2026-11-01・abc1234）'}
+_BOARD_CARD_21 = ('<!-- card:approval -->\n**決めること**: 画面をそろえる作業を始めるか。**推奨**: 承認する\n'
+                  '**目的**: 入居者が迷わず担当者を選べる\n**位置**: 段「つづき」の残り3件\n'
+                  '**承認すると**: AI が画面を2つ直す。戻せる\n**しないと**: 画面は今のまま\n'
+                  '**注意**: 同じ画面の直しと重なるおそれ（推測）\n**詳しく**: #21\n<!-- /card -->\n\n<!-- ai -->\n')
+_BOARD_BODIES = {1: '- 出る条件のコマンド: exit 0（2026-11-01・abc1234）', 21: _BOARD_CARD_21}
 
 
 def make_console_gh(calls: list, *, mode: str = 'ok', blockers: dict | None = None, issues: dict | None = None):
@@ -1050,7 +1061,7 @@ def _board_checks(t, tmp_dir: str) -> None:
             lines = out.splitlines()
             assert max(len(line) for line in lines) <= 44, f'1 行が長い: {max(lines, key=len)!r}'
             assert all(line.count('|') <= 4 for line in lines), '表が 3 列を超えた'
-            for want in ('### あなたの番', '承認待ちの feature（ボードで着手可に） 1', '- #21 F3 承認待ち', '判断待ち（裁定する） 1',
+            for want in ('### あなたの番', '承認待ちの feature（ボードで着手可に） 1', '- #21 画面をそろえる作業を始めるか', '  推奨 承認する', '判断待ち（裁定する） 1',
                          '[User] の作業 1', 'レビュー中（PR の merge） 1', '### 止まっている 10', '| 着手可だが着手できない | 4 |',
                          '- #31 T31 自分が止められている（自分の待ち）', '- #35 T35 feature をまたいで待つ ← #40'):
                 assert want in out, f'要約に「{want}」が無い:\n{out}'
@@ -1137,6 +1148,306 @@ def _board_checks(t, tmp_dir: str) -> None:
         t('board: --publish は 10 分以内の控えがあっても取り直してから書く', _publish_always_refetches)
     finally:
         gh_task.run_gh, gh_task.BOARD_CACHE, gh_task.BOARD_HTML, gh_task.PROJECT_NUMBER_OVERRIDE = orig
+
+
+# ── カード（承認・判断・人の作業）の検査 ─────────────────────────
+_CARD_APPROVAL = ('<!-- card:approval -->\n**決めること**: 画面をそろえる作業を始めるか。**推奨**: 承認する\n'
+                  '**目的**: 入居者が迷わず担当者を選べる\n**位置**: 段「画面」の残り2件\n'
+                  '**承認すると**: AI が画面を2つ直す。戻せる\n**しないと**: 画面は今のまま\n'
+                  '**注意**: 同じ画面の直しと重なるおそれ（推測）\n**詳しく**: #800\n<!-- /card -->\n\n本文')
+_CARD_DECISION = ('<!-- card:decision -->\n**決めること**: チャットを何日残すか。**期限**: 2026-12-10（過ぎると3件が止まる）\n'
+                  '**目的**: 漏れたときの害を小さくする\n**選択肢**: A 30日 ／ B 1年\n**推奨**: A — 害が小さい\n'
+                  '**決めないと**: 退会の作業3件が止まる\n**誰が決める**: 事業の責任者\n**詳しく**: #802\n<!-- /card -->\n')
+_CARD_RECOMMEND = ('承認する', '条件つき', '承認しない')
+
+
+def _card_field_defs(*, with_card_fields: bool = True) -> list[dict]:
+    defs = _fake_field_defs()
+    if with_card_fields:
+        defs += [{'id': 'F_ひとこと', 'name': 'ひとこと'},
+                 {'id': 'F_推奨', 'name': '推奨', 'options': [{'id': f'O_推奨_{o}', 'name': o} for o in _CARD_RECOMMEND]}]
+    return defs
+
+
+def _card_items() -> list[dict]:
+    return [
+        {'number': 800, 'title': '画面（モック）', 'status': '承認待ち', 'kind': 'feature'},
+        {'number': 801, 'title': 'カードの無い feature', 'status': '承認待ち', 'kind': 'feature'},
+        {'number': 802, 'title': '[Decision] 何日残すか', 'status': '判断待ち', 'kind': 'task', 'parent_number': 804},
+        {'number': 803, 'title': '[User] 本番の申込', 'status': '承認待ち', 'kind': 'task', 'parent_number': 804},
+        {'number': 804, 'title': '着手可の feature', 'status': '着手可', 'kind': 'feature'},
+        {'number': 805, 'title': '判断待ちなのに承認カード', 'status': '判断待ち', 'kind': 'task', 'parent_number': 804},
+        {'number': 806, 'title': '閉じた feature', 'status': '承認待ち', 'kind': 'feature', 'state': 'CLOSED'},
+        {'number': 811, 'title': '画面の作業', 'status': '承認待ち', 'kind': 'task', 'parent_number': 800},
+        {'number': 809, 'title': '子の無い feature', 'status': '承認待ち', 'kind': 'feature'},
+        {'number': 810, 'title': '[操作] 本番の確認', 'status': '承認待ち', 'kind': 'task', 'parent_number': 804},
+        {'number': 813, 'title': '[Decision] 期限の近い問い', 'status': '判断待ち', 'kind': 'task', 'parent_number': 804},
+        {'number': 814, 'title': '項目が古い feature', 'status': '承認待ち', 'kind': 'feature',
+         'headline': '前の決めること', 'recommend': '承認する'},
+        {'number': 815, 'title': '項目の作業', 'status': '承認待ち', 'kind': 'task', 'parent_number': 814},
+        {'number': 816, 'title': '[操作] 保留中の操作', 'status': '保留', 'kind': 'task', 'parent_number': 804},
+    ]
+
+
+def _card_checks(t, tmp_dir: str) -> None:
+    """card・card --lint・board のカードの行・new の雛形・start --approved の門。"""
+    bodies = {800: _CARD_APPROVAL, 801: 'カードが無い本文', 802: _CARD_DECISION, 803: '手順だけ',
+              805: _CARD_APPROVAL.replace('#800', '#805'), 809: _CARD_APPROVAL.replace('#800', '#809'),
+              813: _CARD_DECISION.replace('2026-12-10', '2026-11-20').replace('**誰が決める**: 事業の責任者\n', ''),
+              814: _CARD_APPROVAL.replace('#800', '#814')}
+
+    def use(items=None, *, with_card_fields=True, log=None):
+        for path in (gh_task.FIELDS_CACHE,):
+            if os.path.exists(path):
+                os.remove(path)
+        gh_task.run_gh = make_command_gh(items if items is not None else _card_items(), bodies=bodies,
+                                         field_defs=_card_field_defs(with_card_fields=with_card_fields), write_log=log)
+
+    def _module_selftest() -> None:
+        cards = gh_task._load_card_module()
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, 'docs', 'rules-reference', 'approval-template.md'), encoding='utf-8') as f:
+            results = cards.selftest(f.read())
+        failed = [f'{name}: {detail}' for name, ok, detail in results if not ok]
+        assert not failed, '\n'.join(failed)
+
+    t('card: 取り出し・形の検査・正本の記入例（hirai_card の自己検査）', _module_selftest)
+
+    def _card_reads_and_checks() -> None:
+        use()
+        rc, out = _run_main(['card', '800'])
+        assert rc == 0 and '決めること: 画面をそろえる作業を始めるか。推奨: 承認する' in out, f'exit {rc}: {out}'
+        assert '**' not in out and '<!--' not in out, f'会話の形（太字・目印なし）で出していない: {out}'
+        rc, out = _run_main(['card', '801'])
+        assert rc == 1 and '承認カードが無い' in out, f'exit {rc}: {out}'
+        rc, out = _run_main(['card', '805'])
+        assert rc == 1 and '判断カードが無い（あるのは承認カード' in out, f'判断待ちに要るカードを見ていない: {out}'
+        rc, out = _run_main(['card', '810'])
+        assert rc == 1 and '承認カードが無い' in out, f'[操作] に要るのは承認カード: {out}'
+        bodies[807] = _CARD_APPROVAL.replace('画面をそろえる', '画面を\x1bそろえる')
+        use(_card_items() + [{'number': 807, 'title': 'ESC\x1b[31m入り', 'status': '承認待ち', 'kind': 'feature'}])
+        rc, out = _run_main(['card', '807'])
+        assert rc == 1 and '\x1b' not in out and '制御文字' in out, f'制御文字を端末に出した: {out!r}'
+        rc, out = _run_main(['card', '--lint'])
+        assert '\x1b' not in out, f'--lint が制御文字を端末に出した: {out!r}'
+        del bodies[807]
+
+    t('card <n>: カードを会話の形で出し、無い・種類違いは理由つきで exit 1', _card_reads_and_checks)
+
+    def _card_sync_writes_two_fields() -> None:
+        log: list = []
+        use(log=log)
+        rc, out = _run_main(['card', '800', '--sync'])
+        assert rc == 0, f'exit {rc}: {out}'
+        writes = [w for w in log if w[0] == 'item-update']
+        assert ('item-update', 'F_ひとこと', '画面をそろえる作業を始めるか') in writes, writes
+        assert ('item-update', 'F_推奨', 'O_推奨_承認する') in writes, writes
+        assert not [w for w in log if w[0] == 'graphql-update'], f'GraphQL で書いた: {log}'
+
+    t('card <n> --sync: 決めることを「ひとこと」、推奨を「推奨」へ REST で書く', _card_sync_writes_two_fields)
+
+    def _card_sync_marks_stalled() -> None:
+        log: list = []
+        use(log=log)
+        rc, out = _run_main(['card', '809', '--sync'])
+        assert rc == 0, f'exit {rc}: {out}'
+        assert ('item-update', 'F_ひとこと', '画面をそろえる作業を始めるか（今は動かない: 子の作業が無い）') in log, log
+
+    t('card --sync: 承認しても動かない feature は「ひとこと」の末尾に今は動かない理由を付ける', _card_sync_marks_stalled)
+
+    def _card_sync_refuses() -> None:
+        for number, with_fields, code, why in ((800, False, 2, 'hirai-task setup'), (801, True, 1, '承認カードが無い'),
+                                               (802, True, 2, '承認カードだけ')):
+            log: list = []
+            use(with_card_fields=with_fields, log=log)
+            rc, out = _run_main(['card', str(number), '--sync'])
+            assert rc == code and why in out, f'#{number}: exit {rc}（期待 {code}・「{why}」）: {out}'
+            assert not [w for w in log if w[0] in ('item-update', 'graphql-update')], f'#{number}: 書いた: {log}'
+
+    t('card --sync: 項目が無い（exit 2・setup の案内）・カードの形が悪い（exit 1）・判断カード（exit 2）は書かない',
+      _card_sync_refuses)
+
+    def _card_lint_classifies() -> None:
+        use()
+        rc, out = _run_main(['card', '--lint'])
+        assert rc == 1, f'問題があるのに exit {rc}: {out}'
+        for needle in ('#801', '#803', '#805', '#810', '#813', '#814', '人の作業カードが無い', '項目「ひとこと」が本文のカードと違う'):
+            assert needle in out, f'「{needle}」が無い: {out}'
+        for absent in ('#800 ', '#802 ', '#804', '#806', '#811', '#815', '#816'):
+            assert absent not in out, f'問題の無い・対象外の行が出た（{absent}）: {out}'
+        assert out.splitlines()[1].startswith('要約: '), f'先頭に要約が無い: {out}'
+        assert '承認カード 5 件中 3 件に問題' in out and '判断カード 3 件中 2 件に問題' in out, out
+        assert '警告' in out and '#809' in out and '承認しても動かない' in out, f'動かないのに推奨が承認するの警告が無い: {out}'
+        assert out.index('#813') < out.index('#801'), f'期限の近い判断から並べていない: {out}'
+        use([i for i in _card_items() if i['number'] in (800, 802, 804, 811)])
+        rc, out = _run_main(['card', '--lint'])
+        assert rc == 0, f'問題が無いのに exit {rc}: {out}'
+        assert not [c for c in out.splitlines() if 'mutation' in c], out
+
+    t('card --lint: 承認待ちの feature・判断待ち・[User] と [操作] の要るカードを確かめ、問題があれば exit 1', _card_lint_classifies)
+
+    def _stall_reasons() -> None:
+        def it(number, kind, status, parent=None, title=None, state='OPEN'):
+            return {'number': number, 'kind': kind, 'status': status, 'parent_number': parent,
+                    'title': title or f'row {number}', 'state': state}
+        items = [it(1, 'wave', '', title='W1'), it(2, 'wave', '', title='W2'),
+                 it(10, 'feature', '承認待ち', 2), it(11, 'task', '承認待ち', 10),
+                 it(20, 'feature', '承認待ち', 1), it(21, 'task', '保留', 20), it(22, 'task', '承認待ち', 20, '[User] 申込'),
+                 it(30, 'feature', '承認待ち', 1), it(31, 'task', '承認待ち', 30),
+                 it(40, 'feature', '承認待ち', 1), it(41, 'task', '完了', 40, state='CLOSED')]
+        by_number, children = gh_task._board_index(items)
+        extras = {2: {'blocked_by_numbers': [1]}}
+        reasons = {n: gh_task.approval_stall_reason(by_number[n], by_number, children, extras, {}) for n in (10, 20, 30, 40)}
+        assert '先の wave' in reasons[10], reasons
+        assert '人の作業' in reasons[20] and '保留' in reasons[20], reasons
+        assert reasons[30] == '', reasons
+        assert '子の open の task が無い' in reasons[40], reasons
+        assert [gh_task.STALL_SHORT[r] for r in (reasons[10], reasons[20], reasons[40])] == \
+            ['先の wave 待ち', '子が人の作業だけ', '子の作業が無い'], '短い言い方が理由と合っていない'
+
+    t('board: 承認しても動かない feature の理由（先の wave・子が保留と人の作業だけ・子が無い）', _stall_reasons)
+
+    def _board_shows_cards() -> None:
+        calls: list = []
+        for path in (gh_task.BOARD_CACHE, gh_task.BOARD_HTML):
+            if os.path.exists(path):
+                os.remove(path)
+        gh_task.run_gh = make_console_gh(calls)
+        rc, summary = _run_main(['board', '--summary'])
+        assert rc == 0, summary
+        assert '画面をそろえる作業を始めるか' in summary and '推奨 承認する' in summary, f'#21 のカードが無い: {summary}'
+        assert 'カード無し' in summary, f'#36（判断待ち・カード無し）の印が無い: {summary}'
+        rc, text = _run_main(['board', '--text'])
+        line21 = next((x for x in text.splitlines() if x.startswith('  - feature #21 ')), '')
+        assert 'カード: 画面をそろえる作業を始めるか（推奨 承認する）' in line21, f'--text の feature の行: {line21}'
+        rc, _out = _run_main(['board'])
+        with open(gh_task.BOARD_HTML, encoding='utf-8') as f:
+            page = f.read()
+        assert '承認と判断の待ち' in page and '画面をそろえる作業を始めるか' in page and 'カード無し' in page, page[:400]
+
+    t('board: あなたの番・--text・HTML に、カードの決めることと推奨（無ければ「カード無し」）を出す', _board_shows_cards)
+
+    def _board_lists_operation_approvals() -> None:
+        def it(number, kind, status, parent=None, title=None):
+            return {'number': number, 'type': 'Issue', 'kind': kind, 'status': status, 'parent_number': parent,
+                    'title': title or f'row {number}', 'state': 'OPEN', 'url': _BOARD_URL.format(number)}
+        snap = {'repo': gh_task.REPO, 'project': 7, 'fetched_at': '2026-11-15 10:00:00 +0900', 'fetched_epoch': 0,
+                'items': [it(1, 'wave', ''), it(2, 'feature', '着手可', 1), it(3, 'task', '承認待ち', 2, '[操作] 本番で確かめる')],
+                'extras': {}, 'bodies': {}}
+        summary = gh_task._load_board_module().render_summary_md(gh_task.board_view(snap, 'from'))
+        assert '操作の承認 1' in summary and '- #3 ' in summary, f'承認待ちの [操作] が あなたの番 に無い: {summary}'
+
+    t('board: 承認待ちの [操作] を、あなたの番の「操作の承認」に出す', _board_lists_operation_approvals)
+
+    def _new_feature_writes_card_first() -> None:
+        calls: list = []
+        out = io.StringIO()
+        gh_task.run_gh = make_write_gh(
+            {950: dict(title='新しい feature', status=gh_task.PENDING_STATUS, kind=''),
+             900: dict(title='基盤（P1）', status='', kind='wave')},
+            rest_handler=lambda m, p, b: (calls.append((m, p, b)) or (
+                {'number': 950, 'id': 950950} if (m, p) == ('POST', f'repos/{gh_task.REPO}/issues') else
+                {'sub_issues_summary': {'total': 1}} if (m, p) == ('GET', f'repos/{gh_task.REPO}/issues/900') else
+                {'milestone': None, 'body': ''} if (m, p) == ('GET', f'repos/{gh_task.REPO}/issues/950') else {})),
+        )
+        with redirect_stdout(out):
+            gh_task.cmd_new(['新しい feature', '--kind', 'feature', '--parent', '900',
+                             '--body', '<!-- ai -->\n## 範囲\n画面の直し'])
+        body = next(b for m, p, b in calls if (m, p) == ('POST', f'repos/{gh_task.REPO}/issues'))['body']
+        assert body.startswith('<!-- card:approval -->\n**決めること**: '), body
+        assert '**位置**: 段「基盤（P1）」の一部' in body, body
+        assert body.rstrip().endswith('<!-- ai -->') and '## 範囲\n画面の直し' in body, f'機械向けの行を末尾へ回していない: {body}'
+        assert 'hirai-task card 950 --sync' in out.getvalue(), out.getvalue()
+
+    t('new --kind feature: 本文の先頭に承認カードの雛形（位置は親の wave）、機械向けの行は末尾、--sync の案内', _new_feature_writes_card_first)
+
+    def _marks_are_read_anywhere() -> None:
+        body = '<!-- ai -->\n' + _CARD_APPROVAL + '\n\n<!-- rmp-task: id=TBL-01 rev=chat:3 stream=Infra src=tbl@PR9 -->\n'
+        mark = gh_task.parse_task_mark(body)
+        assert mark and mark.get('id') == 'TBL-01' and mark.get('rev') == 'chat:3', mark
+        assert 'rev=chat:4' in gh_task.rewrite_task_mark(body, rev='chat:4'), '末尾の目印を書き直せない'
+        assert gh_task.parse_task_mark('<!-- rmp-task: id=X stream=a -->\n本文') == {'id': 'X', 'stream': 'a'}
+        bodies = {501: '<!-- rmp-task: id=TBL-01 stream=a src=tbl@PR9 -->\n本文',
+                  502: _CARD_APPROVAL + '\n\n<!-- rmp-task: id=TBL-F1 stream=— src=tbl@PR9 -->\n',
+                  503: '<!-- rmp-task: id=TBL-02 stream=a src=other@PR9 -->'}
+        assert gh_task.table_mark_ids(bodies, 'tbl') == {'TBL-01': 501, 'TBL-F1': 502}, gh_task.table_mark_ids(bodies, 'tbl')
+
+    t('目印（rmp-task）は本文の先頭でも末尾でも読み、書き直せる', _marks_are_read_anywhere)
+
+    def _marks_follow_position_rule() -> None:
+        real = '<!-- rmp-task: id=F1 rev=a:1 stream=x src=slug@PR5 -->'
+        quoted = '<!-- rmp-task: id=F9 rev=a:9 stream=y src=other@PR1 -->'
+        fenced = 'カード\n\n前の issue の例:\n```\n' + quoted + '\n```\n\n' + real + '\n'
+        mark = gh_task.parse_task_mark(fenced)
+        assert mark and mark['id'] == 'F1', f'フェンスの中の引用を本物として読んだ: {mark}'
+        rewritten = gh_task.rewrite_task_mark(fenced, rev='a:2')
+        assert quoted in rewritten and 'id=F1 rev=a:2 ' in rewritten, f'引用を書き換えたか、本物を書き換えていない: {rewritten}'
+        only_quote = 'x\n```\n' + quoted + '\n```\n'
+        assert gh_task.parse_task_mark(only_quote) is None, 'フェンスの中だけの目印を本物として読んだ'
+        assert gh_task.rewrite_task_mark(only_quote, rev='a:2') == only_quote, 'フェンスの中の目印を書き換えた'
+        top = real + '\n\n説明: 前の issue は次の形だった\n> ' + quoted + '\n' + quoted + '\n\n続き'
+        assert gh_task.parse_task_mark(top)['id'] == 'F1'
+        assert gh_task.rewrite_task_mark(top, rev='a:2').count(quoted) == 2, '途中の引用を書き換えた'
+        middle = '本文\n' + quoted + '\n本文の続き'
+        assert gh_task.parse_task_mark(middle) is None, '本文の途中の目印を本物として読んだ'
+        crlf = real.replace('-->', '-->\r') + '\n\r\n本文\r\n'
+        assert (gh_task.parse_task_mark(crlf) or {}).get('id') == 'F1', 'CRLF の本文の目印を読めない'
+        assert gh_task.table_mark_ids({1: fenced}, 'other') == {}, '引用の写しを起票済みとして採った'
+        assert gh_task.table_mark_ids({1: fenced}, 'slug') == {'F1': 1}
+        assert gh_task.body_doc_paths('```\n' + quoted + '\n```\ndocs/a.md') == ['docs/a.md']
+
+    t('目印の位置の規則: 先頭か末尾の連続した機械向けの行だけが本物。フェンス・引用・途中は読まず書き換えない（照合も同じ）',
+      _marks_follow_position_rule)
+
+    def _with_card_first_keeps_fences() -> None:
+        out = gh_task.with_card_first('説明\n```html\n<!-- ai -->\n```\n', 'CARD')
+        assert '```html\n<!-- ai -->\n```' in out and not out.rstrip().endswith('```\n<!-- ai -->'), f'フェンスの中を動かした: {out!r}'
+        assert out.startswith('CARD\n\n説明'), out
+        lead = '<!-- ai -->\n<!-- rmp-task: id=X stream=a -->\n\n本文\n```\n<!-- ai -->\n```\n'
+        out = gh_task.with_card_first(lead, 'CARD')
+        assert out.endswith('```\n\n<!-- ai -->\n<!-- rmp-task: id=X stream=a -->\n'), f'先頭の機械向けの行だけを末尾へ回していない: {out!r}'
+        assert out.count('<!-- ai -->') == 2 and '```\n<!-- ai -->\n```' in out, out
+
+    t('with_card_first: 先頭の連続した機械向けの行だけを末尾へ回し、フェンスの中は動かさない', _with_card_first_keeps_fences)
+
+    def _old_cache_version_refetches() -> None:
+        calls: list = []
+        for path in (gh_task.BOARD_CACHE, gh_task.BOARD_HTML):
+            if os.path.exists(path):
+                os.remove(path)
+        gh_task.run_gh = make_console_gh(calls)
+        assert _run_main(['board', '--summary'])[0] == 0
+        with open(gh_task.BOARD_CACHE, encoding='utf-8') as f:
+            snap = json.load(f)
+        snap['version'] = 1
+        with open(gh_task.BOARD_CACHE, 'w', encoding='utf-8') as f:
+            json.dump(snap, f)
+        before = len(calls)
+        assert _run_main(['board', '--summary'])[0] == 0
+        assert len(calls) > before, '版 1 の控え（カードの本文を持たない）を使った'
+
+    t('board: 版 1 の控えは使わずに取り直す（カードの本文を持たないため）', _old_cache_version_refetches)
+
+    def _start_approved_checks_the_gate() -> None:
+        for parent_status, code in ((gh_task.PENDING_STATUS, 2), (gh_task.READY_STATUS, 0)):
+            record: list = []
+            gh_task.run_gh = make_write_gh({
+                880: dict(title=f'{gh_task.OPERATION_MARK} 本番の確認', status=gh_task.PENDING_STATUS, kind='task',
+                          parent_number=881, body='本文'),
+                881: dict(title='feature', status=parent_status, kind='feature'),
+            }, record=record, rest_handler=lambda m, p, b: {})
+            try:
+                with redirect_stdout(io.StringIO()):
+                    rc = gh_task.cmd_start(880, '2026-11-15 チャット')
+            except gh_task.GhError as exc:
+                rc = exc.code
+                assert '親' in str(exc) and '着手可' in str(exc), str(exc)
+            assert rc == code, f'親の feature が{parent_status}: exit {rc}（期待 {code}）'
+            if code:
+                assert record == [], f'断ったのに書いた: {record}'
+
+    t('start --approved: [操作] の目印の止めは通すが、親の feature が着手可でなければ断る（門は迂回させない）',
+      _start_approved_checks_the_gate)
 
 
 def _expect_exit(fn, expected_code: int) -> None:
@@ -1908,8 +2219,8 @@ def main() -> int:
             gh_task.run_gh = make_write_gh(
                 {626: dict(
                     title=f'{gh_task.OPERATION_MARK} task', status=gh_task.PENDING_STATUS,
-                    kind='task', body='元の本文',
-                )},
+                    kind='task', body='元の本文', parent_number=627,
+                ), 627: dict(title='feature', status=gh_task.READY_STATUS, kind='feature')},
                 record=record, rest_handler=rest_handler,
             )
             rc = gh_task.cmd_start(626, '2026-09-28 チャット #1')
@@ -2682,7 +2993,8 @@ def main() -> int:
 
             gh_task.run_gh = make_write_gh(
                 {712: dict(title=f'{gh_task.OPERATION_MARK} task', status=gh_task.PENDING_STATUS,
-                           kind='task', body='本文')},
+                           kind='task', body='本文', parent_number=713),
+                 713: dict(title='feature', status=gh_task.READY_STATUS, kind='feature')},
                 rest_handler=rest_handler, rest_items={712: []},
             )
             _expect_exit(lambda: gh_task.cmd_start(712, 'チャット'), 1)
@@ -3439,6 +3751,56 @@ def main() -> int:
             assert '#321' in out, out
 
         t('new --from-table: 同じ slug と id の目印が既にある行は飛ばし、その番号を blocked by に使う', _from_table_skips_existing_marks)
+
+        def _from_table_feature_card_first() -> None:
+            text = (
+                '# 表の試験\n\nid_prefix: TBF\nkind: 製品の機能\ndomain: —\nwave: 6 入居者の登録\nstatus: 承認\n'
+                'approvals: 要件=PR #9 設計=PR #9 task=PR #9\napproved_at: 2026-10-01（PR #9 の merge で承認）\n\n'
+                '## 1. 問題\n\n### 提案: 登録をやさしくする\n\n**何をしたいか**: 入居者が 3 分で登録を終えられる\n\n'
+                '**しないとどうなる**:\n- 登録の途中で半数が離れる\n\n## 8. リスク\n\n- 既存の登録者の再ログインが要る（推測）\n\n'
+                '## 10. 完了条件\n\n## 11. task\n\n### 11-3. 表\n\n'
+                '| id | kind | stream | 題名 | 親 | 止める依存 | 要件 | 完了条件 |\n|---|---|---|---|---|---|---|---|\n'
+                '| TBF-F1 | feature | — | 登録の画面 | wave #704 | — | — | — |\n'
+                '| TBF-01 | task | FE | 入力欄を減らす | TBF-F1 | — | — | テストが通る |\n'
+                '| TBF-02 | task | FE | 確認の画面を消す | TBF-F1 | — | — | テストが通る |\n'
+                '| TBF-03 | task | FE | 文言を直す | TBF-F1 | — | — | テストが通る |\n\n## 12. 履歴\n'
+            )
+            calls: list[dict] = []
+            orig_new_issue, orig_existing = gh_task.new_issue, gh_task.existing_table_marks
+            orig_open = getattr(gh_task, 'table_wave_open', None)  # 差し替えより前に読む（落ちても差し替えを漏らさない）
+            gh_task.new_issue = lambda opts: calls.append(opts) or 700 + len(calls)
+            gh_task.existing_table_marks = lambda slug: {'TBF-03': 777}
+            try:
+                gh_task.table_wave_open = lambda wave, cache: True
+                rc, out = _from_table(_draft_path('tbf-run.md', text))
+                new_text = (text.replace('**何をしたいか**: 入居者が 3 分で登録を終えられる',
+                                         '**決めること**: 登録の画面を作り直すか。**推奨**: 承認する\n\n**目的**: 登録を 3 分にする\n\n'
+                                         '**位置**: 入居者の登録の残り\n\n**注意**: 外部の審査が要る')
+                            .replace('**しないとどうなる**:', '**しないと**:').replace('tbf-run', 'tbf-new'))
+                gh_task.table_wave_open = lambda wave, cache: False
+                rc2, out2 = _from_table(_draft_path('tbf-new.md', new_text))
+            finally:
+                gh_task.new_issue, gh_task.existing_table_marks = orig_new_issue, orig_existing
+                gh_task.table_wave_open = orig_open
+            new_card = calls[3]['body']
+            for needle in ('**推奨**: 承認する', '**目的**: 登録を 3 分にする', '**位置**: 入居者の登録の残り',
+                           '**注意**: 外部の審査が要る。今は承認しても動かない（先の wave 待ち）', '**しないと**: 登録の途中で半数が離れる'):
+                assert needle in new_card, f'新しい見出しの「{needle}」が無い: {new_card}'
+            assert rc2 == 0 and 'task' not in new_card.split('<!-- /card -->')[0], f'カードに内部の語 task が出た: {new_card}'
+            assert rc == 0 and [c['title'] for c in calls[:3]] == ['登録の画面', '入力欄を減らす', '確認の画面を消す'], (rc, out)
+            feature = calls[0]['body']
+            assert feature.startswith('<!-- card:approval -->\n**決めること**: 「登録の画面」を始めるか。**推奨**: <…>'), feature
+            for needle in ('**目的**: 入居者が 3 分で登録を終えられる', '**位置**: 段「6 入居者の登録」の一部',
+                           '**承認すると**: 作成済みの作業 3 件が着手できる状態になる。戻せる', '**しないと**: 登録の途中で半数が離れる',
+                           '**注意**: 既存の登録者の再ログインが要る（推測）', '**詳しく**: docs/draft/tbf-run.md'):
+                assert needle in feature, f'「{needle}」が無い: {feature}'
+            assert feature.rstrip().splitlines()[-1].startswith('<!-- rmp-task: id=TBF-F1 '), f'目印が末尾に無い: {feature}'
+            assert gh_task.parse_task_mark(feature)['id'] == 'TBF-F1'
+            assert calls[1]['body'].startswith('<!-- rmp-task: id=TBF-01 '), 'task の本文は今の形（目印が先頭）のまま'
+            assert 'hirai-task card 701 --sync' in out, out
+
+        t('new --from-table: feature の行は本文の先頭に承認カード（draft の目的・位置・しないと・注意・子の数）、目印は末尾',
+          _from_table_feature_card_first)
 
         def _from_table_refuses_unapproved_stage() -> None:
             for label, path in (
@@ -4392,7 +4754,7 @@ def main() -> int:
                         title: str = 'task', status: str | None = None, approved: str | None = None) -> dict:
             """偽 gh で start を 1 回走らせる。本文の PATCH（REST）を受けたら item の body を差し替える
             （2 回目の start が新しい本文を読む）。Status の書き込み（Project item の PATCH）は fail_status_write で落とせる。"""
-            spec = dict(title=title, status=status or gh_task.READY_STATUS, kind='task', body=body)
+            spec = dict(title=title, status=status or gh_task.READY_STATUS, kind='task', body=body, parent_number=751)
             record: list = []
             patches: list = []
 
@@ -4403,7 +4765,8 @@ def main() -> int:
                     return {}
                 return None
 
-            inner = make_write_gh({750: spec}, record=record, rest_handler=rest_handler)
+            inner = make_write_gh({750: spec, 751: dict(title='feature', status=gh_task.READY_STATUS, kind='feature')},
+                                  record=record, rest_handler=rest_handler)
 
             def fake(args, input_text=None):
                 if fail_status_write and args[:3] == ['api', '-X', 'PATCH'] and 'projectsV2' in args[3]:
@@ -5043,7 +5406,9 @@ def main() -> int:
         def _start_approved_prints_bundle() -> None:
             gh_task.run_gh = make_write_gh(
                 {727: dict(title=f'{gh_task.OPERATION_MARK} task', status=gh_task.READY_STATUS, kind='task',
-                           body=_mark('TBL-01', 'tbl@PR9', READS))}, record=[], rest_handler=lambda m, p, b: {})
+                           body=_mark('TBL-01', 'tbl@PR9', READS), parent_number=728),
+                 728: dict(title='feature', status=gh_task.READY_STATUS, kind='feature')},
+                record=[], rest_handler=lambda m, p, b: {})
             buf = io.StringIO()
             with redirect_stdout(buf):
                 rc = gh_task.cmd_start(727, '出どころ')
@@ -7257,6 +7622,7 @@ def main() -> int:
             assert '保留の設計メモ 1 件' in text
             assert 'orphans' in text and '#923' in text
             assert '[User] 1 件' in text and '#924' in text
+            assert 'カードの抜け: 承認 0・判断 0・人の作業 1（hirai-task card --lint）' in text, f'カードの抜けの行が無い: {text!r}'
 
         t(
             'today は comments→close-parents→align→一覧・警告行を通しで回し、'
@@ -7412,6 +7778,7 @@ def main() -> int:
         t('控えは git ディレクトリの下に置き、worktree で共有し、作業ツリーを汚さない', _state_dirs_live_in_git_dir)
 
         _board_checks(t, cache_tmp_dir)
+        _card_checks(t, cache_tmp_dir)
     finally:
         gh_task.run_gh = orig_run_gh
         gh_task.PROJECT_NUMBER_OVERRIDE = orig_override

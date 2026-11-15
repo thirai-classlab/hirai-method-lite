@@ -117,7 +117,7 @@ bash "$P/scripts/scope-check.sh" .claude "$HOME/.claude" .
 P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 . "$P/scripts/update-check.sh"
 harness_sync_owned_scripts "$P" "$PWD" force
-[ -d docs/rules-reference ] && [ ! -e docs/rules-reference/approval-template.md ] && cp "$P/docs/rules-reference/approval-template.md" docs/rules-reference/ && echo "placed docs/rules-reference/approval-template.md"
+for f in approval-template.md glossary.md; do [ -d docs/rules-reference ] && [ ! -e "docs/rules-reference/$f" ] && cp "$P/docs/rules-reference/$f" docs/rules-reference/ && echo "placed docs/rules-reference/$f"; done; V="$(head -n 1 "$P/docs/rules-reference/approval-template.md")"; [ -e docs/rules-reference/approval-template.md ] && ! grep -qxF "$V" docs/rules-reference/approval-template.md && ! grep -q 'approval-template: keep' docs/rules-reference/approval-template.md && echo "outdated docs/rules-reference/approval-template.md"; true
 for D in .claude "$HOME/.claude"; do
   [ -e "$D/statusline.sh" ] && bash "$D/statusline.sh" </dev/null && echo
 done
@@ -125,7 +125,7 @@ done
 
 - `same` / `updated` が 1 件も出ない場合は、手順 3 の `/hirai-lite:init` の手順がまだ済んでいない。手順 3 に戻る。
 - 最後に 2 行出力されれば、入れ替え後も画面下部の表示は動いている。出力が無い / エラーになる場合は `cp <その statusline.sh>.bak <その statusline.sh>` で戻し、内容を報告する。
-- `.bak` を作ったときは手順 6 の報告に必ず 1 行入れる。作っていなければ触れない。**入れ替える（上書きする）のはこの 3 本だけ。** 承認の型 (`docs/rules-reference/approval-template.md`) は v1.14.2 で `/init` が配るようになった参照資料で、**それ以前に導入した環境には無い**。在れば 1 バイトも触らず、**無いときだけ足す**（利用者所有ファイルを上書きしないという原則は保ったまま、欠けているものだけ補う）。`docs/rules-reference/` が無い環境（全プロジェクト共通で入れた場合など）には置かない — ポインタの 2 段目「プラグイン同梱の同名ファイル」で解決する。
+- `.bak` を作ったときは手順 6 の報告に必ず 1 行入れる。作っていなければ触れない。**黙って入れ替える（上書きする）のはこの 3 本だけ**（承認の型は、承認をもらったときだけ置き換える）。 承認の型 (`docs/rules-reference/approval-template.md`) は v1.14.2 で `/init` が配るようになった参照資料で、**それ以前に導入した環境には無い**。在れば 1 バイトも触らず、**無いときだけ足す**（利用者所有ファイルを上書きしないという原則は保ったまま、欠けているものだけ補う）。`docs/rules-reference/` が無い環境（全プロジェクト共通で入れた場合など）には置かない — ポインタの 2 段目「プラグイン同梱の同名ファイル」で解決する。進め方の用語集（`glossary.md`、v2.8.0）も同じ扱い。**`outdated docs/rules-reference/approval-template.md` と出たら**、導入先の写しは配布版と型の版が違う（1 行目の `approval-template:` の版の目印で見分ける。v2.7.0 までの写しには目印が無い）。**承認カード**（決めること・推奨 / 目的 / 位置 / 承認すると / しないと / 注意 / 詳しく）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（配布版の側を読む）。承認されたら `cp docs/rules-reference/approval-template.md docs/rules-reference/approval-template.md.bak` で控えてから配布版で置き換える（書き足した記入例は `.bak` から戻せる）。承認されなければ置き換えず、写しの末尾に `<!-- approval-template: keep（<日付> に置き換えを断った） -->` を 1 行足して、次の `/update` で聞き直さない。そのときは手順 6 の報告に「承認の型の写しは古い版のまま。コマンドは写しを先に読むので、承認の詳しい書き方は古い型で動く（カードの行の名前はコマンドの本文が示す）」と 1 行書く。
 
 ## 手順 5: 版が上がったことを検証する
 
@@ -165,7 +165,7 @@ bash の出力は作業ログであって報告ではない。**最後に必ず�
 
 - 移行が起きなかった場合（すでに `docs/` を使っている / `.claude/` に書類が無い）は、**書類の置き場の行を丸ごと省く**。移した件数とパスは手順 2 の実測値に差し替える（行数は 2-1 で控えた値）。
 - **移さなかったものがあれば必ず 1 行足す**（消していないこと・どちらを残すか決めてほしいことを伝える）。例: `⚠️ .claude/tasks/list.md は移していません。docs/tasks/list.md が既にあり、上書きすると中身が消えるためです。いまは両方残っています。読まれるのは docs/ 側です。中身を見比べて、残すほうを教えてください。`
-- 手順 4 で `placed docs/rules-reference/approval-template.md` と出たときだけ 1 行足す: `✅ 承認をお願いするときの型を置きました → docs/rules-reference/approval-template.md`。`scope-check.sh` が警告を出していたら、報告の末尾にその全文をそのまま貼る。途中で止まったら同じ調子で「何が起きたか」「どうすればよいか」「ここまでにやったこと」を書く。
+- 手順 4 で `placed docs/rules-reference/approval-template.md` と出たときだけ 1 行足す: `✅ 承認をお願いするときの型を置きました → docs/rules-reference/approval-template.md`。`placed docs/rules-reference/glossary.md` なら `✅ 進め方の用語集を置きました → docs/rules-reference/glossary.md`、型を置き換えたなら `✅ 承認の型を承認カードに替えました（元の写しは approval-template.md.bak）`。`scope-check.sh` が警告を出していたら、報告の末尾にその全文をそのまま貼る。途中で止まったら同じ調子で「何が起きたか」「どうすればよいか」「ここまでにやったこと」を書く。
 
 ## 手動でやらずに済ませたいとき（既定は無効）
 
@@ -196,5 +196,5 @@ cat "$P/VERSION"                                                                
 - `cat "$P/VERSION"` が更新前より新しい semver を返す（`$P` は素材行で解決した値。環境変数を直に書いた行は空振りする）。
 - 手順 0 の控えが `${TMPDIR:-/tmp}/claude-harness-lite/rules-backup-*/` にあり、**元の `rules/` も残っている**（コピーであって移動ではない）。
 - 手順 2 のあと、`ls .claude/tasks .claude/draft .claude/rules-reference 2>/dev/null` が**移さなかったもの以外は何も返さない**（移した分は `docs/` 側に在り、`git status --short` で `R` (rename) か 削除 + 追加 として見える）。移行が不要だった場合は最初から何も返さない。
-- 手順 4 で `same` / `updated` と出た `$D`（プロジェクト側 / ホーム側のうち実際に置いてある方）について、`cmp -s "$P/scripts/statusline.sh" "$D/statusline.sh"` と `cmp -s "$P/scripts/tasks-path.sh" "$D/tasks-path.sh"` と `cmp -s "$P/scripts/context-usage.sh" "$D/context-usage.sh"` が 3 つとも exit 0。 `docs/rules-reference/` がある環境では `ls docs/rules-reference/approval-template.md` も exit 0（元から在ったものは中身が変わっていない）。
-- `bash "$D/statusline.sh" </dev/null` が 2 行出力する（1 行目 = いまの状態 / 2 行目 = 設定リンク）。`bash "$P/tests/smoke.sh"` が exit 0 で、`git status --short` に `CLAUDE.md` `docs/` `.claude/rules/` の変更が出ていない。
+- 手順 4 で `same` / `updated` と出た `$D`（プロジェクト側 / ホーム側のうち実際に置いてある方）について、`cmp -s "$P/scripts/statusline.sh" "$D/statusline.sh"` と `cmp -s "$P/scripts/tasks-path.sh" "$D/tasks-path.sh"` と `cmp -s "$P/scripts/context-usage.sh" "$D/context-usage.sh"` が 3 つとも exit 0。 `docs/rules-reference/` がある環境では `ls docs/rules-reference/approval-template.md docs/rules-reference/glossary.md` も exit 0（元から在ったものは、承認を得て置き換えた承認の型を除き、中身が変わっていない）。
+- `bash "$D/statusline.sh" </dev/null` が 2 行出力する（1 行目 = いまの状態 / 2 行目 = 設定リンク）。`bash "$P/tests/smoke.sh"` が exit 0 で、`git status --short` に `CLAUDE.md` `.claude/rules/` の変更と、`docs/` の変更（新しく置いた `glossary.md`、承認を得て置き換えた `approval-template.md` とその `.bak` を除く）が出ていない。

@@ -44,6 +44,7 @@ NOT_READY_ORDER = ('自分に未完了の blocked by', '親の feature に未完
                    '先の wave が出ていない', '[User]（人の作業）', '親が feature でない・無い',
                    '種別が task でない（空を含む。ready に出ない）')
 USER_MARK = '[User]'
+OPERATION_MARK = '[操作]'  # 人の資格・権限が要るが AI が行う操作。要るのは承認カード
 NON_TASK_KINDS = ('wave', 'feature', '設計メモ')
 ISSUE_URL_RE = re.compile(r'^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/(?:issues|pull)/\d+\Z')
 MARK_HERE = ' ←'
@@ -276,6 +277,9 @@ def summary_rows(model: dict) -> list:
         ('進行中', by_status['進行中'], '', 0),
         ('レビュー中（merge 待ち）', by_status['レビュー中'], f'うち open の PR が無い {no_pr}', 0),
         ('承認待ちの feature（人がボードで着手可にする）', pending_feats, '子の task はこの feature が着手可になるまで ready に出ない', 0),
+        ('うち承認しても動かない', len(data.get('stalls') or {}), '先の wave・blocked by・子が人の作業と保留だけ・子が無い', 1),
+        ('うちカード無し・形の問題', sum(1 for c in (data.get('cards') or {}).values() if c['kind'] == 'approval' and c['problems']),
+         '承認カード（hirai-task card --lint）', 1),
         ('承認待ちの task', by_status['承認待ち'], '', 0),
         ('判断待ち（裁定を待つ）', by_status['判断待ち'], '', 0),
         ('依存待ち', by_status['依存待ち'], f"open の blocked by あり {dep_with}（wave をまたぐ {marks['wave をまたぐ']}・"
@@ -339,7 +343,21 @@ def task_line(model: dict, task: dict, here: int | None) -> str:
     else:
         note = '着手できる' if n in model['ready'] else '-'
     mark = MARK_HERE if here == n else ''
-    return f"    - task #{n} {one_line(task.get('title'))} | {status_of(task)} | {note}{mark}"
+    return f"    - task #{n} {one_line(task.get('title'))} | {status_of(task)} | {note}{card_text(model, n)}{mark}"
+
+
+def card_text(model: dict, number: int) -> str:
+    """--text の行に足すカードの印（要るカードがある行だけ）。"""
+    info = (model['data'].get('cards') or {}).get(number)
+    if info is None:
+        return ''
+    stall = (model['data'].get('stalls') or {}).get(number)
+    if not info['has_card']:
+        text = ' | カード無し'
+    else:
+        rec = f"（推奨 {one_line(info['recommend'])}）" if info['recommend'] and info['kind'] != 'work' else ''
+        text = f" | カード: {one_line(info['decide'])}{rec}" + (' | カードの形に問題' if info['problems'] else '')
+    return text + (f' | 承認しても動かない: {stall}' if stall else '')
 
 
 def feature_lines(model: dict, feat: dict, here: int | None) -> list:
@@ -348,7 +366,8 @@ def feature_lines(model: dict, feat: dict, here: int | None) -> list:
     blockers = blocker_info(model, feat['number'], model['data']['blockers'].get(feat['number'], []))
     mark = MARK_HERE if here == feat['number'] else ''
     lines = [f"  - feature #{feat['number']} {one_line(feat.get('title'))} | {status_of(feat)} | "
-             f"子 task {len(kids)}（open {len(kids) - closed}・閉 {closed}） | blocked by: {blockers_text(blockers)}{mark}"]
+             f"子 task {len(kids)}（open {len(kids) - closed}・閉 {closed}） | blocked by: {blockers_text(blockers)}"
+             f"{card_text(model, feat['number'])}{mark}"]
     lines += [task_line(model, t, here) for t in kids if is_open(t)]
     return lines
 
@@ -446,6 +465,28 @@ def md_list(rows: list, suffix=None) -> list:
     return lines + ([f'- ほか {len(rows) - MD_TOP} 件'] if len(rows) > MD_TOP else [])
 
 
+def card_list(model: dict, rows: list) -> list:
+    """あなたの番の行: 1 行目にカードの決めること（無ければ題名）、2 行目に推奨・期限・カード無し・動かない。"""
+    cards, stalls = model['data'].get('cards') or {}, model['data'].get('stalls') or {}
+    stall_short = model['data'].get('stall_short') or {}  # 短い言い方は bin/hirai-task の STALL_SHORT が決める
+    lines = []
+    for r in rows[:MD_TOP]:
+        info = cards.get(r['number']) or {'has_card': False}
+        notes = [] if info['has_card'] else ['カード無し']
+        if info['has_card']:
+            notes += [f"推奨 {short(info['recommend'], 12)}"] if info['recommend'] and info['kind'] != 'work' else []
+            notes += [f"期限 {short(info['deadline'], 12)}"] if info.get('deadline') else []
+            notes += ['形の問題あり'] if info['problems'] else []
+        stall = stalls.get(r['number'])
+        notes += [f"動かない（{stall_short.get(r['number']) or short(stall, 12)}）"] if stall else []
+        lines += [f"- #{r['number']} {short(info['decide'] if info['has_card'] else r.get('title'))}",
+                  '  ' + '・'.join(notes or ['—'])]
+    missing = sum(1 for r in rows if not (cards.get(r['number']) or {}).get('has_card'))
+    moving = sum(1 for r in rows if r['number'] in stalls)
+    head = [f'うちカード無し {missing}' + (f'・承認しても動かない {moving}' if moving else '')] if missing or moving else []
+    return head + lines + ([f'- ほか {len(rows) - MD_TOP} 件'] if len(rows) > MD_TOP else [])
+
+
 def your_turn(model: dict, open_tasks: list) -> list:
     """あなたの番（人が動かすもの）: (見出し, 行, 末尾の注記)。"""
     data = model['data']
@@ -455,9 +496,10 @@ def your_turn(model: dict, open_tasks: list) -> list:
         prs = data['open_prs'].get(t['number']) or []
         return f' → PR #{prs[0]}' if prs else '（PR なし）'
     return [
-        ('承認待ちの feature（ボードで着手可に）', feats, None),
-        ('判断待ち（裁定する）', [t for t in open_tasks if t.get('status') == '判断待ち'], None),
-        ('[User] の作業', [t for t in open_tasks if USER_MARK in (t.get('title') or '')], None),
+        ('承認待ちの feature（ボードで着手可に）', feats, 'card'),
+        ('判断待ち（裁定する）', [t for t in open_tasks if t.get('status') == '判断待ち'], 'card'),
+        ('[User] の作業', [t for t in open_tasks if USER_MARK in (t.get('title') or '')], 'card'),
+        ('操作の承認', [t for t in open_tasks if OPERATION_MARK in (t.get('title') or '') and t.get('status') == '承認待ち'], 'card'),
         ('レビュー中（PR の merge）', [t for t in open_tasks if t.get('status') == 'レビュー中'], pr_of),
     ]
 
@@ -476,7 +518,7 @@ def render_summary_md(data: dict) -> str:
              '### あなたの番']
     turn = [(label, rows, suffix) for label, rows, suffix in your_turn(model, open_tasks) if rows]
     for label, rows, suffix in turn:
-        lines += [f'{label} {len(rows)}', *md_list(rows, suffix)]
+        lines += [f'{label} {len(rows)}', *(card_list(model, rows) if suffix == 'card' else md_list(rows, suffix))]
     if not turn:
         lines.append('なし')
     groups = [('承認待ちの task', [t for t in stuck if t.get('status') == '承認待ち'], True),
@@ -569,6 +611,23 @@ def render_summary(model: dict) -> str:
                    for label, count, note, indent in summary_rows(model))
     return ('<section><h2>どこで何件止まっているか</h2><div class="scroll"><table class="summary"><thead><tr><th>区分</th><th>件数</th>'
             f'<th>定義・内訳</th></tr></thead><tbody>{rows}</tbody></table></div></section>')
+
+
+def render_queue(model: dict) -> str:
+    """承認と判断の待ち（あなたの番）: カードの決めること・推奨・期限・動かない理由・形の問題。"""
+    data = model['data']
+    cards, stalls = data.get('cards') or {}, data.get('stalls') or {}
+    names = {'approval': '承認', 'decision': '判断', 'work': '人の作業'}
+    rows = ''.join(
+        f'<tr><td>{issue_link(model, n)}</td><td>{e(names[c["kind"]])}</td>'
+        f'<td>{e(one_line(c["decide"]) if c["has_card"] else "カード無し")}</td><td>{e(c["recommend"])}</td>'
+        f'<td>{e(c.get("deadline") or "")}</td><td>{e(stalls.get(n, ""))}</td><td>{e(" / ".join(c["problems"]))}</td></tr>'
+        for n, c in sorted(cards.items(), key=lambda kv: (list(names).index(kv[1]['kind']), kv[0])))
+    table = scroll('<table><thead><tr><th>#</th><th>種類</th><th>決めること（カード）</th><th>推奨</th><th>期限</th>'
+                   f'<th>承認しても動かない</th><th>カードの問題</th></tr></thead><tbody>{rows}</tbody></table>') \
+        if rows else '<p class="muted">0 件</p>'
+    return (f'<section><h2>承認と判断の待ち（あなたの番・{len(cards)} 件）</h2>{table}<p class="note">カードの型は '
+            'docs/rules-reference/approval-template.md。直したら hirai-task card &lt;番号&gt; --sync。</p></section>')
 
 
 def render_wave_counts(model: dict) -> str:
@@ -712,7 +771,7 @@ a{color:#2a78d6}.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-wid
 
 def render_html(data: dict) -> str:
     model = build(data)
-    body = (render_header(model) + render_summary(model) + render_wave_counts(model) + render_graph(model)
+    body = (render_header(model) + render_summary(model) + render_queue(model) + render_wave_counts(model) + render_graph(model)
             + render_stuck(model) + render_features(model) + render_untreed(model))
     return ('<!doctype html><html lang="ja"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'

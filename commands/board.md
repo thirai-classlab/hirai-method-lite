@@ -1,5 +1,5 @@
 ---
-description: GitHub Project の全体像と、どこで何件止まっているか（承認待ち・判断待ち・依存待ち・保留・レビュー中・着手できない理由・人の作業）を出す。進捗を聞かれたとき（スマートフォンから Remote Control で聞かれたときも）に使う。読むだけで、publish を付けたときだけ進捗用 issue の本文を書く。
+description: GitHub Project の全体像と、どこで何件止まっているか（承認待ち・判断待ち・依存待ち・保留・レビュー中・着手できない理由・人の作業）と、あなたの番（承認・判断・人の作業のカードの決めることと推奨）を出す。進捗を聞かれたとき（スマートフォンから Remote Control で聞かれたときも）に使う。読むだけで、publish を付けたときだけ進捗用 issue の本文を書く。
 argument-hint: "[text [wave|feature|task <n>] | html | refresh | publish <issue番号>]"
 ---
 
@@ -21,6 +21,7 @@ GitHub Project のやること（wave → feature → task）を `hirai-task boa
 
 - **出力を加工しない。** 件数を数え直したり、言い換えたりしない（数字の出どころが 2 つになる）。足すのは最後の 1 行だけ。
 - **`publish` は引数で頼まれたときだけ実行する。** GitHub の issue の本文を書く唯一の操作で、目印（`<!-- hirai-board:start -->` と `<!-- hirai-board:end -->`）の間だけを置き換える。控えが新しくても取り直してから書く。自分の判断で publish しない。
+- **あなたの番**は、承認待ちの feature・判断待ち・`[User]` の作業・承認待ちの `[操作]`（操作の承認）を、カード（`docs/rules-reference/approval-template.md`）の「決めること」と「推奨」（判断カードは期限も）で出す。カードの無い行は「カード無し」、承認しても子の task が動かない feature は「動かない（理由）」と出る。カードの抜けの一覧は `hirai-task card --lint`。
 - 取得は 10 分のあいだ控え（git の管理ディレクトリの下の `hirai-task/gh-board-cache.json`）を使い、GitHub に問い合わせない。今すぐ取り直すときは `refresh`。行が多い Project は取得に数十秒かかる（1,471 行で約 34 秒）。
 
 ## 止まったとき
