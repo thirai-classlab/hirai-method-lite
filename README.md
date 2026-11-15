@@ -22,6 +22,14 @@ Claude Code で次の 2 行を順に実行します。
 - **1 行目は配布元の一覧を登録するだけ**です。この時点では何もインストールされません。
 - **2 行目で実際に入ります。** 詳細画面が開き、次のステップの選択を求められます。
 
+> **ターミナルから 1 行で入れることもできます**（使いたいプロジェクトのフォルダで実行。配布元の登録と導入を 1 回で行い、範囲は Local）。
+>
+> ```
+> claude plugin install hirai-lite-v2 --marketplace thirai-classlab/hirai-method-lite --scope local
+> ```
+>
+> Claude Code 2.1.312 の `claude plugin install --help` で `--marketplace`（まだ登録していない配布元は先にユーザー設定へ登録する）と `--scope` があることを確かめました。このあとは手順 4 の `/hirai-lite:init` へ進みます。
+
 ターミナルから同じ操作（`claude plugin marketplace add …`）を試したときは確認は出ず、`✔ Successfully added marketplace: hirai-lite` とだけ表示されました。**画面の中から `/plugin` で実行した場合に確認が出るかは未確認です。** 出た場合は、追加先が `thirai-classlab/hirai-method-lite` になっていることを確かめてから進めてください。
 
 なお公式ドキュメントには「プラグインとマーケットプレイスは、あなたの権限で任意のプログラムを実行できる。信頼できる配布元のものだけを入れること」という注意書きがあります（[Security](https://code.claude.com/docs/en/discover-plugins.md#security)）。
@@ -52,14 +60,14 @@ Claude Code で次の 2 行を順に実行します。
 
 | 表示 | 中身 |
 |---|---|
-| コマンド 12 個 + スキル 2 個（画面では合わせて **Skills**） | `/hirai-lite:init` `/hirai-lite:commit` など、こちらから呼び出して使う操作 12 個と、AI が必要なときに自分で読む手引き 2 個（`grilling` / `context-engineering`） |
-| エージェント 3 個（**Agents**） | テストの進め方・コード品質・脆弱性をそれぞれ見る担当（`tdd-guide` / `code-reviewer` / `security-reviewer`） |
+| コマンド 14 個 + スキル 3 個（画面では合わせて **Skills**） | `/hirai-lite:init` `/hirai-lite:commit` `/hirai-lite:board` など、こちらから呼び出して使う操作 14 個と、AI が必要なときに自分で読む手引き 3 個（`grilling` / `context-engineering` / `github-project`） |
+| エージェント 1 個（**Agents**） | テストを先に書く進め方の担当（`tdd-guide`）。v2.7.0 でレビューの agent 2 個は外した（正しさは組み込みの `/code-review`。脆弱性は観点を指示した reviewer と、利用者が打つ `/security-review`。詳しくは「同梱しているエージェント」） |
 | 自動処理 3 本（画面では **Hooks (2)**） | セッション開始時の 1 行表示、容量が増えたときの警告、`loop`（自動で進む）のときの進め方の再掲 |
 | 外部ツール接続 2 個（**MCP servers**） | コードを検索する `serena` と、ライブラリの公式ドキュメントを取ってくる `context7` |
 
 あわせて、毎回のセッションで常にかかる容量の見積もりも出ます（v1.8.0 をターミナルの `claude plugin details` で見ると `Always-on: ~520 tok` と表示されました。v1.7.0 は約 452 tokens で、増えた分は `grilling` の名前と説明が常時載るぶんです）。
 
-> **`Skills` の件数はコマンドとスキルの合計です。** v1.14.0 の `claude plugin details hirai-lite` は `Skills (14)` と出ます — コマンド 12 個 + スキル 2 個（`grilling` / `context-engineering`）で、**コマンドが 14 個に増えたわけではありません**。コマンドは `/hirai-lite:` から始まる 12 個のままです（v1.8.0〜v1.13.0 はスキル 1 個で `Skills (13)` でした）。
+> **`Skills` の件数はコマンドとスキルの合計です。** v2.7.0 の `claude plugin details hirai-lite` は `Skills (17)` と出ます — コマンド 14 個 + スキル 3 個（`grilling` / `context-engineering` / `github-project`）です。`Agents (1)`、`MCP servers (2)` と並びます（2026-11-15、偽の HOME に手元の写しを入れて Claude Code 2.1.312 で確認。`Always-on: ~637 tok` と出ました。2.6.0 は `Skills (14)`・`Agents (3)`・約 609 tokens。この見積もりは `disable-model-invocation: true` の 5 本の説明文も数えていますが、[公式](https://code.claude.com/docs/en/skills) ではその説明文は会話に載りません）。
 >
 > **`Hooks` の件数はスクリプトの本数ではなく、きっかけ（イベント）の種類数です。** v1.11.0 の `claude plugin details hirai-lite` は `Hooks (2)  SessionStart, UserPromptSubmit` と出ますが、スクリプトは 3 本あります（`UserPromptSubmit` に 2 本ぶら下がっているため）。偽 HOME への実インストールで確かめた挙動で、3 本目を足しても表示は `(2)` のままです（別イベントを足したコピーでは `(3)` に増えました）。本数を数えるなら `ls <プラグイン>/hooks/*.sh`、または `tests/smoke.sh` case 6 の `hook=3/5` を見てください。
 
@@ -72,7 +80,7 @@ Claude Code で次の 2 行を順に実行します。
 
 ここで初めて、決まりごと（ルール）と設定がそのプロジェクトに置かれます。
 
-**置く前に 3 つだけ質問されます**（v1.4.0 から。v1.6.0 から Claude Code 標準の選択 UI で出ます。v1.8.0 で「ファイルの置き場所」を聞くのをやめて 3 つになりました）。どこに入れるか / [`ultracode`（深く考えて自動で手分けする。利用量が増える）](#ultracode-について)を有効にするか / [mode（進め方）](#mode進め方とは)を `normal`（確認あり）と `loop`（自動で進む）のどちらにするか の 3 つで、それぞれ既定の選択肢に `(推奨)` が付いているので、そのまま選べば進みます。すでに入っている設定は上書きしないので、該当する質問は省かれます（`mode.yml` がすでにあれば mode は聞かれません）。すでに一式が入っているプロジェクトで実行したときは質問されず、「すべてそのまま」と報告されます。
+**置く前に 3 つだけ質問されます**（ユーザー設定にすでに画面下部の表示がある人には、それを替えるかの 1 問が足されて 4 つ。v2.7.0 から。v1.4.0 から。v1.6.0 から Claude Code 標準の選択 UI で出ます。v1.8.0 で「ファイルの置き場所」を聞くのをやめて 3 つになりました）。どこに入れるか / [`ultracode`（深く考えて自動で手分けする。利用量が増える）](#ultracode-について)を有効にするか / [mode（進め方）](#mode進め方とは)を `normal`（確認あり）と `loop`（自動で進む）のどちらにするか の 3 つで、それぞれ既定の選択肢に `(推奨)` が付いているので、そのまま選べば進みます。すでに入っている設定は上書きしないので、該当する質問は省かれます（`mode.yml` がすでにあれば mode は聞かれません）。すでに一式が入っているプロジェクトで実行したときは質問されず、「すべてそのまま」と報告されます。
 
 置かれるのは次のものです。
 
@@ -122,6 +130,43 @@ Claude Code で次の 2 行を順に実行します。
 - 「入れる範囲」を選ぶ画面での並び順と、はじめから選ばれている選択肢。3 つの選択肢があることと[それぞれの意味](https://code.claude.com/docs/en/discover-plugins.md#install-plugins)は公式ドキュメントに、記録される場所はターミナルから `--scope` を指定して実際に入れた結果で確かめています
 - フォルダを信頼するか尋ねる画面が出る条件。このプラグインが配る安全設定は「禁止」と「確認」だけで、公式ドキュメントによればこの 2 つは信頼の確認を待たずに効きます
 
+## やること管理（GitHub Project）・コンソール・スマートフォン
+
+v2 はやることを GitHub の issue と Project（wave → feature → task、Status 8 値）で持ちます。読み書きは同梱の `hirai-task` が行います（プラグインを入れると `bin/` が PATH に入ります）。
+
+### 新しいプロジェクトで立ち上げる（`/hirai-lite:project-setup`、v2.7.0）
+
+`/hirai-lite:init` のあとに `/hirai-lite:project-setup` と入力します。
+
+1. まず**計画だけ**を見せます（何を作るか・何がすでにあるか）。GitHub に Project を作る外向きの操作なので、ここで承認をお願いします
+2. 承認すると、Project の作成・リポへの紐づけ・項目（Status 8 値・種別・着手順）・ビュー 6 枚までを自動で行います。組織にテンプレートの Project があれば `--from-template <owner>/<番号>` で複製して作ります（ビュー・項目・auto-add 以外の自動化を引き継ぎます）
+3. 組込の自動化の On と、全体ビューの階層表示・wave の並びは GitHub の API では設定できないので、**何を・どこで（URL）・どの値で**の表で案内します
+4. 最後に `hirai-task ready` が動くことを確かめます
+
+すでに Project が紐づいているリポでは作り直さず、足りない項目・選択肢だけを足します。手順の本体は `docs/rules-reference/project-setup.md` です。`gh` の token に `project` の権限が要ります（無ければ `gh auth refresh -s project` を案内します）。
+
+### 全体像と、どこで何件止まっているか（`/hirai-lite:board`、v2.7.0）
+
+`/hirai-lite:board` と入力するか、「進捗を見せて」と頼むと、GitHub Project から次をまとめて出します（読むだけで、GitHub には書き込みません）。
+
+- **止まっているものの件数**: 承認待ち・判断待ち（裁定）・依存待ち・保留・レビュー中・着手可なのに着手できない（理由ごと）・人の作業（`[User]`）
+- **あなたの番**: 人が動かすもの（承認待ちの feature・判断待ち・`[User]`・レビュー中の PR）
+- wave ごと × Status の件数
+
+会話には短い表で出し、詳しい版は HTML（wave の依存図・wave ごとの feature 表・止まっている task の表）に書き出してパスを出します。ターミナルでは `hirai-task board --text` で wave → feature → task の木も見られます。着手できるかの最終判断は `hirai-task ready` が正です（「着手できる」の数は `ready` と同じ判定で数えます）。HTML と取得の控えは git の管理ディレクトリの下（`.git/hirai-task/`）に置くので、作業ツリーは汚れません。控えは 10 分使い、そのあいだは GitHub に問い合わせません（今すぐ取り直すときは `/hirai-lite:board refresh`）。
+
+### スマートフォンから進捗を見て、指示する（v2.7.0）
+
+| やりたいこと | やり方 | 前提 |
+|---|---|---|
+| 進捗を聞く・指示する | Claude アプリの **Code** から、手元で動いているセッションを開き、「進捗を見せて」と送る。スマホの幅で読める短い表で返ります。そのまま「#123 に着手して」と指示できます | 手元の PC で Claude Code が動いていること（[Remote Control](https://code.claude.com/docs/en/remote-control)）。`/config` の **Enable Remote Control for all sessions** をオンにすると毎回自動でつながります。アプリは Claude Code で `/mobile` と打つと QR が出ます |
+| 確認や質問にスマホで答える | 許可の確認・質問が来たら通知が届くので、アプリで答える | `/config` の **Push when actions required** をオン |
+| PC を閉じていても進捗を見る | 進捗用の issue を 1 本作ってピン留めし、`hirai-task board --publish <その issue の番号>` で本文に要約を書いておく。GitHub アプリでいつでも読めます。Project のビュー（承認・裁定・止まっているもの）も GitHub アプリで開けます | `--publish` だけは GitHub に書き込みます（目印の間だけを置き換え、ほかの本文は変えません） |
+| 着手を承認する・裁定する | GitHub アプリで feature の Status を「着手可」に動かす。判断待ちの issue にはコメントで答える | コメントは次の会話の最初に `hirai-task comments` が拾います |
+
+- Remote Control は claude.ai のログインが要ります（API キーや Bedrock・Vertex では使えません）。実行とファイルは手元の PC のままです
+- アプリから打ったスラッシュコマンドが通るかは確かめていません。「進捗を見せて」のように文で頼めば、Claude が `/hirai-lite:board` を呼びます
+
 ## `/clear` と続きの再開
 
 会話が長くなったら `/clear` と入力してリセットできます。**消えるのは会話の履歴だけ**です。`CLAUDE.md` と `.claude/rules/` に書いた決まりごとは、[新しい会話のはじめに読み込み直されます](https://code.claude.com/docs/en/memory.md)ので、消えません。ウィンドウを閉じて開き直しても結果は同じで、どちらでも構いません。
@@ -143,7 +188,7 @@ Claude Code で次の 2 行を順に実行します。
 セッションを開いたとき、画面の最初のほうにこんな 1 行が出ることがあります。
 
 ```
-[harness] 更新あり v0.3.0 → v0.9.0 (/update で適用)
+[harness] 更新あり v0.3.0 → v0.9.0 (/hirai-lite:update で適用)
 ```
 
 これが **更新してくださいの合図**です。出たら下の 4 ステップを上から順にやります。合図が出ていなくても更新はできます（合図には時間差があります → [合図が出ないとき](#合図が出ないとき)）。
@@ -249,7 +294,7 @@ Claude Code 2.1.247 で実際に確かめたところ、この表示が出てい
 **確認できたこと / できなかったこと**（実装の根拠）:
 
 - ホームの `~/.claude/rules/` が読み込まれることは公式ドキュメントに明記があります。[memory.md](https://code.claude.com/docs/en/memory.md) の「User-level rules」: *Personal rules in `~/.claude/rules/` apply to every project on your machine.* / *User-level rules are loaded before project rules, giving project rules higher priority.*
-- 一方、**`paths:` を書いたファイルがホーム側でも「そのファイルを開いた時だけ読まれる」のかは、公式ドキュメントに明記がありません**（`paths:` の説明はプロジェクト側 `.claude/rules/` の節にあり、ホーム側の節では触れられていない）。全プロジェクト共通に入れた場合、必要なときだけ読まれるはずの 3 件が常に読まれる可能性がある点は**未確認**です。気になる場合はこのプロジェクトだけに入れる既定の使い方を選んでください。
+- **`paths:` を書いたファイルは、ホーム側（`~/.claude/rules/`）でも「該当するファイルを読む・書くときだけ」読まれます。** 照合の基準は、セッションを始めたフォルダです（[公式](https://code.claude.com/docs/en/memory.md) の Path-specific rules。2026-11-15 に確認。以前この節で「未確認」としていた点は、公式に明記されました）。
 
 ## mode（進め方）とは
 
@@ -268,6 +313,16 @@ Claude Code 2.1.247 で実際に確かめたところ、この表示が出てい
 - **`normal` のときは 1 バイトも出さない。** 確認しながら進めたい人に「確認を求めるな」が毎ターン入るのは害でしかないため（`tests/smoke.sh` case 2 が置き場 6 通りで検査する）
 - **何も止めない。** 文章を足すだけで、操作を BLOCK も `ask` もしない（`rules/_meta.md` 条 5 の「機械強制は不可逆操作のみ」は**止める**仕組みへの制限なので、reminder は対象外）
 - 止めたいときは環境変数 `HC_LOOP_REMINDER=off`
+- **Claude Code 2.1.x の後半から、UserPromptSubmit は利用者の入力以外でも動く**（`/loop` の繰り返し・背景の subagent の報告・他のセッションからのメッセージなど。カタログ調査 2026-11-15）。`loop` のときは、そのたびに 4 行が足されます。気になるなら上の環境変数で止めてください
+
+**止まらずに続けるのは、組み込みの `/goal` と組み合わせる（v2.7.0）。** `loop` は「確認を求めない」設定で、ターンが終わったあとに次のターンを始める仕組みではありません。組み込みの `/goal <終わりの条件>` を打つと、ターンごとに別のモデルが条件を満たしたかを判定し、満たすまで続けます（[公式](https://code.claude.com/docs/en/goal)）。たとえば次のように打ちます。
+
+```
+/goal hirai-task ready が空で、着手した task はすべて PR を出した
+```
+
+- `/goal` は組み込みのコマンドなので、打つのは利用者です（Claude からは呼べません）。判定するモデルはコマンドを実行せずファイルも読まないので、会話の中に出る結果（`hirai-task ready` の出力など）で判定できる条件にします
+- `/goal` は権限の確認を減らしません。確認なしで続けるには auto mode と組み合わせます。元に戻せない操作の前の確認は `loop` でも残ります
 
 ## ultracode について
 
@@ -280,6 +335,8 @@ Claude Code 2.1.247 で実際に確かめたところ、この表示が出てい
 ## statusline について
 
 `/hirai-lite:init` は `scripts/statusline.sh` と `scripts/tasks-path.sh` と `scripts/context-usage.sh` を配置先の `.claude/` へ複製し、`templates/settings.json` の `statusLine.command`（`bash "${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh"`）から呼ぶ。表示は **2 行**で、1 行目が**いまの状態**、2 行目が**次にできる操作**（v1.5.0 から）。
+
+**ユーザー設定（`~/.claude/settings.json`）にすでに statusLine がある人は、`/hirai-lite:init` が書くかどうかを聞きます（v2.7.0）。** statusLine は 1 つしか持てず、プロジェクトの設定に書くとユーザー設定の表示（Orca など別の道具のものを含む）が隠れるためです。既定は「いまの表示のまま」で、あとから `/hirai-lite:config` の 5 で切り替えられます。
 
 ```
 Claude Opus 4.5 | ctx 12% ・5h 3% ・7d 8% | mode: normal（確認あり） | feat/rate-limit | やること 4
@@ -368,12 +425,13 @@ export HC_CONTEXT_WINDOW=1000000   # 窓が 1M の会話
 
 ## 同梱している skill（スキル）
 
-`skills/` に 2 つ（上限 3）。コマンドと違って**こちらから呼び出さなくてよい** — 必要な場面を AI が判断して自分で読む手引き。名前と説明だけが常時載り、**本文は読まれた時にだけ**コンテキストに入る（[公式](https://code.claude.com/docs/en/skills)）ので、長い手引きを持っても普段の容量を食わない。
+`skills/` に 3 つ（上限 3）。コマンドと違って**こちらから呼び出さなくてよい** — 必要な場面を AI が判断して自分で読む手引き。名前と説明だけが常時載り、**本文は読まれた時にだけ**コンテキストに入る（[公式](https://code.claude.com/docs/en/skills)）ので、長い手引きを持っても普段の容量を食わない。
 
 | 名前 | 役割 |
 |---|---|
 | `grilling` | 決めごとを掘り下げて聞く進め方。決定事項を design tree に置き、**前提が確定した質問だけをまとめて 1 ラウンドで出し、各問に推奨回答を添える**。事実（ファイルの中身・依存・既存コマンド）は AI が自分で調べ、**決定だけを利用者に聞く** |
 | `context-engineering` | 決まったこと・学んだことを**次のセッションでも読まれる場所**へ置く判断。T0（毎回）/ T1（該当ファイルを触った時）/ T2（明示 Read のみ）/ T3（読まない）のどれに何をどう書くか、予算をどう守るかを、**Anthropic 公式の記述と URL つき**でまとめてある。承認の型は全作業に効く汎用規範なのでこの skill には入れず、T2 に置いてある（v1.14.0） |
+| `github-project` | GitHub Project でやること（wave・feature・task の issue と Status）を読み書きするときの決まり。v2.7.0 で `rules/tasks.md` から移した — `hirai-task` と `gh` だけで進む作業はファイルに触れないので、`paths:` 付きのルールでは読まれないため |
 
 `/hirai-lite:init` の 2 回目（案件ヒアリング）が `grilling` を呼ぶ。単体でも「この案を詰めたい」「grill me」のように頼めば起動する。`context-engineering` は `/hirai-lite:state save` の「次回に効くものを置く」工程と `/hirai-lite:add-rule` が参照する。出典は `skills/context-engineering/references/official-sources.md` に逐語引用と取得日つきで置いてある。
 
@@ -389,15 +447,17 @@ claude plugins install mattpocock-skills
 
 ## 同梱しているエージェント
 
-`agents/` に 3 つ。`rules/code.md` のレビュー規範（「実装の担当の報告に名の無い異なる観点の reviewer を 2〜3 本並列起動する」）が名指しする相手を実体として配るためのもの。
+`agents/` に 1 つ（`tdd-guide`。テストを先に書く進め方の案内）。
 
-| 名前 | 役割 |
-|---|---|
-| `tdd-guide` | テストを先に書く進め方の案内 |
-| `code-reviewer` | コード品質・保守性のレビュー |
-| `security-reviewer` | 脆弱性・秘密情報混入のレビュー |
+**レビューの担当は v2.7.0 で Claude Code 組み込みのものに替えた。** 以前は `code-reviewer` と `security-reviewer` も同梱していたが、外した。
 
-3 つとも [everything-claude-code](https://github.com/affaan-m/everything-claude-code)（MIT License, Copyright (c) 2026 Affaan Mustafa）から取り込み、出典と著作権表示を各ファイル冒頭と [`NOTICE.md`](NOTICE.md) に保持している。`rules/code.md` は例として `database-reviewer` にも触れるが、これは同梱していない（必要なら利用者が `.claude/agents/` に置く）。
+- **正しさ**: 組み込みの `/code-review`（bundled skill。Claude が回せる。本体と一緒に更新され、effort の段階や PR の指定も使える）。`rules/core.md` のレビューの例もこれを名指しする
+- **再利用・簡素化**: 組み込みの `/simplify`（bundled skill）。**直しまで当てる**ので、並列レビューの観点には入れず、指摘の対応が終わってから単独で回す
+- **脆弱性**: 組み込みの `/security-review` は**利用者が打つコマンド**で、Claude からは呼べない（[公式のコマンド一覧](https://code.claude.com/docs/en/commands) で Skill の印が無い）。AI が回すレビューでは、脆弱性の観点を指示した reviewer（サブエージェント）を立て、merge 前に利用者が `/security-review` を打つ
+
+以前の `hirai-lite:code-reviewer` を呼んでいた手順は `/code-review` に、`hirai-lite:security-reviewer` は脆弱性の観点の reviewer か利用者の `/security-review` に読み替える。
+
+`tdd-guide` は [everything-claude-code](https://github.com/affaan-m/everything-claude-code)（MIT License, Copyright (c) 2026 Affaan Mustafa）から取り込み、出典と著作権表示をファイル冒頭と [`NOTICE.md`](NOTICE.md) に保持している（v2.7.0 でカバレッジの「80%+」を「導入先が決めた基準」に替えた。hirai-lite の rules に無い数値を持ち込まないため）。
 
 ## 詳しい導入手順
 
@@ -429,14 +489,14 @@ claude plugins install mattpocock-skills
 | `.claude-plugin/plugin.json` | プラグインのマニフェスト（`VERSION` と同じ版を書く） |
 | `.claude-plugin/marketplace.json` | 自分自身を 1 エントリとして指すマーケットプレイス定義 |
 | `.mcp.json` | 同梱する MCP サーバー 2 つの定義（キーは環境変数参照のみ） |
-| `agents/` | サブエージェント 3 個（MIT、出典は `NOTICE.md`） |
-| `commands/` | スラッシュコマンド 12 個 |
-| `skills/` | スキル 2 個（`grilling` は MIT で出典は `NOTICE.md` / `context-engineering` は自作、`references/` に公式出典）。`plugin.json` に `skills` キーは書かない（既定で読まれる） |
+| `agents/` | サブエージェント 1 個（`tdd-guide`。MIT、出典は `NOTICE.md`） |
+| `commands/` | スラッシュコマンド 14 個（数の上限は v2.7.0 で外した。`init`・`update`・`config`・`rules-audit`・`project-setup` は `disable-model-invocation: true` で説明文が常時載らず、Claude からは呼ばれない） |
+| `skills/` | スキル 3 個（`grilling` は MIT で出典は `NOTICE.md` / `context-engineering` と `github-project` は自作、`references/` に公式出典）。`plugin.json` に `skills` キーは書かない（既定で読まれる） |
 | `hooks/` | `hooks.json` + SessionStart 1 本（`session-start.sh`）と UserPromptSubmit 2 本（`loop-reminder.sh` / `context-budget.sh`）。いずれも context を足すだけで、操作は止めない |
 | `rules/` | **プラグインは読まない。** `/init` が配置先の `.claude/rules/` へ配る素材 |
 | `scripts/` | hook / statusline が source する共通ライブラリ（パス解決 `tasks-path.sh` / context 使用率 `context-usage.sh` / 更新検知 `update-check.sh`）+ `/init` の二重ロード検査 |
 | `templates/` | `settings.json` / `mode.yml` / `CLAUDE.md` / draft の雛形（`CLAUDE.md` は `/init` が導入先へ置く。プラグイン直下に置くと `validate --strict` が警告するため `templates/` に置いている） |
-| `tests/smoke.sh` | 自己検証 10 case（予算監査を含む。hook 5 / command 12 / skill 3 / case 10 の数の予算も case 6 が見る） |
+| `tests/smoke.sh` | 自己検証 10 case（予算監査を含む。hook 5 / skill 3 / case 10 の数の予算も case 6 が見る。command は数だけ出す） |
 | `CHANGELOG.md` | 版ごとの変更点。v0.6.0 以前の既知の不具合もここに記録 |
 | `CONTRIBUTING.md` | 開発の進め方。**1.x は `main`、2.x は `v2` ブランチ（`hirai-lite-v2`）から配る**（1.x を `main` から配るあいだは `main` の版を上げない） |
 
@@ -444,7 +504,7 @@ claude plugins install mattpocock-skills
 
 ## rules 3 層 + 退避層
 
-Claude Code は `.claude/rules/*.md` を再帰的に発見する。`paths:` frontmatter を持つファイルは**該当ファイルを読んだ時にだけ**ロードされ、持たないファイルは**起動時に常時**ロードされる（[公式仕様](https://code.claude.com/docs/en/memory.md)）。この挙動をそのまま層設計に使う。
+Claude Code は `.claude/rules/*.md` を再帰的に発見する。`paths:` frontmatter を持つファイルは**該当ファイルを Read・Write・Edit した時と、Bash の単一ファイルの読み（`cat`・`head` など）の時にだけ**ロードされ、持たないファイルは**起動時に常時**ロードされる（[公式仕様](https://code.claude.com/docs/en/memory.md)。Write・Edit は Claude Code 2.1.288、Bash の読みは 2.1.293 から）。`gh` や `hirai-task` だけで進む作業ではファイルに触れないので、T1 は載らない。この挙動をそのまま層設計に使う。
 
 | 層 | 置き場所 | ロード条件 | 予算 | 入れてよいもの |
 |---|---|---|---|---|
