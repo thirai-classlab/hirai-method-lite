@@ -2,7 +2,7 @@
 
 `/hirai-lite:init` が案内する、GitHub の形（GitHub Project にやることを載せる形）の立ち上げ手順。設定のファイルは作らない。共通の仕組みはプラグインに入っており、案件ごとの中身（wave・feature・順番・期日）は Project の中に持つ。
 
-**自動で立ち上げる（v2.7.0）**: `/hirai-lite:project-setup`（中身は `hirai-task setup`）が、下の手順 1 と 3（Project の作成・リポへの紐づけ・項目と Status の 8 値）と 6 章のビュー 6 枚を API で行う。最初は計画を出すだけで、承認してから書き込む。すでに Project があれば、足りないものだけを足す。組織のテンプレートの Project があれば `--from-template <owner>/<番号>` で複製する（ビュー・項目・auto-add 以外の自動化を引き継ぐ。[GitHub Docs: Copying an existing project](https://docs.github.com/en/issues/planning-and-tracking-with-projects/creating-projects/copying-an-existing-project)）。画面でしかできない作業（手順 2 と 7 章）は、URL と設定値の表で出す。
+**自動で立ち上げる（v2.7.0）**: `/hirai-lite:project-setup`（中身は `hirai-task setup`）が、下の手順 1 と 3（Project の作成・リポへの紐づけ・項目と Status の 8 値）と 6 章のビュー 8 枚を API で行う。最初は計画を出すだけで、承認してから書き込む。すでに Project があれば、足りないものだけを足す。組織のテンプレートの Project があれば `--from-template <owner>/<番号>` で複製する（ビュー・項目・auto-add 以外の自動化を引き継ぐ。[GitHub Docs: Copying an existing project](https://docs.github.com/en/issues/planning-and-tracking-with-projects/creating-projects/copying-an-existing-project)）。画面でしかできない作業（手順 2 と 7 章）は、URL と設定値の表で出す。
 
 ## 1. 立ち上げの 4 手順
 
@@ -72,7 +72,7 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 | 止まっているもの | `種別:task status:依存待ち,判断待ち,保留` | 待っている task |
 | 保留中の設計メモ | `種別:設計メモ status:保留` | 止めた設計 |
 | 人の作業 | `is:open title:*User*` | 人が手を動かす作業（`[User]`）。人の作業カードを読んで行う |
-| 人の操作 | `is:open title:*操作*` | 人の資格で行う操作（`[操作]`） |
+| 人の操作 | `is:open title:*操作*` | 人の資格・権限が要るが AI が行う操作（`[操作]`）。承認カードで承認し、`hirai-task start <番号> --approved <出どころ>` で進める |
 
 - 機能をまたいで見るとき: `種別:feature title:*認証*` のように絞る
 - 承認ビューの絞り込みは v2.7.0 まで `種別:feature status:承認待ち,着手可` だった。`hirai-task setup` は、今の値が前の版の値のときだけ新しい値へ書き換え、利用者が変えた値は食い違いとして表に出す
@@ -92,6 +92,6 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 ## 8. 立ち上げ後の確かめ
 
 - `hirai-task ready` が、着手できる task を出す（空でもエラーにならない）
-- `hirai-task card --lint` が、承認待ちの feature・判断待ち・人の作業に要るカードの抜けを出す（直したら承認カードは `hirai-task card <番号> --sync`）
+- `hirai-task card --lint` が、要るカード（承認待ちの feature と `[操作]` に承認カード・判断待ちに判断カード・`[User]` に人の作業カード）の抜けと形、項目「ひとこと」「推奨」との食い違いを出す（直したら承認カードは `hirai-task card <番号> --sync`）
 - テスト用 issue を 1 本作って Project に入れ、Status が承認待ちになる
 - テスト用 PR に `Closes #<番号>` を書いて出し、レビュー中 → merge で完了と動く

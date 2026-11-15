@@ -16,7 +16,7 @@ Project の選び方も同じ: HIRAI_TASK_PROJECT があればその番号、無
 （選択肢を足すときは既存の選択肢を id ごと渡す。id を渡さないと、その値を持つ行の値が消える）。
 
 API でできる（--apply で自動にする）: Project の作成か複製、リポへの紐づけ、項目「種別」「着手順」、
-Status の 8 値、ビュー 6 枚とその絞り込み。
+Status の 8 値、ビュー 8 枚とその絞り込み（承認ビューは前の版の値のときだけ書き換える）、カードを写す項目「ひとこと」「推奨」。
 画面に残る（確認リストに出す）: 組込の自動化の On と設定値（API は読むのと消すのだけ）、
 全体ビューの階層表示（Hierarchy）・並べ替え・グループ化（ビューの設定の API は表示する項目だけ）。
 出典（2026-11-15 に確かめた）:
@@ -77,6 +77,8 @@ VIEWS = (
     ('人の作業', 'is:open title:*User*'),
     ('人の操作', 'is:open title:*操作*'),
 )
+# 題名の部分一致は広く拾う（`*[User]*` のように括弧を含む形と、* と引用符の組み合わせは docs に無いので使わない）。
+VIEW_NOTES = {'人の作業': '題名に User を含む別の issue も拾う', '人の操作': '題名に「操作」を含む別の issue も拾う'}
 # 前の版の値。今の絞り込みがこれと同じときだけ新しい値へ書き換える（利用者が変えた値は変えない）。
 OLD_VIEW_FILTERS = {'承認': ('種別:feature status:承認待ち,着手可',)}
 # project-setup.md 3 章。
@@ -271,7 +273,8 @@ def plan_existing(project: dict, ctx: dict, *, fresh: bool) -> tuple[list[dict],
     for name, flt in VIEWS:
         view = have.get(name)
         if view is None:
-            steps.append({'kind': 'view', 'name': name, 'filter': flt, 'summary': f'ビュー「{name}」（絞り込み {flt}）を作る',
+            note = f'。{VIEW_NOTES[name]}' if name in VIEW_NOTES else ''
+            steps.append({'kind': 'view', 'name': name, 'filter': flt, 'summary': f'ビュー「{name}」（絞り込み {flt}）を作る{note}',
                           'command': 'gh api graphql（createProjectV2View → updateProjectV2View）'})
         elif not (view.get('filter') or '').strip():  # 作ったが絞り込みを入れ損ねたビュー。空だけは入れて立て直す
             steps.append({'kind': 'view-filter', 'name': name, 'viewId': view.get('id'), 'filter': flt,
@@ -617,6 +620,8 @@ def selftest() -> int:
             f'--name {RECOMMEND_FIELD} --data-type SINGLE_SELECT --single-select-options 承認する,条件つき,承認しない' in out))
     expect('人の作業・人の操作のビューは、公式に書かれた形（is:open と title:*文字*）だけで絞る', (True, True),
            ('ビュー「人の作業」（絞り込み is:open title:*User*）' in out, 'ビュー「人の操作」（絞り込み is:open title:*操作*）' in out))
+    expect('人の作業・人の操作のビューが、題名に User・操作 を含む別の issue も拾うことを出す', (True, True),
+           ('題名に User を含む別の issue も拾う' in out, '題名に「操作」を含む別の issue も拾う' in out))
     rc, out, calls = run_case({'graphql': {'state': _state([], org=False, viewer='acme')}}, [])
     expect('個人（本人）は --owner @me・URL は users/', (0, True, True),
            (rc, 'gh project create --owner @me' in out, 'https://github.com/users/acme/projects/' in out))

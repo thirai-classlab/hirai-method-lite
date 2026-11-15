@@ -51,8 +51,8 @@ task と feature は親が必須。親は feature（task の場合）か wave（
 
 題名の先頭に付ける。
 
-- `[操作]`: 実行の前にチャットで 1 件ずつ承認を取る task。`hirai-task start <n> --approved <出どころ>` でだけ承認待ちから進行中に進められる（親の feature が着手可でも、`--approved` なしの `start` は断られる）
-- `[User]`: 人が手を動かす task。`hirai-task ready` にも align にも出ない。`hirai-task today` が番号で出す
+- `[操作]`: 人の資格・権限が要るが AI が行う task。実行の前に 1 件ずつ**承認カード**で承認を取る（本文の先頭にカードを置く）。`hirai-task start <n> --approved <出どころ>` でだけ承認待ちから進行中に進められる（親の feature が着手可でも、`--approved` なしの `start` は断られる。v2.8.0 から、`--approved` でも親の feature の承認・blocked by・先の wave は見る）
+- `[User]`: 人が手を動かす task。本文の先頭に**人の作業カード**（やること・誰が・手順・終わったら・これで動くもの）を置く。`hirai-task ready` にも align にも出ない。`hirai-task today` が番号で出す
 
 ### bug の親
 

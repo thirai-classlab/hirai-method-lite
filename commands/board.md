@@ -21,7 +21,7 @@ GitHub Project のやること（wave → feature → task）を `hirai-task boa
 
 - **出力を加工しない。** 件数を数え直したり、言い換えたりしない（数字の出どころが 2 つになる）。足すのは最後の 1 行だけ。
 - **`publish` は引数で頼まれたときだけ実行する。** GitHub の issue の本文を書く唯一の操作で、目印（`<!-- hirai-board:start -->` と `<!-- hirai-board:end -->`）の間だけを置き換える。控えが新しくても取り直してから書く。自分の判断で publish しない。
-- **あなたの番**は、承認待ちの feature・判断待ち・`[User]` の作業を、カード（`docs/rules-reference/approval-template.md`）の「決めること」と「推奨」（判断カードは期限も）で出す。カードの無い行は「カード無し」、承認しても子の task が動かない feature は「動かない（理由）」と出る。カードの抜けの一覧は `hirai-task card --lint`。
+- **あなたの番**は、承認待ちの feature・判断待ち・`[User]` の作業・承認待ちの `[操作]`（操作の承認）を、カード（`docs/rules-reference/approval-template.md`）の「決めること」と「推奨」（判断カードは期限も）で出す。カードの無い行は「カード無し」、承認しても子の task が動かない feature は「動かない（理由）」と出る。カードの抜けの一覧は `hirai-task card --lint`。
 - 取得は 10 分のあいだ控え（git の管理ディレクトリの下の `hirai-task/gh-board-cache.json`）を使い、GitHub に問い合わせない。今すぐ取り直すときは `refresh`。行が多い Project は取得に数十秒かかる（1,471 行で約 34 秒）。
 
 ## 止まったとき

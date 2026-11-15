@@ -36,7 +36,7 @@ APPROVAL_TEMPLATE='docs/rules-reference/approval-template.md'
 #   その除外理由に「手順 8」と書いていた (実際の差分承認は手順 5、手順 8 は二重ロード検査)。
 #   v1.14.2 で誤記ごと解消し、検査対象に入れた。
 #   update.md / new-task.md は承認を求める箇所を持たない (報告して止まるだけ)。
-APPROVAL_SITES='init.md add-rule.md state.md config.md new-draft.md start-task.md finish-task.md commit.md rules-audit.md verify.md project-setup.md'
+APPROVAL_SITES='init.md update.md add-rule.md state.md config.md new-draft.md start-task.md finish-task.md commit.md rules-audit.md verify.md project-setup.md'
 
 # smoke 自体は外部通信しない。更新検知を要する case 7/8 だけが個別に on を渡す。
 export HARNESS_UPDATE_CHECK=off
@@ -1531,10 +1531,35 @@ for m in re.finditer(r"## (記入例 [0-9]+)[^\n]*\n\n```\n(.*?)```", s, re.S):
         val = r.partition(": ")[2]
         if len(val) > (80 if i == 0 else 60):
             out.append(m.group(1) + ":" + r.partition(":")[0] + "が長い")
+    if any(r.startswith("承認すると") for r in rows) and not any(("戻せる" in r or "戻せない" in r) for r in rows if r.startswith("承認すると")):
+        out.append(m.group(1) + ":承認すると に戻せるか が無い")
 print(" ".join(out))
 PYCARD
 )"
   [ -z "$cardbad" ] || bad="$bad 承認テンプレート:記入例のカードが決まりを破る(${cardbad})"
+  # コマンドの中のカードの例も同じ決まりで見る (AI はコマンドの例も真似る)。
+  # 「決めること:」で始まる行から 7 行 (字下げは外す) を 1 枚とみなす。
+  local cmdbad
+  cmdbad="$(python3 - "$ROOT/commands" <<'PYCMD'
+import pathlib, sys
+out = []
+for f in sorted(pathlib.Path(sys.argv[1]).glob("*.md")):
+    rows = f.read_text(encoding="utf-8").split("\n")
+    for i, r in enumerate(rows):
+        if not r.strip().startswith("決めること: "):
+            continue
+        card = [x.strip() for x in rows[i:i + 7]]
+        if sum(len(x) for x in card) > 400:
+            out.append(f.name + ":400字超")
+        for j, x in enumerate(card):
+            if len(x.partition(": ")[2]) > (80 if j == 0 else 60):
+                out.append(f.name + ":" + x.partition(":")[0] + "が長い")
+        if not any(("戻せる" in x or "戻せない" in x) for x in card if x.startswith("承認すると")):
+            out.append(f.name + ":承認すると に戻せるか が無い")
+print(" ".join(out))
+PYCMD
+)"
+  [ -z "$cmdbad" ] || bad="$bad コマンドの中のカードの例が決まりを破る(${cmdbad})"
   [ -f "$ROOT/docs/rules-reference/glossary.md" ] || bad="$bad 進め方の用語集 (docs/rules-reference/glossary.md) が無い"
   grep -qF 'rules-reference/glossary.md' "$ROOT/commands/init.md" || bad="$bad /init が進め方の用語集を配らない"
   # ファイルのどこかに path が在るだけでは足りない。承認の場面と結びついていない行

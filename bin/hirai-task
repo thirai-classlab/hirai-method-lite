@@ -597,6 +597,8 @@ def parse_item(node: dict) -> dict:
         'status': fields.get('Status', ''),
         'kind': fields.get(KIND_FIELD, ''),
         'order': order if isinstance(order, float) else None,
+        'headline': fields.get('ひとこと', ''),  # CARD_HEADLINE_FIELD（承認カードの写し。card --sync が書く）
+        'recommend': fields.get('推奨', ''),  # CARD_RECOMMEND_FIELD
     }
 
 
@@ -2684,10 +2686,10 @@ REREAD_FIELD = 'reread'
 def rewrite_task_mark(body: str, *, rev: str | None = None, reread: str | None = None) -> str:
     """本文の先頭の rmp-task の目印の中だけを書き換えて返す（目印の外は 1 バイトも変えない）。
     rev は `rev=` の値を置き換え、reread は `reread=<日付>` を（あれば置き換え、無ければ末尾に）足す。"""
-    match = _TASK_MARK_RE.search(body or '')
-    if not match:
+    found = _real_task_mark(body)
+    if not found:
         return body
-    inner = match.group(1)
+    begin, finish, inner = found
     if rev is not None:
         inner = re.sub(r'(?<!\S)rev=\S*', lambda _m: f'rev={rev}', inner, count=1)
     if reread is not None:
@@ -2695,7 +2697,7 @@ def rewrite_task_mark(body: str, *, rev: str | None = None, reread: str | None =
             inner = re.sub(r'(?<!\S)reread=\S*', lambda _m: f'reread={reread}', inner, count=1)
         else:
             inner = f'{inner} reread={reread}'
-    return body[:match.start(1)] + inner + body[match.end(1):]
+    return body[:begin] + inner + body[finish:]
 
 
 def start_reread_plan(number: int, mark: dict[str, str] | None, reread: bool, root: str | None = None) -> dict[str, str]:
@@ -2995,15 +2997,64 @@ def _unresolved_notes(reqs_text: str, domain: str, slug: str = '', proposal_line
 
 
 # 機械向けの行（AI の印・rmp-task の目印）。1 行まるごとの HTML コメントだけを数える（カードの目印は数えない）。
-_MACHINE_LINE_RE = re.compile(rf'^[ \t]*<!--\s*(?:ai|{TABLE_MARK}:[^\n]*?)\s*-->[ \t]*$')
+_MACHINE_LINE_RE = re.compile(rf'^[ \t]*<!--\s*(?:ai|{TABLE_MARK}:[^\n]*?)\s*-->[ \t\r]*$')
+_TASK_MARK_LINE_RE = re.compile(rf'^[ \t]*<!--\s*{TABLE_MARK}:\s*(.*?)\s*-->[ \t\r]*$')
+
+
+def _edge_machine_lines(lines: list[str]) -> tuple[list[int], list[int]]:
+    """目印の位置の規則（読む・書き換える・照合する・抜き出す・末尾へ回す、の全部がこれを使う）。
+    本物の機械向けの行は、本文の先頭の連続した機械向けの行（旧い形）と、末尾の連続した機械向けの行（2.8.0 の形）
+    だけ。空行は挟んでよく、それ以外の行（本文・フェンスの ``` や ~~~・引用の >）に当たったところで止まる。
+    だからフェンスの中・引用・本文の途中に写した別 issue の目印は読まず、書き換えず、動かさない。
+    返り値: (先頭の塊の行番号, 末尾の塊の行番号)。"""
+    lead: list[int] = []
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        if not _MACHINE_LINE_RE.match(line):
+            break
+        lead.append(i)
+    tail: list[int] = []
+    for i in range(len(lines) - 1, -1, -1):
+        if not lines[i].strip():
+            continue
+        if not _MACHINE_LINE_RE.match(lines[i]):
+            break
+        tail.append(i)
+    return lead, sorted(tail)
+
+
+def _real_task_mark(body: str) -> tuple[int, int, str] | None:
+    """本物の rmp-task の目印の (中身の始まり, 終わり, 中身)（位置は本文の中の文字の位置）。先頭の塊を先に見る。"""
+    text = body or ''
+    lines = text.split('\n')
+    lead, tail = _edge_machine_lines(lines)
+    starts, position = [], 0
+    for line in lines:
+        starts.append(position)
+        position += len(line) + 1
+    for i in lead + [j for j in tail if j not in lead]:
+        match = _TASK_MARK_LINE_RE.match(lines[i])
+        if match:
+            return starts[i] + match.start(1), starts[i] + match.end(1), match.group(1)
+    return None
 
 
 def with_card_first(body: str, card: str) -> str:
-    """カードを先頭に、機械向けの行を末尾に置いた本文を返す（間の本文は順を変えない）。"""
-    lines = (body or '').splitlines()
-    machine = [line for line in lines if _MACHINE_LINE_RE.match(line)]
-    rest = '\n'.join(line for line in lines if not _MACHINE_LINE_RE.match(line)).strip('\n')
-    return '\n\n'.join([card] + ([rest] if rest else []) + (['\n'.join(machine)] if machine else [])) + '\n'
+    """カードを先頭に置き、本文の先頭の連続した機械向けの行を末尾へ回した本文を返す。末尾の塊はそのまま末尾に
+    残し、間の本文（フェンスの中を含む）は 1 バイトも動かさない（_edge_machine_lines の規則）。"""
+    lines = [line.rstrip('\r') for line in (body or '').split('\n')]
+    lead, tail = _edge_machine_lines(lines)
+    start = lead[-1] + 1 if lead else 0
+    if lead and tail and tail[0] <= lead[-1]:
+        end = start  # 本文が機械向けの行だけ
+    elif tail:
+        end = tail[0]
+    else:
+        end = len(lines)
+    middle = '\n'.join(lines[start:end]).strip('\n')
+    machine = [lines[i] for i in lead] + [lines[i] for i in tail if i not in lead]
+    return '\n\n'.join([card] + ([middle] if middle else []) + (['\n'.join(machine)] if machine else [])) + '\n'
 
 
 def _draft_labeled(lines: list[str], labels: tuple[str, ...], section: str) -> str:
@@ -3043,18 +3094,37 @@ def _draft_first_bullet(lines: list[str], section: str) -> str:
     return ''
 
 
-def table_feature_card(row: dict, header: dict, slug: str, lines: list[str], child_count: int) -> str:
-    """表から起こす feature の承認カード。draft から埋められる値だけ埋め、残りは <…>（推奨は人が決める）。"""
+def table_feature_card(row: dict, header: dict, slug: str, lines: list[str], child_count: int, stall: str = '') -> str:
+    """表から起こす feature の承認カード。draft の §1（カードの語。旧い見出し 何をしたいか・しないとどうなる も読む）と
+    §8 から埋め、埋められない値は <…>。推奨は AI が案件を読んで書く（§1 に推奨が書いてあれば写し、雛形では機械的に
+    埋めない）。カードには内部の語 task を出さない（作業と書く）。stall は承認しても動かない理由（あれば注意に足す）。"""
+    cards = _load_card_module()
     wave = (header.get('wave') or '').strip()
-    return _load_card_module().skeleton('approval', {
+    decide_line = _draft_labeled(lines, ('決めること',), '1.')
+    recommendation = cards._split_inline(decide_line, '推奨')[1] if decide_line else None
+    note = _draft_labeled(lines, ('注意',), '1.') or _draft_first_bullet(lines, '8.')
+    if stall:
+        note = (f'{note.rstrip("。")}。' if note else '') + f'今は承認しても動かない（{STALL_SHORT[stall]}）'
+    return cards.skeleton('approval', {
         '決めること': f'「{row["title"]}」を始めるか',
         '目的': _draft_labeled(lines, ('目的', '何をしたいか'), '1.'),
-        '位置': f'段「{wave}」の一部' if wave and '<' not in wave else '',
-        '承認すると': f'子の task {child_count} 本を起こす（設計の表から）' if child_count else '',
+        '位置': _draft_labeled(lines, ('位置',), '1.') or (f'段「{wave}」の一部' if wave and '<' not in wave else ''),
+        '承認すると': f'作成済みの作業 {child_count} 件が着手できる状態になる。戻せる' if child_count else '',
         'しないと': _draft_labeled(lines, ('しないと', 'しないとどうなる'), '1.'),
-        '注意': _draft_first_bullet(lines, '8.'),
+        '注意': note,
         '詳しく': f'{DRAFT_DIR_RELATIVE}/{slug}.md',
-    })
+    }, recommendation if recommendation and '<' not in recommendation else None)
+
+
+def table_wave_open(wave_number: int, cache: dict) -> bool:
+    """wave を止める wave が「出た」か（読むだけ。1 回の起票で Project を 1 度だけ引き、cache に置く）。"""
+    if 'index' not in cache:
+        items = fetch_all_items(discover_project_number())
+        by_number, children_of = _board_index(items)
+        waves = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
+        cache['index'] = (by_number, children_of, fetch_extras(waves), fetch_bodies(waves))
+    by_number, children_of, extras, bodies = cache['index']
+    return not preceding_wave_unresolved(wave_number, by_number, children_of, bodies, extras)
 
 
 def table_issue_body(row: dict, slug: str, src_pr: str, domain: str, proposal_lines: list[str] | None = None,
@@ -3081,11 +3151,13 @@ def table_issue_body(row: dict, slug: str, src_pr: str, domain: str, proposal_li
 
 
 def table_mark_ids(bodies: dict[int, str], slug: str) -> dict[str, int]:
-    """本文の目印（`rmp-task: id=… src=<slug>@…`。先頭でも末尾でも）から、既にある行の id → 番号。"""
-    pattern = re.compile(rf'(?m)^[ \t]*<!--\s*{TABLE_MARK}:\s*id=(\S+)\s[^>]*?src={re.escape(slug)}@')
+    """本物の目印（`rmp-task: id=… src=<slug>@…`。先頭か末尾。_edge_machine_lines）から、既にある行の id → 番号。
+    本文の途中・フェンスの中の写しは採らない（写しで起票を飛ばし、別の issue を blocked by に使わないため）。"""
+    pattern = re.compile(rf'^id=(\S+)\s.*?src={re.escape(slug)}@', re.DOTALL)
     found: dict[str, int] = {}
     for number, body in bodies.items():
-        match = pattern.search(body or '')
+        mark = _real_task_mark(body)
+        match = pattern.match(mark[2]) if mark else None
         if match:
             found[match.group(1)] = number
     return found
@@ -3143,6 +3215,7 @@ def cmd_new_from_table(argv: list[str]) -> int:
         return 0
 
     created: dict[str, int] = dict(existing)
+    wave_cache: dict = {}
 
     def number_of(ref: str) -> int:
         return int(ref[1:]) if ref.startswith('#') else created[ref]
@@ -3152,8 +3225,16 @@ def cmd_new_from_table(argv: list[str]) -> int:
             print(f'警告: {r["id"]}: {note}')
         card = None
         if r['kind'] == FEATURE_KIND:
-            children = sum(1 for x in fileable if x['parent'] == r['id'])
-            card = table_feature_card(r, header, slug, lines, children)
+            # 子は、この回に起こす行と起票済みの行（[要判断] などで飛ばす行は数えない）
+            kids = [x for x in fileable if x['parent'] == r['id']] + [
+                x for x in rows if x.get('id') in existing and (x.get('kind') or '') == TASK_KIND
+                and re.fullmatch(rf'(?:feature\s+)?{re.escape(r["id"])}', (x.get('親') or '').strip())]
+            parent = number_of(r['parent'])
+            stall = (STALL_WAVE if not table_wave_open(parent, wave_cache) else
+                     STALL_BLOCKED if r['blockers'] else
+                     STALL_NO_TASK if not kids else
+                     STALL_HUMAN_ONLY if all(has_mark(x.get('title') or x.get('題名') or '') for x in kids) else '')
+            card = table_feature_card(r, header, slug, lines, len(kids), stall)
         created[r['id']] = new_issue({
             'title': r['title'], 'kind': r['kind'], 'parent': number_of(r['parent']),
             'blocked_by': [number_of(b) for b in r['blockers']],
@@ -3166,19 +3247,19 @@ def cmd_new_from_table(argv: list[str]) -> int:
 
 # ── issue の目印を読む側（start・show の読む束 / coverage）（DS-06） ─────────────
 # 目印は new --from-table が本文の先頭に書く `<!-- rmp-task: id=… rev=… stream=… src=<slug>@PR<n> … reads=<path#見出し,…> -->`。
-# 目印は本文のどこにあっても読む（2.8.0 から feature の本文は承認カードが先頭・目印が末尾。旧い issue は先頭）。
-_TASK_MARK_RE = re.compile(rf'(?m)^[ \t]*<!--\s*{TABLE_MARK}:\s*(.*?)\s*-->', re.DOTALL)
+# 目印は本文の先頭か末尾の連続した機械向けの行だけを本物とする（_edge_machine_lines。2.8.0 から feature の本文は
+# 承認カードが先頭・目印が末尾。旧い issue は先頭）。フェンス・引用・本文の途中の写しは読まない。
 _MARK_FIELD_RE = re.compile(r'(\w+)=(.*?)(?=\s+\w+=|$)', re.DOTALL)
 _SRC_RE = re.compile(r'^(?P<slug>[^@\s]+)(?:@PR(?P<pr>\d+))?$')
 NO_BUNDLE_OLD_FORM = '読む束なし（旧い形）'
 
 
 def parse_task_mark(body: str) -> dict[str, str] | None:
-    """本文の rmp-task の目印（先頭でも末尾でも）を、項目名 → 値で返す。無ければ None。"""
-    match = _TASK_MARK_RE.search(body or '')
-    if not match:
+    """本文の本物の rmp-task の目印（先頭か末尾。_edge_machine_lines）を、項目名 → 値で返す。無ければ None。"""
+    found = _real_task_mark(body)
+    if not found:
         return None
-    return {k: v.strip() for k, v in _MARK_FIELD_RE.findall(match.group(1))}
+    return {k: v.strip() for k, v in _MARK_FIELD_RE.findall(found[2])}
 
 
 # 本文に出てくる docs/ の path（`docs/…/x.md` に、`#見出し` か `:行` `:行-行` が付くものを含む）。ASCII の path だけを拾う。
@@ -3189,7 +3270,8 @@ _BODY_DOC_PATH_RE = re.compile(
 
 def body_doc_paths(body: str) -> list[str]:
     """本文（先頭の目印を除く）に出てくる docs/ の path を、出てきた順に重複なく返す。"""
-    text = _TASK_MARK_RE.sub('', body or '', count=1)
+    found = _real_task_mark(body)
+    text = (body or '') if not found else (body or '')[:found[0]] + (body or '')[found[1]:]
     return list(dict.fromkeys(_BODY_DOC_PATH_RE.findall(text)))
 
 
@@ -4544,7 +4626,8 @@ def cmd_today() -> int:
     extras = fetch_extras(
         ready_numbers + review_numbers + dep_numbers + parent_numbers + wave_numbers
     )
-    bodies = fetch_bodies(wave_numbers)
+    card_numbers = [i['number'] for i, _kind in _card_targets(items)]
+    bodies = fetch_bodies(wave_numbers + card_numbers)
 
     orphans = orphan_rows(items)
     try:
@@ -4582,6 +4665,8 @@ def cmd_today() -> int:
         print(f'[User] {len(user_actions)} 件（ready・align の対象外。あなたの操作）')
         for u in user_actions:
             print(f"  #{u['number']:<4} {u['title'][:60]}")
+    gaps = card_gap_counts(items, bodies)
+    print(f"カードの抜け: 承認 {gaps['approval']}・判断 {gaps['decision']}・人の作業 {gaps['work']}（hirai-task card --lint）")
     return 0
 
 
@@ -4825,9 +4910,9 @@ def board_view(snap: dict, how: str) -> dict:
         if not kind:
             continue
         card, problems = cards_mod.read_card(bodies.get(i['number'], ''), kind)
-        decide, recommendation = cards_mod.headline(card) if card else ('', '')
+        decide, recommendation = (cards_mod.visible(x) for x in cards_mod.headline(card)) if card else ('', '')
         cards[i['number']] = {'kind': kind, 'has_card': card is not None, 'decide': decide, 'recommend': recommendation,
-                              'deadline': (card or {}).get('inline') or '' if kind == 'decision' else '',
+                              'deadline': cards_mod.visible((card or {}).get('inline') or '') if kind == 'decision' else '',
                               'problems': problems}
     stalls = {}
     for i in issues:
@@ -4844,6 +4929,7 @@ def board_view(snap: dict, how: str) -> dict:
         'wave_blockers': {n: _blocking_wave_numbers(n, items_by_number, extras) for n in waves},
         'not_ready': not_ready, 'ready': [i['number'] for i in ready_rows(issues, extras, bodies)],
         'wave_exit': wave_exit, 'cards': cards, 'stalls': stalls,
+        'stall_short': {n: STALL_SHORT[reason] for n, reason in stalls.items()},
     }
 
 
@@ -4942,6 +5028,9 @@ STALL_WAVE = '先の wave が出ていない（承認しても子は依存待ち
 STALL_BLOCKED = 'feature に未完了の blocked by がある'
 STALL_NO_TASK = '子の open の task が無い（閉じ忘れか、task がまだ無い）'
 STALL_HUMAN_ONLY = '子の open の task が人の作業・保留・判断待ちだけ'
+# カード・スマートフォンの 2 行目に出す短い言い方（カードには内部の語 task を出さない）
+STALL_SHORT = {STALL_WAVE: '先の wave 待ち', STALL_BLOCKED: 'blocked by あり', STALL_NO_TASK: '子の作業が無い',
+               STALL_HUMAN_ONLY: '子が人の作業だけ'}
 
 
 def _load_card_module():
@@ -4955,17 +5044,21 @@ def _load_card_module():
 
 
 def expected_card_kind(kind: str, status: str, title: str, state: str = 'OPEN') -> str | None:
-    """この行に要るカードの種類（要らなければ None）。判断待ちは判断カード、承認待ちの feature は承認カード、
-    `[User]`・`[操作]` の task は人の作業カード（判断待ちの [操作] は判断カードとみなし、Status の誤りを見せる）。"""
+    """この行に要るカードの種類（要らなければ None）。判断待ちは判断カード、承認待ちの feature は承認カード。
+    `[操作]`（人の資格・権限が要るが AI が行う操作）は、承認を待つ間（承認待ち・着手可。start --approved の前）だけ
+    承認カード。保留・依存待ちの [操作] は今は承認の対象でないので要らない。`[User]`（人が行う作業）は人の作業カード。
+    判断待ちの [操作] は判断カードとみなし、Status の誤りを見せる。"""
     if state == 'CLOSED' or kind == WAVE_KIND:
         return None
     if status == JUDGMENT_STATUS:
         return 'decision'
     if kind == FEATURE_KIND:
         return 'approval' if status == PENDING_STATUS else None
-    if kind in ('', TASK_KIND) and status != DONE_STATUS and (has_mark(title, USER_MARK) or has_mark(title, OPERATION_MARK)):
-        return 'work'
-    return None
+    if kind not in ('', TASK_KIND) or status == DONE_STATUS:
+        return None
+    if has_mark(title, OPERATION_MARK):
+        return 'approval' if status in (PENDING_STATUS, READY_STATUS) else None
+    return 'work' if has_mark(title, USER_MARK) else None
 
 
 def approval_stall_reason(
@@ -5001,7 +5094,7 @@ def cmd_card(argv: list[str]) -> int:
     kind = expected_card_kind(item['fields'].get(KIND_FIELD, ''), item['fields'].get('Status', ''),
                               item['title'], item.get('state') or 'OPEN')
     card, problems = cards.read_card(item.get('body') or '', kind)
-    print(f"#{number} {item['title']}")
+    print(f"#{number} {cards.visible(item['title'])}")
     if card is not None:
         print(cards.to_plain(card))
     if problems:
@@ -5019,6 +5112,9 @@ def cmd_card(argv: list[str]) -> int:
         die(f'Project に項目「{"」「".join(missing)}」が無い。`hirai-task setup` で足してから回す（何も書いていない）', 2)
     decide, recommendation = cards.headline(card)
     option = cards.normalize_recommendation(recommendation)
+    if item['fields'].get(KIND_FIELD, '') == FEATURE_KIND:
+        stall = _stall_reason_for(project_number, number)
+        decide = decide + (f'（今は動かない: {STALL_SHORT[stall]}）' if stall else '')
     item_id = rest_item_id(project_number, number)
     write_project_item_fields_rest(project_number, item_id, [
         {'id': rest_field_id(project_number, CARD_HEADLINE_FIELD), 'value': decide},
@@ -5029,30 +5125,97 @@ def cmd_card(argv: list[str]) -> int:
     return 0
 
 
+def _stall_reason_for(project_number: int, number: int) -> str:
+    """1 つの feature の「承認しても動かない」理由（読むだけ。--sync が「ひとこと」に添える）。"""
+    items = fetch_all_items(project_number)
+    by_number, children_of = _board_index(items)
+    feature = by_number.get(number)
+    if feature is None or feature.get('kind') != FEATURE_KIND:
+        return ''
+    waves = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
+    return approval_stall_reason(feature, by_number, children_of, fetch_extras([number] + waves), fetch_bodies(waves))
+
+
+def _card_targets(items: list[dict]) -> list[tuple[dict, str]]:
+    rows = [(i, expected_card_kind(i.get('kind') or '', i.get('status') or '', i.get('title') or '', i.get('state') or 'OPEN'))
+            for i in items if i.get('type') == 'Issue' and i.get('number') is not None and _same_repo(i, REPO)]
+    return [(i, kind) for i, kind in rows if kind]
+
+
+def card_gap_counts(items: list[dict], bodies: dict[int, str]) -> dict[str, int]:
+    """要るカードが無い・形に問題がある行の数（種類ごと。today が 1 行で出す）。"""
+    cards = _load_card_module()
+    gaps = {kind: 0 for kind in cards.KINDS}
+    for i, kind in _card_targets(items):
+        if cards.read_card(bodies.get(i['number'], ''), kind)[1]:
+            gaps[kind] += 1
+    return gaps
+
+
+def _lint_order(entry: dict) -> tuple:
+    """書く順: 期限の近い判断 → 承認すれば今日動く承認 → 人の作業 → 期限の無い判断 → 承認しても動かない承認。"""
+    if entry['kind'] == 'decision' and entry['date']:
+        return (0, entry['date'], entry['number'])
+    rank = {'approval': 4 if entry['stall'] else 1, 'work': 2, 'decision': 3}[entry['kind']]
+    return (rank, '', entry['number'])
+
+
 def cmd_card_lint() -> int:
-    """読むだけ。要るカード（承認待ちの feature・判断待ち・[User] と [操作] の task）の有無と形を一覧にする。
-    問題が 1 件でもあれば exit 1（報告だけで止めない呼び方は `|| true`）。"""
+    """読むだけ。要るカード（承認待ちの feature と [操作]・判断待ち・[User]）の有無と形、項目「ひとこと」「推奨」との
+    食い違いを一覧にする。先頭に要約、続けて書く順（_lint_order）に並べる。問題が 1 件でもあれば exit 1（警告は数えない）。"""
     project_number = discover_project_number()
     cards = _load_card_module()
-    rows = [(i, expected_card_kind(i.get('kind') or '', i.get('status') or '', i.get('title') or '', i.get('state') or 'OPEN'))
-            for i in fetch_all_items(project_number)
-            if i.get('type') == 'Issue' and i.get('number') is not None and _same_repo(i, REPO)]
-    rows = [(i, kind) for i, kind in rows if kind]
-    bodies = fetch_bodies([i['number'] for i, _kind in rows])
-    found: dict[str, list] = {kind: [] for kind in cards.KINDS}
+    items = fetch_all_items(project_number)
+    rows = _card_targets(items)
+    by_number, children_of = _board_index(items)
+    waves = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
+    features = [i['number'] for i, kind in rows if kind == 'approval' and i.get('kind') == FEATURE_KIND]
+    extras = fetch_extras(features + waves) if features else {}
+    bodies = fetch_bodies([i['number'] for i, _kind in rows] + waves)
+    entries = []
     for i, kind in rows:
-        _card, problems = cards.read_card(bodies.get(i['number'], ''), kind)
-        found[kind].append((i, problems))
-    bad = 0
+        card, problems = cards.read_card(bodies.get(i['number'], ''), kind)
+        stall = approval_stall_reason(i, by_number, children_of, extras, bodies) \
+            if kind == 'approval' and i.get('kind') == FEATURE_KIND else ''
+        warnings, date = [], ''
+        if card and kind == 'approval':
+            decide, recommendation = cards.headline(card)
+            want = decide + (f'（今は動かない: {STALL_SHORT[stall]}）' if stall else '')
+            if i.get('headline') and i['headline'] != want:
+                problems.append(f'項目「{CARD_HEADLINE_FIELD}」が本文のカードと違う（`hirai-task card {i["number"]} --sync` で写し直す）')
+            if i.get('recommend') and i['recommend'] != cards.normalize_recommendation(recommendation):
+                problems.append(f'項目「{CARD_RECOMMEND_FIELD}」が本文のカードと違う（`hirai-task card {i["number"]} --sync` で写し直す）')
+            if stall and cards.normalize_recommendation(recommendation) == '承認する':
+                warnings.append(f'承認しても動かない（{STALL_SHORT[stall]}）のに推奨が「承認する」')
+        if card and kind == 'decision':
+            match = re.search(r'\d{4}-\d{2}-\d{2}', card.get('inline') or '')
+            date = match.group(0) if match else ''
+        entries.append({'number': i['number'], 'item': i, 'kind': kind, 'problems': problems, 'warnings': warnings,
+                        'stall': stall, 'date': date})
+    names = {kind: spec['name'] for kind, spec in cards.KINDS.items()}
+    short = {'approval': '承認', 'decision': '判断', 'work': '人の作業'}
+    bad = [e for e in entries if e['problems']]
+    warned = [e for e in entries if e['warnings']]
     print('カードの点検（読むだけ。正本は docs/rules-reference/approval-template.md）')
-    for kind, entries in found.items():
-        problems = [(i, ps) for i, ps in entries if ps]
-        bad += len(problems)
-        print(f'{cards.KINDS[kind]["name"]} {len(entries)} 件中 {len(problems)} 件に問題')
-        for i, ps in problems:
-            print(f"  #{i['number']} {i.get('title', '')[:40]}（{i.get('status') or 'Status 空'}）: {' / '.join(ps)}")
+    print('要約: ' + '・'.join(
+        f"{short[k]} {sum(1 for e in entries if e['kind'] == k)}（問題 {sum(1 for e in bad if e['kind'] == k)}）"
+        for k in cards.KINDS) + f'／警告 {len(warned)}')
+    for kind in cards.KINDS:
+        print(f"{names[kind]} {sum(1 for e in entries if e['kind'] == kind)} 件中 "
+              f"{sum(1 for e in bad if e['kind'] == kind)} 件に問題")
     if bad:
-        print('直し方: 本文の先頭にカードを書く（雛形は approval-template.md）。承認カードは `hirai-task card <番号> --sync` で項目に写す')
+        print('書く順（期限の近い判断 → 承認すれば今日動くもの → 人の作業 → そのほか）:')
+    for e in sorted(bad, key=_lint_order):
+        i = e['item']
+        due = f"・期限 {e['date']}" if e['date'] else ''
+        print(f"  #{i['number']} {short[e['kind']]}{due} {cards.visible(i.get('title') or '')[:40]}"
+              f"（{i.get('status') or 'Status 空'}）: {' / '.join(e['problems'])}")
+    if warned:
+        print(f'警告 {len(warned)} 件（exit には数えない）:')
+        for e in warned:
+            print(f"  #{e['number']} {cards.visible(e['item'].get('title') or '')[:40]}: {' / '.join(e['warnings'])}")
+    if bad:
+        print('直し方: 本文の先頭にカードを書く（型は approval-template.md）。承認カードは `hirai-task card <番号> --sync` で項目に写す')
     return 1 if bad else 0
 
 

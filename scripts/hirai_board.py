@@ -44,6 +44,7 @@ NOT_READY_ORDER = ('自分に未完了の blocked by', '親の feature に未完
                    '先の wave が出ていない', '[User]（人の作業）', '親が feature でない・無い',
                    '種別が task でない（空を含む。ready に出ない）')
 USER_MARK = '[User]'
+OPERATION_MARK = '[操作]'  # 人の資格・権限が要るが AI が行う操作。要るのは承認カード
 NON_TASK_KINDS = ('wave', 'feature', '設計メモ')
 ISSUE_URL_RE = re.compile(r'^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/(?:issues|pull)/\d+\Z')
 MARK_HERE = ' ←'
@@ -464,18 +465,10 @@ def md_list(rows: list, suffix=None) -> list:
     return lines + ([f'- ほか {len(rows) - MD_TOP} 件'] if len(rows) > MD_TOP else [])
 
 
-# 承認しても動かない理由（bin/hirai-task の STALL_*）の短い言い方。スマートフォンの 2 行目に収める。
-STALL_SHORT = (('先の wave', '先の wave 待ち'), ('feature に未完了', 'blocked by あり'),
-               ('子の open の task が無い', '子の task が無い'), ('子の open の task が人の作業', '子が人の作業だけ'))
-
-
-def stall_short(reason: str) -> str:
-    return next((label for head, label in STALL_SHORT if reason.startswith(head)), short(reason, 12))
-
-
 def card_list(model: dict, rows: list) -> list:
     """あなたの番の行: 1 行目にカードの決めること（無ければ題名）、2 行目に推奨・期限・カード無し・動かない。"""
     cards, stalls = model['data'].get('cards') or {}, model['data'].get('stalls') or {}
+    stall_short = model['data'].get('stall_short') or {}  # 短い言い方は bin/hirai-task の STALL_SHORT が決める
     lines = []
     for r in rows[:MD_TOP]:
         info = cards.get(r['number']) or {'has_card': False}
@@ -485,7 +478,7 @@ def card_list(model: dict, rows: list) -> list:
             notes += [f"期限 {short(info['deadline'], 12)}"] if info.get('deadline') else []
             notes += ['形の問題あり'] if info['problems'] else []
         stall = stalls.get(r['number'])
-        notes += [f'動かない（{stall_short(stall)}）'] if stall else []
+        notes += [f"動かない（{stall_short.get(r['number']) or short(stall, 12)}）"] if stall else []
         lines += [f"- #{r['number']} {short(info['decide'] if info['has_card'] else r.get('title'))}",
                   '  ' + '・'.join(notes or ['—'])]
     missing = sum(1 for r in rows if not (cards.get(r['number']) or {}).get('has_card'))
@@ -506,6 +499,7 @@ def your_turn(model: dict, open_tasks: list) -> list:
         ('承認待ちの feature（ボードで着手可に）', feats, 'card'),
         ('判断待ち（裁定する）', [t for t in open_tasks if t.get('status') == '判断待ち'], 'card'),
         ('[User] の作業', [t for t in open_tasks if USER_MARK in (t.get('title') or '')], 'card'),
+        ('操作の承認', [t for t in open_tasks if OPERATION_MARK in (t.get('title') or '') and t.get('status') == '承認待ち'], 'card'),
         ('レビュー中（PR の merge）', [t for t in open_tasks if t.get('status') == 'レビュー中'], pr_of),
     ]
 
