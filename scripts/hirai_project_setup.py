@@ -52,7 +52,7 @@ STATUS_OPTIONS = (
     ('承認待ち', 'PINK', 'task が Project に入ったとき（自動）'),
     ('着手可', 'ORANGE', '人が feature の着手を承認したとき'),
     ('判断待ち', 'YELLOW', '裁定が要るとき'),
-    ('依存待ち', 'RED', '先の task や wave が済んでいないとき'),
+    ('依存待ち', 'RED', '先の task（blocked by）が済んでいないとき'),
     ('進行中', 'BLUE', 'AI が着手したとき'),
     ('レビュー中', 'PURPLE', 'PR が task に紐づいたとき（自動）'),
     ('完了', 'GREEN', 'PR を merge したとき（自動）'),

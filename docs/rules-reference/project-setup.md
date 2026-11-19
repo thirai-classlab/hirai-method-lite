@@ -42,16 +42,16 @@ Project の Workflows で次の 4 本を On にする。トークンは要らな
 | Status | 入るとき | 動かすもの |
 |---|---|---|
 | 承認待ち | task が Project に入ったとき | 自動（Item added） |
-| 着手可 | feature の着手が承認されたとき | 人が feature を動かし、AI が子の task をそろえる（そろう前でも、先の wave が出ていて未完了の blocked by が無ければ、`hirai-task start` で承認待ちの子を進行中にできる） |
+| 着手可 | feature の着手が承認されたとき | 人が feature を動かし、AI が子の task をそろえる（そろう前でも、未完了の blocked by が無ければ、`hirai-task start` で承認待ちの子を進行中にできる。先の wave が出ていなくても、着手可の feature が wave の門を越えてよいの意思表示なので止めない） |
 | 判断待ち | 裁定が要るとき | AI |
-| 依存待ち | 先の task や wave が済んでいないとき | AI |
+| 依存待ち | 先の task（blocked by）が済んでいないとき | AI |
 | 進行中 | AI が着手したとき | AI（`hirai-task start <n>`） |
 | レビュー中 | PR が task に紐づいたとき | 自動（Pull request linked） |
 | 完了 | PR を merge したとき | 自動（Item closed） |
 | 保留 | 止めると決めたとき | AI |
 
-- AI は feature の「承認待ち → 着手可」を自分で動かさない。着手可の feature の子の task（目印なし・あとから足したものも）は、`hirai-task align`（today が回す）が着手可へ（blocked by か先の wave が済んでいなければ依存待ちへ）動かす。`set`（→ 着手可）・`start`（承認待ち → 進行中）も、align が「着手可へ」と出す子だけを通す。`set` で進行中を書けるのはレビュー中・進行中・完了からだけ（承認待ち・判断待ち・依存待ち・保留・着手可・空からは `start` を使う）。レビュー中・完了を `set`・`review` で書けるのも、進行中・レビュー中・完了の task からだけ（そのほかからは exit 2。2 手で進行中に回れない。閉じる `done` と開き直す `reopen` は別）。`[操作]`・`[User]` の task は align も set も動かさず、`[操作]` は `start --approved` で進める
-- 依存待ち・判断待ち・保留が解けた task は、親 feature の Status に合わせて戻す（着手可なら着手可、承認待ちなら承認待ち）
+- AI は feature の「承認待ち → 着手可」を自分で動かさない。着手可の feature の子の task（目印なし・あとから足したものも）は、`hirai-task align`（today が回す）が着手可へ（blocked by が済んでいなければ依存待ちへ）動かす。先の wave が出ていなくても動かし、today に「先の wave #N が出ていないが feature #M が着手可なので通した」と 1 行出す（wave の門は、承認待ちの feature を自動で着手可にしない門として残る）。`set`（→ 着手可）・`start`（承認待ち → 進行中）も、align が「着手可へ」と出す子だけを通す。`set` で進行中を書けるのはレビュー中・進行中・完了からだけ（承認待ち・判断待ち・依存待ち・保留・着手可・空からは `start` を使う）。レビュー中・完了を `set`・`review` で書けるのも、進行中・レビュー中・完了の task からだけ（そのほかからは exit 2。2 手で進行中に回れない。閉じる `done` と開き直す `reopen` は別）。`[操作]`・`[User]` の task は align も set も動かさず、`[操作]` は `start --approved` で進める
+- 依存待ち・判断待ち・保留が解けた task は、親 feature の Status に合わせて戻す（着手可なら着手可、承認待ちなら承認待ち）。承認待ちの feature の依存待ちの子は、先の wave が出るまで `unblocked` に出ない（着手可の feature の子は wave を見ない）
 
 ## 5. wave と feature の作り方
 
