@@ -41,7 +41,7 @@ STATUS_COLORS = {
 OTHER_COLOR = '#52514e'
 # hirai-task の NOT_READY_* と同じ文言（要約の内訳の並び）。知らない理由は後ろに足す。
 NOT_READY_ORDER = ('自分に未完了の blocked by', '親の feature に未完了の blocked by', '親の feature が着手可でない',
-                   '先の wave が出ていない', '[User]（人の作業）', '親が feature でない・無い',
+                   '[User]（人の作業）', '親が feature でない・無い',
                    '種別が task でない（空を含む。ready に出ない）')
 USER_MARK = '[User]'
 OPERATION_MARK = '[操作]'  # 人の資格・権限が要るが AI が行う操作。要るのは承認カード
@@ -222,10 +222,6 @@ def stuck_reason(model: dict, task: dict) -> tuple[str, list]:
         return f"{reason}（#{parent['number']} は {status_of(parent)}）", own
     if reason == '親の feature に未完了の blocked by' and parent:
         return reason, blocker_info(model, parent['number'], data['blockers'].get(parent['number'], []))
-    if reason == '先の wave が出ていない':
-        wave = locate(model, number)[0]
-        waiting = [b for b in data['wave_blockers'].get(wave, []) if not has_exited(model, b)]
-        return reason, blocker_info(model, wave, waiting)
     return reason, own
 
 
@@ -273,11 +269,11 @@ def summary_rows(model: dict) -> list:
     pending_feats = sum(1 for i in issues if i.get('kind') == 'feature' and is_open(i) and i.get('status') == '承認待ち')
     rows = [
         ('着手できる（hirai-task ready が出す）', len(data['ready']), '種別 task・着手可・親の feature が着手可・'
-         '自分と親に未完了の blocked by なし・先の wave が出た・[User] でない', 0),
+         '自分と親に未完了の blocked by なし・[User] でない', 0),
         ('進行中', by_status['進行中'], '', 0),
         ('レビュー中（merge 待ち）', by_status['レビュー中'], f'うち open の PR が無い {no_pr}', 0),
         ('承認待ちの feature（人がボードで着手可にする）', pending_feats, '子の task はこの feature が着手可になるまで ready に出ない', 0),
-        ('うち承認しても動かない', len(data.get('stalls') or {}), '先の wave・blocked by・子が人の作業と保留だけ・子が無い', 1),
+        ('うち承認しても動かない', len(data.get('stalls') or {}), 'blocked by・子が人の作業と保留だけ・子が無い', 1),
         ('うちカード無し・形の問題', sum(1 for c in (data.get('cards') or {}).values() if c['kind'] == 'approval' and c['problems']),
          '承認カード（hirai-task card --lint）', 1),
         ('承認待ちの task', by_status['承認待ち'], '', 0),
@@ -440,7 +436,7 @@ def render_text(data: dict, scope: tuple | None = None) -> str:
 MD_TITLE_WIDTH = 22
 MD_TOP = 5
 SHORT_REASONS = {'自分に未完了の blocked by': '自分の待ち', '親の feature に未完了の blocked by': '親の待ち',
-                 '親の feature が着手可でない': '親が未承認', '先の wave が出ていない': '先の wave',
+                 '親の feature が着手可でない': '親が未承認',
                  '[User]（人の作業）': 'User', '親が feature でない・無い': '親なし',
                  '種別が task でない（空を含む。ready に出ない）': '種別なし'}
 # 要約は issue の本文にも載る（--publish）。題名から通知（@）・リンクと画像（[ ] !）・表の区切り（|）・

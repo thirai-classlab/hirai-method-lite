@@ -21,8 +21,8 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
   種別が wave・feature・設計メモの行を除く（blocked・警告の対象）。
 
   ready: 種別が task の着手可で、題名に `[User]` が無く、親が着手可の feature で、
-  task と feature に未完了の blocked by が無く、先祖の wave を止める wave が
-  出る条件を満たしているものだけ。並びは着手順（数値の項目。ある行を先に小さい順）→
+  task と feature に未完了の blocked by が無いものだけ（先の wave は見ない。着手可の feature が
+  「wave の門を越えてよい」の意思表示。ADR-0760）。並びは着手順（数値の項目。ある行を先に小さい順）→
   先祖の wave の POSITION → 番号。着手順の項目が無い Project では先祖の wave の POSITION → 番号のまま。
   出す行の本文を取り（50 件ごとに GraphQL 1 回）、目印が無い行と、目印はあるが reads= が無い行の
   末尾に ` [旧い形]` を付ける（読む束を出せない issue。#829）。
@@ -93,8 +93,7 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
   （align・close-parents か、ボードの役目）。set は Status と種別だけを受け付ける。
   task を着手可・進行中にしてよいかの判定は 1 つ（task_not_startable_reason）。条件は全部:
   種別が task（空を含む）で、目印が無い／親の feature があり、種別が feature で、着手可／自分と親の feature に未完了の
-  blocked by が無い／先祖の wave を止める wave が「出た」（align_plan・ready と同じ
-  preceding_wave_unresolved。止める wave が 1 つも無いときは板の全件を引かずに通す）。
+  blocked by が無い（先の wave は見ない。親が着手可の feature なら wave の門を越えてよい。ADR-0760）。
   align が「着手可へ」と出す子だけを通し、「依存待ち」と出す子は断る。いつ子になったかは
   問わない。断るときは理由（親の番号と今の Status・blocked by の番号など）を出して exit 2。
   - set: Status を着手可へ書くとき、承認待ち・依存待ち・判断待ち・保留のどこからでも、この
@@ -133,15 +132,20 @@ memos / today / after-merge）:
     wave は飛ばす（終わりの無い親）。Status は書かない（進み具合は帯で見る）。
 
   unblocked: 一覧を出すだけで書かない。対象は依存待ちの task のうち、task 自身と
-    親の feature に未完了の blocked by が無く、先祖の wave を止める wave が
-    「出た」（子孫の条件と「出る条件のコマンド」の行）を満たすもの。戻すのは
-    呼び出し側（AI）が `set <n> Status <値>` で行う。
+    親の feature に未完了の blocked by が無いもの。先祖の wave を止める wave が「出た」
+    （子孫の条件と「出る条件のコマンド」の行）を満たさなくても、親が種別 feature で着手可なら
+    出し、note に「先の wave #N が出ていないが feature #M が着手可なので通した」を付ける
+    （ADR-0760）。親の feature が着手可でないときは、今までどおり wave が出るまで出さない。
+    戻すのは呼び出し側（AI）が `set <n> Status <値>` で行う。
 
   align: 着手可の feature の、承認待ち（Status=承認待ち）と着手可（Status=着手可）の
-    子を対象にする。未完了の blocked by が子か feature 自身にあるか、先祖の wave を
-    止める wave が「出た」を満たさなければ、承認待ちの子も着手可の子も依存待ちへ動かす。
-    承認待ちの子でどちらも満たさなければ着手可へ。着手可の子はブロックされていなければ
-    何もしない（着手可→着手可は出さない）。判断待ち・依存待ち・保留の子は最初から
+    子を対象にする。未完了の blocked by が子か feature 自身にあれば、承認待ちの子も
+    着手可の子も依存待ちへ動かす。無ければ承認待ちの子は着手可へ。先祖の wave を止める
+    wave が「出た」を満たさなくても動かさない（feature の着手可が「wave の門を越えてよい」
+    の意思表示。ADR-0760）。1 件以上を着手可へ動かした feature は、plan に `wave_waived`
+    （止めている wave の番号の配列）を載せ、文字の出力は「先の wave #N が出ていないが
+    feature #M が着手可なので通した」を 1 行出す（today も同じ）。着手可の子はブロックされて
+    いなければ何もしない（着手可→着手可は出さない）。判断待ち・依存待ち・保留の子は最初から
     対象にしない。
     目印（`[操作]`・`[User]`）がある子は動かさず、番号だけを出す（承認待ち・着手可の
     どちらでも）。閉じた子と、種別が task 以外（EXCLUDE_KINDS）の子は、moves にも skipped にも
@@ -1070,7 +1074,7 @@ def fetch_extras(numbers: list[int]) -> dict[int, dict]:
 
 
 def fetch_bodies(numbers: list[int]) -> dict[int, str]:
-    """close-parents（「- 常設: はい」）・align と unblocked の「先の wave が出たか」・wave-holds
+    """close-parents（「- 常設: はい」）・unblocked と承認待ちの feature の子の「先の wave が出たか」・wave-holds
     （「出る条件のコマンド」の行）が使う本文を、まとめて 1 回の GraphQL で引く
     （fetch_extras と同じ alias の考え方）。"""
     unique = sorted({int(n) for n in numbers if n is not None})
@@ -1165,8 +1169,7 @@ def ready_rows(
     ・種別が task（種別の空の行は出さない。orphans が拾う）で、Status が着手可の open
     ・題名に `[User]` が無い（あなたの手作業は today に番号で出す）
     ・親が種別 feature で、その Status が着手可
-    ・task と親の feature に、未完了の blocked by が無い
-    ・先祖の wave を止める wave が、出る条件を満たしている
+    ・task と親の feature に、未完了の blocked by が無い（先の wave は見ない。ADR-0760）
     並びは着手順（数値の項目。ある行を先に小さい順）→ 先祖の wave の POSITION → 番号。
     着手順の項目が無い Project では先祖の wave の POSITION → 番号のまま。"""
     items_by_number, children_of = _board_index(items)
@@ -1189,7 +1192,6 @@ NOT_READY_NO_FEATURE = '親が feature でない・無い'
 NOT_READY_FEATURE_NOT_READY = '親の feature が着手可でない'
 NOT_READY_OWN_BLOCKER = '自分に未完了の blocked by'
 NOT_READY_FEATURE_BLOCKER = '親の feature に未完了の blocked by'
-NOT_READY_WAVE = '先の wave が出ていない'
 
 
 def ready_block_reason(
@@ -1197,7 +1199,8 @@ def ready_block_reason(
     extras: dict[int, dict], bodies: dict[int, str],
 ) -> str:
     """open の task が ready に出ない理由（出るなら空文字）。Status と種別は見ない（呼び出し側が絞る）。
-    ready_rows と board が同じ判定を使う（ready と board の「着手できる」の数をずらさない）。"""
+    ready_rows と board が同じ判定を使う（ready と board の「着手できる」の数をずらさない）。
+    親が着手可の feature なら先の wave の門は見ない（ADR-0760）。"""
     if has_mark(i.get('title') or '', USER_MARK):
         return NOT_READY_USER
     parent_number = i.get('parent_number')
@@ -1210,11 +1213,7 @@ def ready_block_reason(
         return NOT_READY_OWN_BLOCKER
     if (extras.get(parent_number) or {}).get('blocked_by_open', 0) > 0:
         return NOT_READY_FEATURE_BLOCKER
-    wave_ancestor = _ancestor_number_of_kind(parent_number, items_by_number, WAVE_KIND)
-    if wave_ancestor is not None and preceding_wave_unresolved(
-        wave_ancestor, items_by_number, children_of, bodies, extras,
-    ):
-        return NOT_READY_WAVE
+    # 親の feature が着手可なら先の wave の門は見ない（ADR-0760）
     return ''
 
 
@@ -1522,78 +1521,19 @@ def _reject_wave_feature(item: dict, number: int, verb: str) -> None:
 
 # ── 着手の判定（start の承認待ちからの経路・set の着手可・new の案内が共通で使う） ──
 _SET_TO_IN_PROGRESS_FROM = (REVIEW_STATUS, IN_PROGRESS_STATUS, DONE_STATUS)
-_WAVE_ANCESTOR_MAX_DEPTH = 6
-
-
-def _wave_ancestor_of_feature(project_number: int, feature: dict) -> tuple[int, dict] | None:
-    """feature の親をたどり、種別が wave の祖先の（番号, 1 件引きの行）を返す（無い・板に
-    載っていなければ None）。_ancestor_number_of_kind と同じ深さまで見る。たどる途中で
-    引いた wave の行をそのまま返すので、呼び出し側は wave を引き直さない。"""
-    seen: set[int] = set()
-    current = feature.get('parent_number')
-    depth = 0
-    while current is not None and current not in seen and depth < _WAVE_ANCESTOR_MAX_DEPTH:
-        item = fetch_write_item(project_number, current)
-        if not item.get('found'):
-            return None
-        if item['fields'].get(KIND_FIELD, '') == WAVE_KIND:
-            return current, item
-        seen.add(current)
-        current = item.get('parent_number')
-        depth += 1
-    return None
 
 
 # GitHub が「その番号はこの repo の issue として引けない」と答えたときの文言（gh の stderr・errors の message に入る）。
 _NOT_AN_ISSUE_MESSAGE = 'Could not resolve to an Issue'
 
 
-def _is_wave_number(project_number: int, number: int) -> bool:
-    """number が（この repo の）種別 wave の issue か。GitHub が「この repo の issue として引けない」
-    と答えた番号（別 repo の blocked by の番号が同じ番号の PR に当たる等）だけを、align と同じく
-    wave ではないものとして扱う。レート制限・502 などの通信の失敗は上げる（着手を通す側に倒さない）。"""
-    try:
-        item = fetch_write_item(project_number, number)
-    except GhError as exc:
-        if _NOT_AN_ISSUE_MESSAGE in str(exc):
-            return False
-        raise
-    return item.get('fields', {}).get(KIND_FIELD, '') == WAVE_KIND
-
-
-def _preceding_wave_reason(project_number: int, feature: dict) -> str:
-    """feature の先祖の wave を止める wave が「出た」を満たさなければ、その理由を返す
-    （満たす・止める wave が無いときは空文字）。判定は align_plan・ready と同じ
-    preceding_wave_unresolved を使う。止める wave が 1 つも無いときは全件を引かずに通し、
-    あるときだけ板の全件・wave の blocked by と本文を引く。"""
-    found = _wave_ancestor_of_feature(project_number, feature)
-    if found is None:
-        return ''
-    wave_ancestor, wave = found
-    blocking = [
-        n for n, _state in wave.get('blocked_by', []) if _is_wave_number(project_number, n)
-    ]
-    if not blocking:
-        return ''
-    items = fetch_all_items(project_number)
-    items_by_number, children_of = _board_index(items)
-    wave_numbers = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
-    extras = fetch_extras(wave_numbers)
-    bodies = fetch_bodies(wave_numbers)
-    if preceding_wave_unresolved(wave_ancestor, items_by_number, children_of, bodies, extras):
-        return (
-            f'先祖の wave #{wave_ancestor} を止める wave が出ていない（承認待ちの子は'
-            'align が依存待ちへ動かす）'
-        )
-    return ''
-
-
 def task_not_startable_reason(project_number: int, item: dict, *, ignore_mark: bool = False) -> str:
     """task を着手可・進行中にしてよいかの判定（start の承認待ちからの経路・set の着手可への
     書き込み・new の案内が、この 1 つを通る）。進めてよければ空文字、断るときは理由を返す。
     条件は全部: 目印（`[操作]`・`[User]`）が無い／親の feature が着手可／自分と親の feature に
-    未完了の blocked by が無い／先祖の wave を止める wave が出ている（align_plan が
-    「着手可へ」と出す子だけを通し、「依存待ちへ」と出す子は断る）。いつ子になったかは問わない。"""
+    未完了の blocked by が無い（align_plan が「着手可へ」と出す子だけを通し、「依存待ちへ」と
+    出す子は断る）。先の wave が出ていなくても、親が着手可の feature なら通す（ADR-0760）。
+    いつ子になったかは問わない。"""
     own_kind = item['fields'].get(KIND_FIELD, '')
     if own_kind in EXCLUDE_KINDS:
         return f'種別が {own_kind}（task ではない）'
@@ -1615,7 +1555,8 @@ def task_not_startable_reason(project_number: int, item: dict, *, ignore_mark: b
     if parent['blocked_by_open']:
         blockers = ', '.join(f'#{n}' for n in parent['blocked_by_open'])
         return f'親 #{parent_number} の feature に未完了の blocked by がある: {blockers}'
-    return _preceding_wave_reason(project_number, parent)
+    # 親の feature が着手可と確かめた後なので、先の wave の門は見ない（ADR-0760）
+    return ''
 
 
 def _reject_closed(item: dict, number: int, verb: str) -> None:
@@ -1770,8 +1711,8 @@ def cmd_start(number: int, approved: str | None, reread: bool = False) -> int:
                 f'#{number} の Status は「{status or "空"}」で、start --approved は'
                 '着手可・承認待ちからしか進められない', 2,
             )
-        # 承認（出どころ）が通すのは [操作] の目印の止めだけ。親の feature の承認・blocked by・先の wave の
-        # 門は start と同じ判定で見る（2.8.0。--approved が門を迂回する道になっていた）。
+        # 承認（出どころ）が通すのは [操作] の目印の止めだけ。親の feature の承認・blocked by は
+        # start と同じ判定で見る（2.8.0。--approved が門を迂回する道になっていた）。
         reason = task_not_startable_reason(project_number, item, ignore_mark=True)
         if reason:
             die(f'#{number} は start --approved でも進めない: {reason}', 2)
@@ -1787,7 +1728,7 @@ def cmd_start(number: int, approved: str | None, reread: bool = False) -> int:
     if status == PENDING_STATUS or (status == DEP_STATUS and waived):
         # 承認待ち・（同じ feature の blocker を通した）依存待ちから進めてよいのは、
         # task_not_startable_reason を通るときだけ（目印が無く、親の feature が着手可で、
-        # blocked by と先の wave が済んでいる。align が着手可へ動かす子と同じ。
+        # blocked by が済んでいる。align が着手可へ動かす子と同じ。
         # いつ子になったかは問わない）。緩めるのは同じ feature の blocker の条件だけ。
         if has_mark(item['title']):
             die(
@@ -3094,10 +3035,12 @@ def _draft_first_bullet(lines: list[str], section: str) -> str:
     return ''
 
 
-def table_feature_card(row: dict, header: dict, slug: str, lines: list[str], child_count: int, stall: str = '') -> str:
+def table_feature_card(row: dict, header: dict, slug: str, lines: list[str], child_count: int, stall: str = '',
+                       waves_open: list[int] | None = None) -> str:
     """表から起こす feature の承認カード。draft の §1（カードの語。旧い見出し 何をしたいか・しないとどうなる も読む）と
     §8 から埋め、埋められない値は <…>。推奨は AI が案件を読んで書く（§1 に推奨が書いてあれば写し、雛形では機械的に
-    埋めない）。カードには内部の語 task を出さない（作業と書く）。stall は承認しても動かない理由（あれば注意に足す）。"""
+    埋めない）。カードには内部の語 task を出さない（作業と書く）。stall は承認しても動かない理由（あれば注意に足す）。
+    waves_open は出ていない先の wave の番号（あれば注意に「承認すると wave の門を越えて着手できる」を足す。ADR-0760）。"""
     cards = _load_card_module()
     wave = (header.get('wave') or '').strip()
     decide_line = _draft_labeled(lines, ('決めること',), '1.')
@@ -3105,6 +3048,10 @@ def table_feature_card(row: dict, header: dict, slug: str, lines: list[str], chi
     note = _draft_labeled(lines, ('注意',), '1.') or _draft_first_bullet(lines, '8.')
     if stall:
         note = (f'{note.rstrip("。")}。' if note else '') + f'今は承認しても動かない（{STALL_SHORT[stall]}）'
+    if waves_open:
+        names = '・'.join(f'#{n}' for n in waves_open)
+        note = (f'{note.rstrip("。")}。' if note else '') + (
+            f'先の wave {names} が出ていない。承認すると wave の門を越えて着手できる状態になる')
     return cards.skeleton('approval', {
         '決めること': f'「{row["title"]}」を始めるか',
         '目的': _draft_labeled(lines, ('目的', '何をしたいか'), '1.'),
@@ -3116,15 +3063,15 @@ def table_feature_card(row: dict, header: dict, slug: str, lines: list[str], chi
     }, recommendation if recommendation and '<' not in recommendation else None)
 
 
-def table_wave_open(wave_number: int, cache: dict) -> bool:
-    """wave を止める wave が「出た」か（読むだけ。1 回の起票で Project を 1 度だけ引き、cache に置く）。"""
+def table_unresolved_waves(wave_number: int, cache: dict) -> list[int]:
+    """wave を止める wave のうち「出た」を満たさないものの番号（読むだけ。1 回の起票で Project を 1 度だけ引き、cache に置く）。"""
     if 'index' not in cache:
         items = fetch_all_items(discover_project_number())
         by_number, children_of = _board_index(items)
         waves = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
         cache['index'] = (by_number, children_of, fetch_extras(waves), fetch_bodies(waves))
     by_number, children_of, extras, bodies = cache['index']
-    return not preceding_wave_unresolved(wave_number, by_number, children_of, bodies, extras)
+    return unresolved_wave_numbers(wave_number, by_number, children_of, bodies, extras)
 
 
 def table_issue_body(row: dict, slug: str, src_pr: str, domain: str, proposal_lines: list[str] | None = None,
@@ -3230,11 +3177,11 @@ def cmd_new_from_table(argv: list[str]) -> int:
                 x for x in rows if x.get('id') in existing and (x.get('kind') or '') == TASK_KIND
                 and re.fullmatch(rf'(?:feature\s+)?{re.escape(r["id"])}', (x.get('親') or '').strip())]
             parent = number_of(r['parent'])
-            stall = (STALL_WAVE if not table_wave_open(parent, wave_cache) else
-                     STALL_BLOCKED if r['blockers'] else
+            waves_open = table_unresolved_waves(parent, wave_cache)
+            stall = (STALL_BLOCKED if r['blockers'] else
                      STALL_NO_TASK if not kids else
                      STALL_HUMAN_ONLY if all(has_mark(x.get('title') or x.get('題名') or '') for x in kids) else '')
-            card = table_feature_card(r, header, slug, lines, len(kids), stall)
+            card = table_feature_card(r, header, slug, lines, len(kids), stall, waves_open)
         created[r['id']] = new_issue({
             'title': r['title'], 'kind': r['kind'], 'parent': number_of(r['parent']),
             'blocked_by': [number_of(b) for b in r['blockers']],
@@ -4069,18 +4016,36 @@ def _blocking_wave_numbers(
     return [n for n in blockers if (items_by_number.get(n) or {}).get('kind') == WAVE_KIND]
 
 
+def unresolved_wave_numbers(
+    wave_number: int, items_by_number: dict[int, dict], children_of: dict[int, list[int]],
+    bodies: dict[int, str], extras: dict[int, dict],
+) -> list[int]:
+    """wave_number を止めている wave のうち「出た」を満たさないものの番号（閉じた wave でも、
+    行が無ければ「出た」を満たさない）。着手可の feature の子は先の wave の門を見ない
+    （ADR-0760）ので、通した wave の番号を出す側（align・unblocked・承認カード）が使う。"""
+    unresolved = []
+    for blocker in _blocking_wave_numbers(wave_number, items_by_number, extras):
+        met, has_line = wave_has_exited(blocker, items_by_number, children_of, bodies)
+        if not (met and has_line):
+            unresolved.append(blocker)
+    return unresolved
+
+
 def preceding_wave_unresolved(
     wave_number: int, items_by_number: dict[int, dict], children_of: dict[int, list[int]],
     bodies: dict[int, str], extras: dict[int, dict],
 ) -> bool:
     """「先の wave が未了」。wave_number を止めている wave が 1 つでも「出た」を満たさなければ
-    True（閉じた wave でも、行が無ければ「出た」を満たさない）。
-    止める wave が無ければ False。"""
-    for blocker in _blocking_wave_numbers(wave_number, items_by_number, extras):
-        met, has_line = wave_has_exited(blocker, items_by_number, children_of, bodies)
-        if not (met and has_line):
-            return True
-    return False
+    True。止める wave が無ければ False。親の feature が承認待ちなどのとき（着手可でないとき）
+    の門で、親が着手可の feature の子には使わない（today の wave-holds と、承認待ちの feature の
+    子を自動で着手可にしない側が使う）。"""
+    return bool(unresolved_wave_numbers(wave_number, items_by_number, children_of, bodies, extras))
+
+
+def _waived_wave_note(waived: list[int], feature_number: int) -> str:
+    """通した wave の 1 行（align の出力・today・unblocked の注記が同じ文を使う）。"""
+    names = '・'.join(f'#{n}' for n in waived)
+    return f'先の wave {names} が出ていないが feature #{feature_number} が着手可なので通した'
 
 
 def align_plan(items: list[dict], extras: dict[int, dict], bodies: dict[int, str]) -> dict:
@@ -4088,8 +4053,10 @@ def align_plan(items: list[dict], extras: dict[int, dict], bodies: dict[int, str
     控えも読み書きしない）。戻り値は --json と同じ形（モジュール docstring）。
 
     承認待ちの子は、目印（`[操作]`・`[User]`）が無ければ、いつ子になったかを問わず
-    着手可へ動かす（未完了の blocked by が子か feature 自身にある、または先祖の wave を
-    止める wave が「出た」を満たさなければ依存待ちへ）。着手可の子は、ブロックされて
+    着手可へ動かす（未完了の blocked by が子か feature 自身にあれば依存待ちへ）。先祖の wave を
+    止める wave が「出た」を満たさなくても動かさない: feature が着手可であることを「wave の門を
+    越えてよい」の意思表示として扱う（ADR-0760）。そのとき 1 件以上を着手可へ動かした feature の
+    plan に、止めている wave の番号を `wave_waived` で載せる。着手可の子は、ブロックされて
     いなければ何もしない（着手可→着手可は出さない）。目印つきの子は、承認待ちでも
     着手可でも動かさず skipped へ回す。"""
     items_by_number, children_of = _board_index(items)
@@ -4101,7 +4068,9 @@ def align_plan(items: list[dict], extras: dict[int, dict], bodies: dict[int, str
         feature_extra = extras.get(fnum) or {}
         feature_blocked = feature_extra.get('blocked_by_open', 0) > 0
         wave_ancestor = _ancestor_number_of_kind(fnum, items_by_number, WAVE_KIND)
-        wave_unresolved = wave_ancestor is not None and preceding_wave_unresolved(
+        # 着手可の feature は、ユーザーが「wave の門を越えてよい」と示したものとして扱う（ADR-0760）。
+        # 先の wave が未了でも子を依存待ちへ動かさず、着手可へ動かした分があれば止めた wave の番号を載せる。
+        waived_waves = [] if wave_ancestor is None else unresolved_wave_numbers(
             wave_ancestor, items_by_number, children_of, bodies, extras,
         )
         moves: list[dict] = []
@@ -4120,7 +4089,7 @@ def align_plan(items: list[dict], extras: dict[int, dict], bodies: dict[int, str
                 skipped.append(cnum)
                 continue
             child_extra = extras.get(cnum) or {}
-            blocked = feature_blocked or child_extra.get('blocked_by_open', 0) > 0 or wave_unresolved
+            blocked = feature_blocked or child_extra.get('blocked_by_open', 0) > 0
             if status == READY_STATUS:
                 if blocked:
                     moves.append({'number': cnum, 'to': DEP_STATUS, 'from': READY_STATUS})
@@ -4128,7 +4097,10 @@ def align_plan(items: list[dict], extras: dict[int, dict], bodies: dict[int, str
             target = DEP_STATUS if blocked else READY_STATUS
             moves.append({'number': cnum, 'to': target, 'from': PENDING_STATUS})
         if moves or skipped:
-            plans.append({'feature': fnum, 'moves': moves, 'skipped': skipped})
+            plan = {'feature': fnum, 'moves': moves, 'skipped': skipped}
+            if waived_waves and any(m['to'] == READY_STATUS for m in moves):
+                plan['wave_waived'] = waived_waves
+            plans.append(plan)
     return {'align': plans}
 
 
@@ -4171,7 +4143,10 @@ def unblocked_rows(items: list[dict], extras: dict[int, dict], bodies: dict[int,
     一覧を出すだけで、ここでは書かない。目印つき（`[操作]`・`[User]`）の task は
     set では戻せない（set が承認待ち→着手可の目印つきを断る）ので、set_status
     の代わりに注記を出す。親の種別が feature でない（wave 直下・親なしなど）ときも、
-    どの Status に戻すべきかを機械的に決めないで注記する。"""
+    どの Status に戻すべきかを機械的に決めないで注記する。先祖の wave を止める wave が未了でも、
+    親が種別 feature で Status 着手可なら通し、note に「先の wave #N が出ていないが feature #M が
+    着手可なので通した」を付ける（ADR-0760）。親の feature が着手可でない・feature でないときは
+    今までどおり先の wave が出るまで待つ。"""
     items_by_number, children_of = _board_index(items)
     rows = []
     for i in task_items(items):
@@ -4185,6 +4160,7 @@ def unblocked_rows(items: list[dict], extras: dict[int, dict], bodies: dict[int,
         target_status = READY_STATUS
         parent_is_feature = True
         wave_ancestor = None
+        waived_note = ''
         if parent_number is not None:
             parent = items_by_number.get(parent_number)
             if parent is None:
@@ -4198,10 +4174,15 @@ def unblocked_rows(items: list[dict], extras: dict[int, dict], bodies: dict[int,
             wave_ancestor = _ancestor_number_of_kind(parent_number, items_by_number, WAVE_KIND)
         else:
             wave_ancestor = _ancestor_number_of_kind(number, items_by_number, WAVE_KIND)
-        if wave_ancestor is not None and preceding_wave_unresolved(
-            wave_ancestor, items_by_number, children_of, bodies, extras,
-        ):
-            continue
+        if wave_ancestor is not None:
+            unresolved = unresolved_wave_numbers(
+                wave_ancestor, items_by_number, children_of, bodies, extras,
+            )
+            if unresolved:
+                # 親が着手可の feature なら、先の wave の門は越えてよい（ADR-0760）。それ以外は今までどおり待つ。
+                if not (parent_is_feature and target_status == READY_STATUS):
+                    continue
+                waived_note = _waived_wave_note(unresolved, parent_number)
         title = i.get('title', '')
         if has_mark(title):
             rows.append({
@@ -4214,7 +4195,10 @@ def unblocked_rows(items: list[dict], extras: dict[int, dict], bodies: dict[int,
                 'note': '親が feature ではないため、戻す Status は人が判断する',
             })
         else:
-            rows.append({'number': number, 'title': title, 'set_status': target_status})
+            row = {'number': number, 'title': title, 'set_status': target_status}
+            if waived_note:
+                row['note'] = waived_note
+            rows.append(row)
     return rows
 
 
@@ -4498,6 +4482,8 @@ def _print_align_plan(plan: dict) -> None:
             print(f"  #{m['number']:<4} → {m['to']}")
         for n in skipped:
             print(f"  #{n:<4}（そろえない）")
+        if entry.get('wave_waived'):
+            print(f"  {_waived_wave_note(entry['wave_waived'], entry['feature'])}")
 
 
 def _open_parent_candidate_numbers(items: list[dict]) -> list[int]:
@@ -4576,6 +4562,8 @@ def cmd_unblocked(*, items: list[dict] | None = None) -> int:
     print(f'依存が解けた task {len(rows)} 件（戻すのは set <n> Status <値>。目印つき・親が feature でない分は注記だけ）')
     for r in rows:
         target = r.get('set_status') or r.get('note', '')
+        if r.get('set_status') and r.get('note'):
+            target = f"{target}（{r['note']}）"
         print(f"  #{r['number']:<4} {r['title'][:60]} → {target}")
     return 0
 
@@ -5028,13 +5016,11 @@ def cmd_board(opts: dict) -> int:
 CARD_HEADLINE_FIELD = 'ひとこと'  # 承認カードの「決めること」を写す項目（TEXT）。ボードの承認ビューで読む
 CARD_RECOMMEND_FIELD = '推奨'  # 承認カードの「推奨」を写す項目（単一選択: 承認する・条件つき・承認しない）
 _CARD_USAGE = '使い方: hirai-task card <issue> [--sync] | hirai-task card --lint'
-STALL_WAVE = '先の wave が出ていない（承認しても子は依存待ちへ移るだけ）'
 STALL_BLOCKED = 'feature に未完了の blocked by がある'
 STALL_NO_TASK = '子の open の task が無い（閉じ忘れか、task がまだ無い）'
 STALL_HUMAN_ONLY = '子の open の task が人の作業・保留・判断待ちだけ'
 # カード・スマートフォンの 2 行目に出す短い言い方（カードには内部の語 task を出さない）
-STALL_SHORT = {STALL_WAVE: '先の wave 待ち', STALL_BLOCKED: 'blocked by あり', STALL_NO_TASK: '子の作業が無い',
-               STALL_HUMAN_ONLY: '子が人の作業だけ'}
+STALL_SHORT = {STALL_BLOCKED: 'blocked by あり', STALL_NO_TASK: '子の作業が無い', STALL_HUMAN_ONLY: '子が人の作業だけ'}
 
 
 def _load_card_module():
@@ -5070,11 +5056,9 @@ def approval_stall_reason(
     extras: dict[int, dict], bodies: dict[int, str],
 ) -> str:
     """承認待ちの feature を承認しても、子の task が動き出さない理由（動くなら空文字）。
-    ready と同じ門（先の wave・blocked by）と、子の中身（人の作業・保留・判断待ちだけ、子が無い）を見る。"""
+    ready と同じ門（blocked by）と、子の中身（人の作業・保留・判断待ちだけ、子が無い）を見る。
+    先の wave は理由にしない: 承認すれば子は wave の門を越えて動く（ADR-0760。カードの注意に出す）。"""
     number = feature['number']
-    wave = _ancestor_number_of_kind(number, items_by_number, WAVE_KIND)
-    if wave is not None and preceding_wave_unresolved(wave, items_by_number, children_of, bodies, extras):
-        return STALL_WAVE
     if (extras.get(number) or {}).get('blocked_by_open', 0) > 0:
         return STALL_BLOCKED
     kids = [items_by_number[c] for c in children_of.get(number, []) if c in items_by_number]

@@ -1300,14 +1300,15 @@ def _card_checks(t, tmp_dir: str) -> None:
         by_number, children = gh_task._board_index(items)
         extras = {2: {'blocked_by_numbers': [1]}}
         reasons = {n: gh_task.approval_stall_reason(by_number[n], by_number, children, extras, {}) for n in (10, 20, 30, 40)}
-        assert '先の wave' in reasons[10], reasons
+        assert reasons[10] == '', f'先の wave が未了でも承認すれば子は動くので止まる理由にしない: {reasons}'
         assert '人の作業' in reasons[20] and '保留' in reasons[20], reasons
         assert reasons[30] == '', reasons
         assert '子の open の task が無い' in reasons[40], reasons
-        assert [gh_task.STALL_SHORT[r] for r in (reasons[10], reasons[20], reasons[40])] == \
-            ['先の wave 待ち', '子が人の作業だけ', '子の作業が無い'], '短い言い方が理由と合っていない'
+        assert [gh_task.STALL_SHORT[r] for r in (reasons[20], reasons[40])] == \
+            ['子が人の作業だけ', '子の作業が無い'], '短い言い方が理由と合っていない'
+        assert not hasattr(gh_task, 'STALL_WAVE'), '止まる理由から外した STALL_WAVE が残っている'
 
-    t('board: 承認しても動かない feature の理由（先の wave・子が保留と人の作業だけ・子が無い）', _stall_reasons)
+    t('board: 承認しても動かない feature の理由（子が保留と人の作業だけ・子が無い。先の wave は理由にしない）', _stall_reasons)
 
     def _board_shows_cards() -> None:
         calls: list = []
@@ -3769,26 +3770,28 @@ def main() -> int:
             )
             calls: list[dict] = []
             orig_new_issue, orig_existing = gh_task.new_issue, gh_task.existing_table_marks
-            orig_open = getattr(gh_task, 'table_wave_open', None)  # 差し替えより前に読む（落ちても差し替えを漏らさない）
+            orig_open = getattr(gh_task, 'table_unresolved_waves', None)  # 差し替えより前に読む（落ちても差し替えを漏らさない）
             gh_task.new_issue = lambda opts: calls.append(opts) or 700 + len(calls)
             gh_task.existing_table_marks = lambda slug: {'TBF-03': 777}
             try:
-                gh_task.table_wave_open = lambda wave, cache: True
+                gh_task.table_unresolved_waves = lambda wave, cache: []
                 rc, out = _from_table(_draft_path('tbf-run.md', text))
                 new_text = (text.replace('**何をしたいか**: 入居者が 3 分で登録を終えられる',
                                          '**決めること**: 登録の画面を作り直すか。**推奨**: 承認する\n\n**目的**: 登録を 3 分にする\n\n'
                                          '**位置**: 入居者の登録の残り\n\n**注意**: 外部の審査が要る')
                             .replace('**しないとどうなる**:', '**しないと**:').replace('tbf-run', 'tbf-new'))
-                gh_task.table_wave_open = lambda wave, cache: False
+                gh_task.table_unresolved_waves = lambda wave, cache: [600, 601]
                 rc2, out2 = _from_table(_draft_path('tbf-new.md', new_text))
             finally:
                 gh_task.new_issue, gh_task.existing_table_marks = orig_new_issue, orig_existing
-                gh_task.table_wave_open = orig_open
+                gh_task.table_unresolved_waves = orig_open
             new_card = calls[3]['body']
             for needle in ('**推奨**: 承認する', '**目的**: 登録を 3 分にする', '**位置**: 入居者の登録の残り',
-                           '**注意**: 外部の審査が要る。今は承認しても動かない（先の wave 待ち）', '**しないと**: 登録の途中で半数が離れる'):
+                           '**注意**: 外部の審査が要る。先の wave #600・#601 が出ていない。承認すると wave の門を越えて着手できる状態になる', '**しないと**: 登録の途中で半数が離れる'):
                 assert needle in new_card, f'新しい見出しの「{needle}」が無い: {new_card}'
             assert rc2 == 0 and 'task' not in new_card.split('<!-- /card -->')[0], f'カードに内部の語 task が出た: {new_card}'
+            assert '今は承認しても動かない' not in new_card, f'先の wave を止まる理由に書いた: {new_card}'
+            assert '先の wave' not in calls[0]['body'], f'先の wave が出ているのに無いときの注意が出た: {calls[0]["body"]}'
             assert rc == 0 and [c['title'] for c in calls[:3]] == ['登録の画面', '入力欄を減らす', '確認の画面を消す'], (rc, out)
             feature = calls[0]['body']
             assert feature.startswith('<!-- card:approval -->\n**決めること**: 「登録の画面」を始めるか。**推奨**: <…>'), feature
@@ -5908,7 +5911,7 @@ def main() -> int:
                 _task_row(5, 911),
             ]
             extras = {910: {'blocked_by_numbers': [900], 'blocked_by_open_numbers': [900]}}
-            assert _ready_numbers(board, extras, {}) == [1], 'P1 が未了なのに P2 の task が出た'
+            assert _ready_numbers(board, extras, {}) == [1, 5], 'P1 が未了でも、親の feature が着手可なら P2 の task も出る（ADR-0760）'
             # P1 の子（task 1・feature 901）を完了にし、出る条件の行を足すと、P2 の task も出る
             done_board = [
                 dict(i, status=gh_task.DONE_STATUS) if i['number'] in (1, 901) else i for i in board
@@ -5916,10 +5919,10 @@ def main() -> int:
             done_board = [i for i in done_board if i['number'] != 1] + [_task_row(1, 901, status=gh_task.DONE_STATUS)]
             body = {900: '- 出る条件のコマンド: exit 0（2026-09-30・abc1234）'}
             assert _ready_numbers(done_board, extras, body) == [5], _ready_numbers(done_board, extras, body)
-            # 子は全部完了でも、出る条件のコマンドの行が無ければ出ない
-            assert _ready_numbers(done_board, extras, {}) == [], '出る条件の行が無いのに出た'
+            # 出る条件の行が無くても、親の feature が着手可なら出る
+            assert _ready_numbers(done_board, extras, {}) == [5], '先の wave を見て task を止めた'
 
-        t('ready は先の wave が出る条件を満たすまで、あとの wave の task を出さない', _ready_strict_holds_task_while_preceding_wave_open)
+        t('ready は先の wave が未了でも、親の feature が着手可の task を出す（wave の門を見ない）', _ready_strict_holds_task_while_preceding_wave_open)
 
         def _ready_strict_hides_closed_and_non_ready_status() -> None:
             items = _base_board() + [
@@ -6035,9 +6038,17 @@ def main() -> int:
                 131: {'blocked_by_open_numbers': [130]},
             }
             rows = gh_task.unblocked_rows(items, extras, {})
-            assert rows == [], f'先の wave が未了なのに出た: {rows}'
+            assert rows == [{
+                'number': 133, 'title': 't', 'set_status': gh_task.READY_STATUS,
+                'note': '先の wave #130 が出ていないが feature #132 が着手可なので通した',
+            }], f'親の feature が着手可なのに先の wave で止めた・note が無い: {rows}'
+            # 親の feature が承認待ちなら、今までどおり先の wave が出るまで出さない
+            pending_items = [dict(i, status=gh_task.PENDING_STATUS) if i['number'] == 132 else i for i in items]
+            rows = gh_task.unblocked_rows(pending_items, extras, {})
+            assert rows == [], f'親の feature が承認待ちなのに先の wave を越えた: {rows}'
 
-        t('unblocked は先の wave が未了なら出さない', _unblocked_respects_preceding_wave)
+        t('unblocked は親の feature が着手可なら先の wave を越えて note つきで出し、承認待ちなら今までどおり待つ',
+          _unblocked_respects_preceding_wave)
 
         # 目印つき task は set で戻せない（set が承認待ち→
         # 着手可の目印つきを断る）ので、set_status の代わりに注記を出す。
@@ -6321,8 +6332,8 @@ def main() -> int:
             ('止めるものが無い', {}, 'ready'),
             ('自分に blocked by', dict(child_blockers=(900,)), 'dep'),
             ('親の feature に blocked by', dict(feature_blockers=(900,)), 'dep'),
-            ('先の wave が出ていない（task が進行中）', dict(prior='unfinished'), 'dep'),
-            ('先の wave の task は完了だが出る条件の行が無い', dict(prior='no-line'), 'dep'),
+            ('先の wave が出ていない（task が進行中）でも、親の feature が着手可なら通す', dict(prior='unfinished'), 'ready'),
+            ('先の wave の task は完了だが出る条件の行が無くても通す', dict(prior='no-line'), 'ready'),
             ('先の wave が出た（blocker は閉じた）', dict(prior='exited'), 'ready'),
             ('先の wave が出た（blocker はまだ開いている）', dict(prior='exited-open'), 'ready'),
             ('目印 [User]', dict(title='[User] task'), 'skipped'),
@@ -6358,8 +6369,7 @@ def main() -> int:
         )
 
         def _wave_lookup_is_light_only_without_blocking_wave() -> None:
-            # 先祖の wave を止める wave が無いときは、板の全件（items(first:）を引かずに通す。
-            # あるときだけ全件を引いて、align と同じ判定を使う。
+            # 親の feature が着手可と確かめたあとは先の wave を見ないので、板の全件（items(first:）を引かない（ADR-0760）。
             def count_board_fetches(prior: str) -> tuple[int, str]:
                 calls = {'board': 0}
                 items, extras, bodies = _board(prior=prior)
@@ -6375,13 +6385,13 @@ def main() -> int:
                 return calls['board'], verdict
 
             assert count_board_fetches('none') == (0, 'ok')
-            fetched, verdict = count_board_fetches('unfinished')
-            assert fetched >= 1 and verdict == 'refused', (fetched, verdict)
+            assert count_board_fetches('unfinished') == (0, 'ok'), '先の wave が未了でも、着手の判定は板の全件を引かず通す'
 
-        t('着手の判定は、先祖の wave を止める wave が無いときだけ全件を引かずに通す', _wave_lookup_is_light_only_without_blocking_wave)
+        t('着手の判定は、先の wave の有無によらず全件を引かずに通す（親の feature が着手可なら wave の門を見ない）',
+          _wave_lookup_is_light_only_without_blocking_wave)
 
         def _new_survives_failing_hint_reads() -> None:
-            # 全件の取得だけが落ちても、issue はできているので new は exit 0。1 行だけ出す。
+            # 案内のための親の feature の読み取りだけが落ちても、issue はできているので new は exit 0。1 行だけ出す。
             items, extras, bodies = _board(prior='exited')
             base = make_command_gh(items, bodies=bodies, extras=extras)
             posted: list = []
@@ -6390,7 +6400,7 @@ def main() -> int:
                 if args[:4] == ['api', '-X', 'POST', f'repos/{gh_task.REPO}/issues']:
                     posted.append(1)
                     return 0, json.dumps({'number': CHILD, 'id': 424242, 'node_id': 'X'}), ''
-                if 'items(first:' in ' '.join(args):
+                if posted and 'issue(number:$number) {' in ' '.join(args) and _extract_flag(args, 'number') == str(FEAT):
                     return 1, '', 'HTTP 502 (simulated)'
                 return base(args, input_text)
 
@@ -6407,8 +6417,8 @@ def main() -> int:
         t('new は issue を作ったあと、着手の案内の読み取りが落ちても exit 0 で、確かめられなかった旨を 1 行出す', _new_survives_failing_hint_reads)
 
         def _wave_is_read_once() -> None:
-            # 祖先をたどる関数が wave の行も返すので、wave を 2 回引かない。
-            items, extras, bodies = _board(prior='exited')
+            # 親の feature が着手可なら先の wave を見ないので、wave の行を引かない（ADR-0760）。
+            items, extras, bodies = _board(prior='unfinished')
             base = make_command_gh(items, bodies=bodies, extras=extras)
             reads: list = []
 
@@ -6419,60 +6429,9 @@ def main() -> int:
 
             gh_task.run_gh = counting
             assert _verdict(lambda: gh_task.cmd_start(CHILD, None)) == 'ok'
-            assert reads.count(W2) == 1, f'wave #{W2} を {reads.count(W2)} 回読んだ: {reads}'
+            assert reads.count(W2) == 0, f'wave #{W2} を {reads.count(W2)} 回読んだ: {reads}'
 
-        t('着手の判定は、先祖の wave を 1 回だけ読む', _wave_is_read_once)
-
-        def _unresolvable_wave_blocker_number_is_not_a_wave() -> None:
-            # wave の blocked by に、この repo で issue として引けない番号（別 repo の blocked by が
-            # 同じ番号の PR に当たる等）が混じっても落ちず、wave でない番号として先へ進む。
-            UNRESOLVABLE = 777
-
-            def run(prior: str) -> str:
-                items, extras, bodies = _board(prior=prior)
-                key = 'blocked_by_closed_numbers' if prior == 'exited' else 'blocked_by_open_numbers'
-                extras[W2] = {key: list(extras.get(W2, {}).get(key, [])) + [UNRESOLVABLE]}
-                base = make_command_gh(items, bodies=bodies, extras=extras)
-
-                def fake(args, input_text=None):
-                    if ('issue(number:$number) {' in ' '.join(args)
-                            and _extract_flag(args, 'number') == str(UNRESOLVABLE)):
-                        return 1, '', f'Could not resolve to an Issue with the number of {UNRESOLVABLE}.'
-                    return base(args, input_text)
-
-                gh_task.run_gh = fake
-                return _verdict(lambda: gh_task.cmd_start(CHILD, None))
-
-            assert run('none') == 'ok'            # 引けない番号だけ: 止める wave は無い
-            assert run('exited') == 'ok'          # 本物の先の wave が出ていれば通る
-            assert run('unfinished') == 'refused'  # 本物の先の wave が出ていなければ、引けない番号があっても断る
-
-        t('wave の blocked by に、issue として引けない番号が混じっても、wave でない番号として先へ進む', _unresolvable_wave_blocker_number_is_not_a_wave)
-
-        def _transient_failure_on_wave_blocker_lookup_is_not_a_wave() -> None:
-            # 引けない番号以外の失敗（502・レート制限）は「wave でない」にせず、start を通さない。
-            FLAKY = 778
-            items, extras, bodies = _board(prior='unfinished')
-            extras[W2] = {'blocked_by_open_numbers': list(extras.get(W2, {}).get('blocked_by_open_numbers', [])) + [FLAKY]}
-            log: list = []
-            base = make_command_gh(items, bodies=bodies, extras=extras, write_log=log)
-
-            def fake(args, input_text=None):
-                if ('issue(number:$number) {' in ' '.join(args)
-                        and _extract_flag(args, 'number') == str(FLAKY)):
-                    return 1, '', 'HTTP 502 (simulated)'
-                return base(args, input_text)
-
-            gh_task.run_gh = fake
-            try:
-                gh_task.cmd_start(CHILD, None)
-            except gh_task.GhError as exc:
-                assert 'HTTP 502' in str(exc), exc
-            else:
-                raise AssertionError('通信の失敗なのに start が通った')
-            assert log == [], f'進行中への書き込みが {len(log)} 件ある: {log}'
-
-        t('wave の blocked by の番号の取得が通信の失敗で落ちたら、wave でないとせず start を通さない', _transient_failure_on_wave_blocker_lookup_is_not_a_wave)
+        t('着手の判定は、先の wave を読まない', _wave_is_read_once)
 
         def _align_skips_closed_and_non_task_children() -> None:
             feature = {
@@ -6647,12 +6606,27 @@ def main() -> int:
             plan = gh_task.align_plan(items, extras, {})
             entry = plan['align'][0]
             assert entry['moves'] == [
-                {'number': 263, 'to': gh_task.DEP_STATUS, 'from': gh_task.PENDING_STATUS},
-            ], (
-                f'先の wave が未了なのに着手可へ動かした: {entry}'
-            )
+                {'number': 263, 'to': gh_task.READY_STATUS, 'from': gh_task.PENDING_STATUS},
+            ], f'feature が着手可なのに、先の wave が未了で依存待ちへ動かした: {entry}'
+            assert entry['wave_waived'] == [260], f'通した wave の番号が載っていない: {entry}'
+            out = io.StringIO()
+            with redirect_stdout(out):
+                gh_task._print_align_plan(plan)
+            assert '  先の wave #260 が出ていないが feature #262 が着手可なので通した' in out.getvalue().splitlines(), out.getvalue()
+            # 着手可の子は先の wave が未了でも依存待ちへ動かさない（何も動かさないので plan にも出ない）
+            ready_items = [dict(i, status=gh_task.READY_STATUS) if i['number'] == 263 else i for i in items]
+            assert gh_task.align_plan(ready_items, extras, {}) == {'align': []}, '着手可の子を先の wave で依存待ちへ動かした'
+            # 止める wave が無いときは wave_waived を載せない
+            plain = gh_task.align_plan(items, {263: {'blocked_by_open': 0}}, {})['align'][0]
+            assert 'wave_waived' not in plain, plain
+            # 子に blocked by があれば今までどおり依存待ち（wave_waived は着手可へ動かした分があるときだけ）
+            blocked = gh_task.align_plan(items, {263: {'blocked_by_open': 1}, 261: {'blocked_by_open_numbers': [260]}}, {})['align'][0]
+            assert blocked['moves'][0]['to'] == gh_task.DEP_STATUS and 'wave_waived' not in blocked, blocked
+            # 親の feature が承認待ちなら align の対象外（承認待ちの feature の子は自動で着手可にしない）
+            pending = [dict(i, status=gh_task.PENDING_STATUS) if i['number'] == 262 else i for i in items]
+            assert gh_task.align_plan(pending, extras, {}) == {'align': []}, '承認待ちの feature の子を動かした'
 
-        t('align は先の wave（P1）が未了なら、子を依存待ちへ動かす', _align_respects_preceding_wave)
+        t('align は先の wave（P1）が未了でも、着手可の feature の子を着手可へ動かし wave_waived を載せる', _align_respects_preceding_wave)
 
         # 「未完了の blocked by があるか、先の wave が未了なら、
         # 依存待ちへ（着手可の子も同じ）」を、着手可の子にも適用する。
