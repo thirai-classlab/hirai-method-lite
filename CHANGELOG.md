@@ -7,13 +7,17 @@
 ## v2.9.0
 着手可の feature の子は、先の wave が出ていなくても着手できるようにした。rmp-app の裁定（2026-11-19・issue #1053・ADR-0760）: ユーザーが feature を 着手可 にしたことを「wave の門を越えてよい」の意思表示として扱う。wave の門は「承認待ちの feature を自動で着手可にしない」門として残る。
 
-- **`align`**: 着手可の feature の子（目印なし・open の blocker 0）を、先祖の wave を止める wave が未了でも依存待ちへ動かさない（承認待ちの子は着手可へ動かし、着手可の子は動かさない）。1 件以上を着手可へ動かした feature の plan に、止めている wave の番号を `wave_waived: [N, ...]` で載せる（`--json` はキーが増えるだけ）。文字の出力と `today` は、その feature の見出しの次に `  先の wave #627・#709 が出ていないが feature #654 が着手可なので通した` を 1 行出す。
+- **`align`**: 着手可の feature の子（目印なし・open の blocker 0）を、先祖の wave を止める wave が未了でも依存待ちへ動かさない（承認待ちの子は着手可へ動かし、着手可の子は動かさない）。1 件以上を着手可へ動かした feature の plan に、止めている wave の番号を `wave_waived: [N, ...]` で載せる（`--json` はキーが増えるだけ）。文字の出力と `today` は、その feature の見出しの直後に `  先の wave #627・#709 が出ていないが feature #654 が着手可なので通した` を 1 行出し、feature に残すコメントにも同じ 1 行を書く（issue に記録が残る）。
 - **`ready`・`start`・`set`・`new` の案内**: 親が着手可の feature なら先の wave を見ない（`ready_block_reason` の wave の判定と、`task_not_startable_reason` の `_preceding_wave_reason` を外した。start の判定は板の全件を引かなくなる）。board の「先の wave が出ていない」の区分も無くなる。
-- **`unblocked`**: 依存待ちの task の親が種別 feature で着手可なら、先の wave が未了でも出し、行に `先の wave #N が出ていないが feature #M が着手可なので通した` の note を付ける。親の feature が承認待ちなど着手可でないとき・親が feature でないときは、今までどおり wave が出るまで出さない。
-- **承認カード**: 起票（`new --from-table`）のカードの止まる理由から先の wave を外した（承認すれば子は動く）。代わりに「注意」へ「先の wave #N が出ていない。承認すると wave の門を越えて着手できる状態になる」を足す。board の「うち承認しても動かない」にも数えない。
-- **変えないもの**: wave 自体の「出た」の判定（`wave_has_exited`・`preceding_wave_unresolved`・`wave_hold_rows`）、親の feature が着手可でないときの判定、目印つき（`[操作]`・`[User]`）の扱い、blocked by の判定。
-- **検査**: selftest に、先の wave が未了でも着手可の feature の子が align で着手可になり `wave_waived` が載ること・着手可の子が依存待ちへ動かないこと・ready に出ること・unblocked が note つきで出し、親が承認待ちなら今までどおり止めること・承認カードの止まる理由に wave が出ないことを足し、wave で止まる期待だった既存の case（ready・align・盤面の表・着手の判定の読み取り）を新しい判定に直した。wave の blocked by の番号の読み取りを試していた 2 case は、その読み取りが無くなったので外した。
-- **導入先で要る操作**: プラグインを 2.9.0 に上げ、新しい会話を開く。上げたあと `today` を回すと、wave の門で依存待ちだった着手可の feature の子が unblocked に出る。AI が `set <n> Status 着手可` で戻す。導入先の規範（`tasks.md` など）に「先の wave が出ていて」の句があれば手で外す。
+- **`unblocked`**: 依存待ちの task の親が種別 feature で Status が着手可（空は着手可とみなさない）なら、先の wave が未了でも出し、行に `先の wave #N が出ていないが feature #M が着手可なので通した` の note を付ける。親の feature が承認待ちなど着手可でないとき・親が feature でないときは、今までどおり wave が出るまで出さない。
+- **承認カード**: 起票（`new --from-table`）のカードの止まる理由から先の wave を外した（承認すれば子は動く）。代わりに「注意」へ「承認すると先の wave を待たずに着手できる」を足す（承認しても動かない理由があるときは足さない・wave の番号は入れない・60 字に収まる）。board の「うち承認しても動かない」にも数えない。
+- **読み取りを減らした**: 先の wave を見なくなったので、`ready`・`card --sync`・`card --lint` が引いていた wave の extras と本文の取得を外した（`preceding_wave_unresolved` は本番の呼び手が無くなったので消し、`unresolved_wave_numbers` に一本化）。
+- **変えないもの**: wave 自体の「出た」の判定（`wave_has_exited`・`unresolved_wave_numbers`・`wave_hold_rows`）、親の feature が着手可でないときの判定、目印つき（`[操作]`・`[User]`）の扱い、blocked by の判定。
+- **検査**: selftest に、先の wave が未了でも着手可の feature の子が align で着手可になり `wave_waived` が載ること・着手可の子が依存待ちへ動かないこと・ready に出ること・unblocked が note つきで出し、親が承認待ちなら今までどおり止めること・承認カードの止まる理由に wave が出ないことを足し、先の wave が出た側（note・`wave_waived` を付けない）と、承認待ち・Status が空の feature の子・親が feature でない task が門で止まることを、先の wave の形 × 親の Status の全組で見るようにし、wave で止まる期待だった既存の case（ready・align・盤面の表・着手の判定の読み取り）を新しい判定に直した。wave の blocked by の番号の読み取りを試していた 2 case は、その読み取りが無くなったので外した。
+- **導入先で要る操作**:
+  1. **上げる前に** `hirai-task card --lint` を回し、承認待ちの feature のカードで「今は動かない（先の wave 待ち）」「門が開いてから」「承認しても今は動かない」に触れているものを書き直してから、`hirai-task card <n> --sync` で写し直す。2.9.0 では承認した時点で子が着手可へ動くので、「承認しても動かない」と書いたままのカードは嘘になる（「条件つき（門が開いてから）」で承認すると、門が開く前に着手され得る）。
+  2. 導入先の規範（rmp-app なら `.claude/rules/tasks.md` の「承認は feature で行う」の「先の wave が出ていて」の句）は、2.9.0 と**同時に**そろえて入れる。片方だけだと規範と道具が逆のことを言う。
+  3. プラグインを 2.9.0 に上げ、新しい会話を開く。上げたあと `today` を回すと、wave の門で依存待ちだった着手可の feature の子が unblocked に出る。AI が `set <n> Status 着手可` で戻す。
 
 ## v2.8.1
 承認ビューの列と、board の「着手可なのに着手できない」の数え方を直した。あわせて、2.8.0 で偽の gh でだけ確かめていた書き込みを、rmp-app の Project #7 で実際の GitHub に当てて確かめた。

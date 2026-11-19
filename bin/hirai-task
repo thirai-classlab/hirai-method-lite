@@ -1074,7 +1074,7 @@ def fetch_extras(numbers: list[int]) -> dict[int, dict]:
 
 
 def fetch_bodies(numbers: list[int]) -> dict[int, str]:
-    """close-parents（「- 常設: はい」）・unblocked と承認待ちの feature の子の「先の wave が出たか」・wave-holds
+    """close-parents（「- 常設: はい」）・unblocked と align の「先の wave が出たか」・wave-holds
     （「出る条件のコマンド」の行）が使う本文を、まとめて 1 回の GraphQL で引く
     （fetch_extras と同じ alias の考え方）。"""
     unique = sorted({int(n) for n in numbers if n is not None})
@@ -1162,9 +1162,7 @@ def ready_sort_key(items: list[dict]):
     return key
 
 
-def ready_rows(
-    items: list[dict], extras: dict[int, dict], bodies: dict[int, str],
-) -> list[dict]:
+def ready_rows(items: list[dict], extras: dict[int, dict]) -> list[dict]:
     """ready に出す task。次をすべて満たすものだけ。
     ・種別が task（種別の空の行は出さない。orphans が拾う）で、Status が着手可の open
     ・題名に `[User]` が無い（あなたの手作業は today に番号で出す）
@@ -1179,7 +1177,7 @@ def ready_rows(
             continue
         if i.get('kind') != TASK_KIND or i.get('status') != READY_STATUS:
             continue
-        if ready_block_reason(i, items_by_number, children_of, extras, bodies):
+        if ready_block_reason(i, items_by_number, children_of, extras):
             continue
         rows.append(i)
     rows.sort(key=ready_sort_key(items))
@@ -1196,7 +1194,7 @@ NOT_READY_FEATURE_BLOCKER = '親の feature に未完了の blocked by'
 
 def ready_block_reason(
     i: dict, items_by_number: dict[int, dict], children_of: dict[int, list[int]],
-    extras: dict[int, dict], bodies: dict[int, str],
+    extras: dict[int, dict],
 ) -> str:
     """open の task が ready に出ない理由（出るなら空文字）。Status と種別は見ない（呼び出し側が絞る）。
     ready_rows と board が同じ判定を使う（ready と board の「着手できる」の数をずらさない）。
@@ -1266,14 +1264,12 @@ def cmd_ready() -> int:
         i['parent_number'] for i in tasks
         if i.get('status') == READY_STATUS and i.get('parent_number') is not None
     ]
-    wave_numbers = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
-    extras = fetch_extras(ready_numbers + review_numbers + parent_numbers + wave_numbers)
-    bodies = fetch_bodies(wave_numbers)
-    rows = ready_rows(items, extras, bodies)
+    extras = fetch_extras(ready_numbers + review_numbers + parent_numbers)
+    rows = ready_rows(items, extras)
     if not rows:
         print('着手可の issue は 0 件')
     else:
-        # 「旧い形」の印のために、出す行の本文だけを引く（#829。wave の本文とは別の 1 回）
+        # 「旧い形」の印のために、出す行の本文だけを引く（#829）
         row_bodies = fetch_bodies([i['number'] for i in rows])
         print(f'着手可 {len(rows)} 件')
         for i in rows:
@@ -3040,7 +3036,8 @@ def table_feature_card(row: dict, header: dict, slug: str, lines: list[str], chi
     """表から起こす feature の承認カード。draft の §1（カードの語。旧い見出し 何をしたいか・しないとどうなる も読む）と
     §8 から埋め、埋められない値は <…>。推奨は AI が案件を読んで書く（§1 に推奨が書いてあれば写し、雛形では機械的に
     埋めない）。カードには内部の語 task を出さない（作業と書く）。stall は承認しても動かない理由（あれば注意に足す）。
-    waves_open は出ていない先の wave の番号（あれば注意に「承認すると wave の門を越えて着手できる」を足す。ADR-0760）。"""
+    waves_open は出ていない先の wave の番号（あれば、stall が空のときだけ注意に WAVE_WAIVED_CARD_NOTE を足す。
+    承認しても動かない文と並べない・カードの注意は 60 字まで。wave の番号は詳しい版に置く。ADR-0760）。"""
     cards = _load_card_module()
     wave = (header.get('wave') or '').strip()
     decide_line = _draft_labeled(lines, ('決めること',), '1.')
@@ -3048,10 +3045,8 @@ def table_feature_card(row: dict, header: dict, slug: str, lines: list[str], chi
     note = _draft_labeled(lines, ('注意',), '1.') or _draft_first_bullet(lines, '8.')
     if stall:
         note = (f'{note.rstrip("。")}。' if note else '') + f'今は承認しても動かない（{STALL_SHORT[stall]}）'
-    if waves_open:
-        names = '・'.join(f'#{n}' for n in waves_open)
-        note = (f'{note.rstrip("。")}。' if note else '') + (
-            f'先の wave {names} が出ていない。承認すると wave の門を越えて着手できる状態になる')
+    elif waves_open:
+        note = (f'{note.rstrip("。")}。' if note else '') + WAVE_WAIVED_CARD_NOTE
     return cards.skeleton('approval', {
         '決めること': f'「{row["title"]}」を始めるか',
         '目的': _draft_labeled(lines, ('目的', '何をしたいか'), '1.'),
@@ -3177,10 +3172,11 @@ def cmd_new_from_table(argv: list[str]) -> int:
                 x for x in rows if x.get('id') in existing and (x.get('kind') or '') == TASK_KIND
                 and re.fullmatch(rf'(?:feature\s+)?{re.escape(r["id"])}', (x.get('親') or '').strip())]
             parent = number_of(r['parent'])
-            waves_open = table_unresolved_waves(parent, wave_cache)
             stall = (STALL_BLOCKED if r['blockers'] else
                      STALL_NO_TASK if not kids else
                      STALL_HUMAN_ONLY if all(has_mark(x.get('title') or x.get('題名') or '') for x in kids) else '')
+            # 先の wave の注意は stall が空のときだけ足すので、stall があれば板を引かない
+            waves_open = [] if stall else table_unresolved_waves(parent, wave_cache)
             card = table_feature_card(r, header, slug, lines, len(kids), stall, waves_open)
         created[r['id']] = new_issue({
             'title': r['title'], 'kind': r['kind'], 'parent': number_of(r['parent']),
@@ -4022,7 +4018,7 @@ def unresolved_wave_numbers(
 ) -> list[int]:
     """wave_number を止めている wave のうち「出た」を満たさないものの番号（閉じた wave でも、
     行が無ければ「出た」を満たさない）。着手可の feature の子は先の wave の門を見ない
-    （ADR-0760）ので、通した wave の番号を出す側（align・unblocked・承認カード）が使う。"""
+    （ADR-0760）ので、通した wave の番号を出す側（align・unblocked・起票の承認カード）が使う。"""
     unresolved = []
     for blocker in _blocking_wave_numbers(wave_number, items_by_number, extras):
         met, has_line = wave_has_exited(blocker, items_by_number, children_of, bodies)
@@ -4031,15 +4027,8 @@ def unresolved_wave_numbers(
     return unresolved
 
 
-def preceding_wave_unresolved(
-    wave_number: int, items_by_number: dict[int, dict], children_of: dict[int, list[int]],
-    bodies: dict[int, str], extras: dict[int, dict],
-) -> bool:
-    """「先の wave が未了」。wave_number を止めている wave が 1 つでも「出た」を満たさなければ
-    True。止める wave が無ければ False。親の feature が承認待ちなどのとき（着手可でないとき）
-    の門で、親が着手可の feature の子には使わない（today の wave-holds と、承認待ちの feature の
-    子を自動で着手可にしない側が使う）。"""
-    return bool(unresolved_wave_numbers(wave_number, items_by_number, children_of, bodies, extras))
+# 起票の承認カードの注意（60 字まで。stall が空のときだけ足す。wave の番号は入れない。ADR-0760）
+WAVE_WAIVED_CARD_NOTE = '承認すると先の wave を待たずに着手できる'
 
 
 def _waived_wave_note(waived: list[int], feature_number: int) -> str:
@@ -4159,6 +4148,7 @@ def unblocked_rows(items: list[dict], extras: dict[int, dict], bodies: dict[int,
         parent_number = i.get('parent_number')
         target_status = READY_STATUS
         parent_is_feature = True
+        parent_is_ready = False
         wave_ancestor = None
         waived_note = ''
         if parent_number is not None:
@@ -4169,6 +4159,7 @@ def unblocked_rows(items: list[dict], extras: dict[int, dict], bodies: dict[int,
             if parent_extra.get('blocked_by_open', 0) > 0:
                 continue
             parent_is_feature = parent.get('kind') == FEATURE_KIND
+            parent_is_ready = parent_is_feature and parent.get('status') == READY_STATUS
             if parent_is_feature:
                 target_status = parent.get('status') or READY_STATUS
             wave_ancestor = _ancestor_number_of_kind(parent_number, items_by_number, WAVE_KIND)
@@ -4180,7 +4171,8 @@ def unblocked_rows(items: list[dict], extras: dict[int, dict], bodies: dict[int,
             )
             if unresolved:
                 # 親が着手可の feature なら、先の wave の門は越えてよい（ADR-0760）。それ以外は今までどおり待つ。
-                if not (parent_is_feature and target_status == READY_STATUS):
+                # Status が空の feature は着手可とみなさない（既定値で補う前の値で見る）。
+                if not parent_is_ready:
                     continue
                 waived_note = _waived_wave_note(unresolved, parent_number)
         title = i.get('title', '')
@@ -4245,6 +4237,8 @@ def _apply_align_plan(project_number: int, plan: dict) -> None:
         if not moves:
             continue
         lines = []
+        if feature_plan.get('wave_waived'):
+            lines.append('- ' + _waived_wave_note(feature_plan['wave_waived'], feature_plan['feature']))
         for move in moves:
             number, to, frm = move['number'], move['to'], move.get('from')
             item = _require_item(project_number, number)
@@ -4478,12 +4472,12 @@ def _print_align_plan(plan: dict) -> None:
         moves = entry.get('moves') or []
         skipped = entry.get('skipped') or []
         print(f"feature #{entry['feature']}: 移す {len(moves)} 件・そろえない {len(skipped)} 件")
+        if entry.get('wave_waived'):
+            print(f"  {_waived_wave_note(entry['wave_waived'], entry['feature'])}")
         for m in moves:
             print(f"  #{m['number']:<4} → {m['to']}")
         for n in skipped:
             print(f"  #{n:<4}（そろえない）")
-        if entry.get('wave_waived'):
-            print(f"  {_waived_wave_note(entry['wave_waived'], entry['feature'])}")
 
 
 def _open_parent_candidate_numbers(items: list[dict]) -> list[int]:
@@ -4887,7 +4881,7 @@ def board_view(snap: dict, how: str) -> dict:
             # [User] は人の作業で、AI が着手するものではない。「着手可なのに着手できない」に数えず、
             # 「[User] の人の作業」の区分にだけ出す（ready の判定 ready_block_reason は変えない）。
             continue
-        reason = ready_block_reason(i, items_by_number, children_of, extras, bodies) \
+        reason = ready_block_reason(i, items_by_number, children_of, extras) \
             if i.get('kind') == TASK_KIND else '種別が task でない（空を含む。ready に出ない）'
         if reason:
             not_ready[i['number']] = reason
@@ -4909,7 +4903,7 @@ def board_view(snap: dict, how: str) -> dict:
     stalls = {}
     for i in issues:
         if i.get('kind') == FEATURE_KIND and i.get('state') != 'CLOSED' and i.get('status') == PENDING_STATUS:
-            reason = approval_stall_reason(i, items_by_number, children_of, extras, bodies)
+            reason = approval_stall_reason(i, items_by_number, children_of, extras)
             if reason:
                 stalls[i['number']] = reason
     return {
@@ -4919,7 +4913,7 @@ def board_view(snap: dict, how: str) -> dict:
         'blockers': {n: x.get('blocked_by_open_numbers') or [] for n, x in extras.items()},
         'open_prs': {n: x.get('open_pr_numbers') or [] for n, x in extras.items()},
         'wave_blockers': {n: _blocking_wave_numbers(n, items_by_number, extras) for n in waves},
-        'not_ready': not_ready, 'ready': [i['number'] for i in ready_rows(issues, extras, bodies)],
+        'not_ready': not_ready, 'ready': [i['number'] for i in ready_rows(issues, extras)],
         'wave_exit': wave_exit, 'cards': cards, 'stalls': stalls,
         'stall_short': {n: STALL_SHORT[reason] for n, reason in stalls.items()},
     }
@@ -5053,7 +5047,7 @@ def expected_card_kind(kind: str, status: str, title: str, state: str = 'OPEN') 
 
 def approval_stall_reason(
     feature: dict, items_by_number: dict[int, dict], children_of: dict[int, list[int]],
-    extras: dict[int, dict], bodies: dict[int, str],
+    extras: dict[int, dict],
 ) -> str:
     """承認待ちの feature を承認しても、子の task が動き出さない理由（動くなら空文字）。
     ready と同じ門（blocked by）と、子の中身（人の作業・保留・判断待ちだけ、子が無い）を見る。
@@ -5120,8 +5114,7 @@ def _stall_reason_for(project_number: int, number: int) -> str:
     feature = by_number.get(number)
     if feature is None or feature.get('kind') != FEATURE_KIND:
         return ''
-    waves = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
-    return approval_stall_reason(feature, by_number, children_of, fetch_extras([number] + waves), fetch_bodies(waves))
+    return approval_stall_reason(feature, by_number, children_of, fetch_extras([number]))
 
 
 def _card_targets(items: list[dict]) -> list[tuple[dict, str]]:
@@ -5156,14 +5149,13 @@ def cmd_card_lint() -> int:
     items = fetch_all_items(project_number)
     rows = _card_targets(items)
     by_number, children_of = _board_index(items)
-    waves = [i['number'] for i in items if i.get('kind') == WAVE_KIND]
     features = [i['number'] for i, kind in rows if kind == 'approval' and i.get('kind') == FEATURE_KIND]
-    extras = fetch_extras(features + waves) if features else {}
-    bodies = fetch_bodies([i['number'] for i, _kind in rows] + waves)
+    extras = fetch_extras(features) if features else {}
+    bodies = fetch_bodies([i['number'] for i, _kind in rows])
     entries = []
     for i, kind in rows:
         card, problems = cards.read_card(bodies.get(i['number'], ''), kind)
-        stall = approval_stall_reason(i, by_number, children_of, extras, bodies) \
+        stall = approval_stall_reason(i, by_number, children_of, extras) \
             if kind == 'approval' and i.get('kind') == FEATURE_KIND else ''
         warnings, date = [], ''
         if card and kind == 'approval':
