@@ -3037,7 +3037,8 @@ def table_feature_card(row: dict, header: dict, slug: str, lines: list[str], chi
     §8 から埋め、埋められない値は <…>。推奨は AI が案件を読んで書く（§1 に推奨が書いてあれば写し、雛形では機械的に
     埋めない）。カードには内部の語 task を出さない（作業と書く）。stall は承認しても動かない理由（あれば注意に足す）。
     waves_open は出ていない先の wave の番号（あれば、stall が空のときだけ注意に WAVE_WAIVED_CARD_NOTE を足す。
-    承認しても動かない文と並べない・カードの注意は 60 字まで。wave の番号は詳しい版に置く。ADR-0760）。"""
+    承認しても動かない文と並べない。つないだ結果が 60 字を超えるときは注意に足さず「承認すると」の欄の末尾に回す。
+    番号はカードのどこにも出さない（真偽としてだけ使う）。ADR-0760）。"""
     cards = _load_card_module()
     wave = (header.get('wave') or '').strip()
     decide_line = _draft_labeled(lines, ('決めること',), '1.')
@@ -3045,13 +3046,18 @@ def table_feature_card(row: dict, header: dict, slug: str, lines: list[str], chi
     note = _draft_labeled(lines, ('注意',), '1.') or _draft_first_bullet(lines, '8.')
     if stall:
         note = (f'{note.rstrip("。")}。' if note else '') + f'今は承認しても動かない（{STALL_SHORT[stall]}）'
-    elif waves_open:
-        note = (f'{note.rstrip("。")}。' if note else '') + WAVE_WAIVED_CARD_NOTE
+    effect = f'作成済みの作業 {child_count} 件が着手できる状態になる。戻せる' if child_count else ''
+    if not stall and waves_open:
+        joined = (f'{note.rstrip("。")}。' if note else '') + WAVE_WAIVED_CARD_NOTE
+        if len(joined) <= cards.VALUE_MAX:
+            note = joined
+        else:
+            effect = f'{effect}。{WAVE_WAIVED_EFFECT}' if effect else WAVE_WAIVED_EFFECT
     return cards.skeleton('approval', {
         '決めること': f'「{row["title"]}」を始めるか',
         '目的': _draft_labeled(lines, ('目的', '何をしたいか'), '1.'),
         '位置': _draft_labeled(lines, ('位置',), '1.') or (f'段「{wave}」の一部' if wave and '<' not in wave else ''),
-        '承認すると': f'作成済みの作業 {child_count} 件が着手できる状態になる。戻せる' if child_count else '',
+        '承認すると': effect,
         'しないと': _draft_labeled(lines, ('しないと', 'しないとどうなる'), '1.'),
         '注意': note,
         '詳しく': f'{DRAFT_DIR_RELATIVE}/{slug}.md',
@@ -4028,7 +4034,8 @@ def unresolved_wave_numbers(
 
 
 # 起票の承認カードの注意（60 字まで。stall が空のときだけ足す。wave の番号は入れない。ADR-0760）
-WAVE_WAIVED_CARD_NOTE = '承認すると先の wave を待たずに着手できる'
+WAVE_WAIVED_EFFECT = '先の wave を待たずに着手できる'
+WAVE_WAIVED_CARD_NOTE = f'承認すると{WAVE_WAIVED_EFFECT}'
 
 
 def _waived_wave_note(waived: list[int], feature_number: int) -> str:
@@ -4161,7 +4168,8 @@ def unblocked_rows(items: list[dict], extras: dict[int, dict], bodies: dict[int,
             parent_is_feature = parent.get('kind') == FEATURE_KIND
             parent_is_ready = parent_is_feature and parent.get('status') == READY_STATUS
             if parent_is_feature:
-                target_status = parent.get('status') or READY_STATUS
+                # 戻し先は既定値で補わない。Status が空の feature の子は下で人の判断にする（set が断る値を出さない）。
+                target_status = parent.get('status') or None
             wave_ancestor = _ancestor_number_of_kind(parent_number, items_by_number, WAVE_KIND)
         else:
             wave_ancestor = _ancestor_number_of_kind(number, items_by_number, WAVE_KIND)
@@ -4177,9 +4185,15 @@ def unblocked_rows(items: list[dict], extras: dict[int, dict], bodies: dict[int,
                 waived_note = _waived_wave_note(unresolved, parent_number)
         title = i.get('title', '')
         if has_mark(title):
+            mark_note = 'start --approved が要る（目印つきの task は set で着手可にしない）'
             rows.append({
                 'number': number, 'title': title, 'set_status': None,
-                'note': 'start --approved が要る（目印つきの task は set で着手可にしない）',
+                'note': f'{mark_note}・{waived_note}' if waived_note else mark_note,
+            })
+        elif target_status is None:
+            rows.append({
+                'number': number, 'title': title, 'set_status': None,
+                'note': '親の feature の Status が空。人が判断する',
             })
         elif not parent_is_feature:
             rows.append({
@@ -4237,8 +4251,7 @@ def _apply_align_plan(project_number: int, plan: dict) -> None:
         if not moves:
             continue
         lines = []
-        if feature_plan.get('wave_waived'):
-            lines.append('- ' + _waived_wave_note(feature_plan['wave_waived'], feature_plan['feature']))
+        written = 0
         for move in moves:
             number, to, frm = move['number'], move['to'], move.get('from')
             item = _require_item(project_number, number)
@@ -4252,7 +4265,11 @@ def _apply_align_plan(project_number: int, plan: dict) -> None:
                 'repo': REPO, 'project': project_number,
             })
             lines.append(f'- #{number} を {to} にした')
+            written += 1
             sleep_fn(_WRITE_INTERVAL_SECONDS)
+        if written and feature_plan.get('wave_waived'):
+            # 門を越えて実際に着手可へ書いたときだけ記録する（飛ばしただけなら「通した」は嘘になる）。
+            lines.insert(0, '- ' + _waived_wave_note(feature_plan['wave_waived'], feature_plan['feature']))
         rest('POST', f"repos/{REPO}/issues/{feature_plan['feature']}/comments", {
             # API の書き込みは issue 自身の timeline に残らないため、代わりに
             # feature へ 1 行コメントを残す（そろえた子の一覧）。

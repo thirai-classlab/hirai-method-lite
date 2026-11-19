@@ -3825,6 +3825,22 @@ def main() -> int:
             none = gh_task.table_feature_card(row, header, 'tbf', lines, 3, '', [])
             assert gh_task.WAVE_WAIVED_CARD_NOTE not in none, none
 
+        def _feature_card_waves_open_long_note_moves_to_effect() -> None:
+            # draft の注意が長く、つないだ結果が 60 字を超えるときは、注意に足さず「承認すると」の末尾へ回す
+            header, cards = {'wave': '6 入居者の登録'}, gh_task._load_card_module()
+            long_note = '外部の審査（LINE の公式アカウントの認証）が要り、通るまで 2 週間ほどかかる'
+            lines = ['## 1. 概要', '**決めること**: x', f'**注意**: {long_note}']
+            card = gh_task.table_feature_card({'title': '登録の画面'}, header, 'tbf', lines, 3, '', [600])
+            assert f'**注意**: {long_note}\n' in card and gh_task.WAVE_WAIVED_CARD_NOTE not in card, card
+            assert f'**承認すると**: 作成済みの作業 3 件が着手できる状態になる。戻せる。{gh_task.WAVE_WAIVED_EFFECT}' in card, card
+            # 空欄（目的・推奨・しないと）は <…> のままなので、見るのは「注意」「承認すると」の行の問題が無いことだけ
+            assert not [x for x in cards.read_card(card, 'approval')[1] if '注意' in x or '承認すると' in x], cards.read_card(card, 'approval')[1]
+            no_child = gh_task.table_feature_card({'title': '登録の画面'}, header, 'tbf', lines, 0, '', [600])
+            assert f'**承認すると**: {gh_task.WAVE_WAIVED_EFFECT}' in no_child, no_child
+
+        t('起票カード: 注意が長く wave の文をつなぐと 60 字を超えるときは「承認すると」の末尾へ回す',
+          _feature_card_waves_open_long_note_moves_to_effect)
+
         t('起票カード: 先の wave の注意は stall が空のときだけ足し、60 字に収まり read_card の問題にならない',
           _feature_card_waves_open_note_only_without_stall)
 
@@ -6320,6 +6336,18 @@ def main() -> int:
                     return 'skipped'
             return 'none'
 
+        def _align_waived(items, extras, bodies) -> tuple[list, str]:
+            """cmd_align の JSON の wave_waived（feature の行）と、テキストの出力。wave の extras を cmd_align が引く経路を通す。"""
+            gh_task.run_gh = make_command_gh(items, bodies=bodies, extras=extras)
+            out = io.StringIO()
+            with redirect_stdout(out):
+                assert gh_task.cmd_align(as_json=True) == 0
+            waived = [w for entry in json.loads(out.getvalue())['align'] for w in entry.get('wave_waived') or []]
+            text = io.StringIO()
+            with redirect_stdout(text):
+                assert gh_task.cmd_align(as_json=False) == 0
+            return waived, text.getvalue()
+
         def _verdict(fn) -> str:
             try:
                 fn()
@@ -6382,6 +6410,13 @@ def main() -> int:
                 items, extras, bodies = _board(**spec)
                 dest = _align_destination(items, extras, bodies)
                 assert dest == expected, f'{label}: align の行き先 {dest}（期待 {expected}）'
+                # 門を越えて着手可へ動かしたときだけ、align は wave_waived と「通した」の 1 行を出す
+                waived, text = _align_waived(items, extras, bodies)
+                if dest == 'ready' and spec.get('prior') in ('unfinished', 'no-line'):
+                    assert waived == [W1], f'{label}: wave_waived {waived}（期待 [{W1}]）'
+                    assert f'先の wave #{W1} が出ていないが feature #{FEAT} が着手可なので通した' in text, f'{label}: {text}'
+                else:
+                    assert waived == [] and '通した' not in text, f'{label}: 門を越えていないのに通した: {waived} {text}'
                 startable = dest == 'ready'
                 start = _start_verdict(items, extras, bodies)
                 setv = _set_verdict(items, extras, bodies)
@@ -6408,21 +6443,28 @@ def main() -> int:
             # 先の wave が出た（または止めるものが無い）: 門は関係なく、note は付かない。
             for prior, unresolved in (('none', False), ('unfinished', True), ('no-line', True),
                                       ('exited', False), ('exited-open', False)):
+                # 戻し先は親の Status そのもの。空の feature の子は set が断る値を出さず、人の判断にする（None）
                 for feature_status, expected in (
                     (gh_task.READY_STATUS, gh_task.READY_STATUS),
                     (gh_task.PENDING_STATUS, gh_task.PENDING_STATUS),
-                    ('', gh_task.READY_STATUS),
+                    ('', None),
                 ):
                     items, extras, bodies = _board(status=gh_task.DEP_STATUS, feature_status=feature_status, prior=prior)
                     items = [dict(i, type='Issue') for i in items]
+                    if W2 in extras:
+                        # 本番の読み取りは blocked_by_numbers（open も closed も）で W2 を W1 に結ぶ。閉じた W1 も結んで渡す
+                        merged = extras[W2].get('blocked_by_closed_numbers', []) + extras[W2].get('blocked_by_open_numbers', [])
+                        extras = {**extras, W2: {'blocked_by_numbers': merged}}
                     rows = gh_task.unblocked_rows(items, extras, bodies)
                     label = f'先の wave={prior}・親の feature の Status={feature_status or "空"}'
                     if unresolved and feature_status != gh_task.READY_STATUS:
                         assert rows == [], f'{label}: 門を越えた: {rows}'
                         continue
                     assert [r['number'] for r in rows] == [CHILD] and rows[0]['set_status'] == expected, f'{label}: {rows}'
-                    assert ('note' in rows[0]) == (unresolved and feature_status == gh_task.READY_STATUS), (
+                    assert ('note' in rows[0]) == ((unresolved and feature_status == gh_task.READY_STATUS) or not feature_status), (
                         f'{label}: note の有無が合わない: {rows}')
+                    if not feature_status:
+                        assert rows[0]['note'] == '親の feature の Status が空。人が判断する', rows
 
         t('unblocked は先の wave の形 × 親の feature の Status の全組で、門を越えるのは「未了 × 着手可」だけ',
           _unblocked_wave_gate_both_sides)
@@ -6446,6 +6488,22 @@ def main() -> int:
 
         t('cmd_unblocked は通した行に「先の wave #N が出ていないが feature #M が着手可なので通した」を括弧で添える',
           _cmd_unblocked_prints_waived_note)
+
+        def _unblocked_marked_task_keeps_waived_note() -> None:
+            # 目印つき（[操作]）の task も、門を越えたなら note の後ろに「通した」を「・」でつなぐ
+            items, extras, bodies = _board(status=gh_task.DEP_STATUS, prior='unfinished', title=f'{gh_task.OPERATION_MARK} DNS')
+            items = [dict(i, type='Issue') for i in items]
+            rows = gh_task.unblocked_rows(items, extras, bodies)
+            assert len(rows) == 1 and rows[0]['set_status'] is None, rows
+            assert rows[0]['note'] == ('start --approved が要る（目印つきの task は set で着手可にしない）'
+                                       f'・先の wave #{W1} が出ていないが feature #{FEAT} が着手可なので通した'), rows
+            items, extras, bodies = _board(status=gh_task.DEP_STATUS, prior='exited', title=f'{gh_task.OPERATION_MARK} DNS')
+            items = [dict(i, type='Issue') for i in items]
+            rows = gh_task.unblocked_rows(items, {**extras, W2: {'blocked_by_numbers': [W1]}}, bodies)
+            assert [r['note'] for r in rows] == ['start --approved が要る（目印つきの task は set で着手可にしない）'], rows
+
+        t('unblocked は目印つき（[操作]）の task にも、門を越えたときは「通した」を note の後ろに足す',
+          _unblocked_marked_task_keeps_waived_note)
 
         def _wave_lookup_is_light_only_without_blocking_wave() -> None:
             # 親の feature が着手可と確かめたあとは先の wave を見ないので、板の全件（items(first:）を引かない（ADR-0760）。
@@ -6960,6 +7018,14 @@ def main() -> int:
             assert gh_task.unblocked_rows(under_task, extras, {}) == [], '親が feature でない task が門を越えた'
             assert [r['number'] for r in gh_task.unblocked_rows(under_task, extras, bodies)] == [342], (
                 'W1 が出たのに、親が feature でない task が出ない')
+            # 親の task が着手可でも、feature でなければ門を越えない（feature の判定を外す退行を捕まえる）
+            ready_parent = [dict(i, status=gh_task.READY_STATUS) if i['number'] == 343 else i for i in under_task]
+            assert gh_task.unblocked_rows(ready_parent, extras, {}) == [], '着手可の task（feature でない）の子が門を越えた'
+            # Status が空の feature の子: W1 が出ていれば出るが、戻し先は人の判断（set が断る「着手可」を出さない）
+            assert gh_task.unblocked_rows(empty, extras, bodies) == [{
+                'number': 342, 'title': 't2', 'set_status': None,
+                'note': '親の feature の Status が空。人が判断する',
+            }], gh_task.unblocked_rows(empty, extras, bodies)
 
         t(
             'unblocked は、承認待ちの feature の下が保留の task だけの wave が出たら、次の wave の子を出す（#521）。門は承認待ち・Status 空・feature でない親に残る',
@@ -7588,6 +7654,26 @@ def main() -> int:
             assert '#701 を 着手可 にした' in body, body
 
         t('_apply_align_plan は通した wave の 1 行を feature のコメントにも残す', _apply_align_plan_records_waived_wave_in_comment)
+
+        def _apply_align_plan_no_waived_line_when_nothing_written() -> None:
+            # 計画のあと子が 保留 に動いて飛ばしたなら、何も門を越えていないので「通した」は書かない
+            items = [{
+                'number': 702, 'type': 'Issue', 'kind': 'task', 'status': gh_task.JUDGMENT_STATUS,
+                'state': 'OPEN', 'title': 't', 'parent_number': None,
+            }]
+            write_log: list[tuple] = []
+            gh_task.run_gh = make_command_gh(items, write_log=write_log)
+            plan = {'align': [{
+                'feature': 997, 'wave_waived': [627],
+                'moves': [{'number': 702, 'to': gh_task.READY_STATUS, 'from': gh_task.PENDING_STATUS}],
+                'skipped': [],
+            }]}
+            gh_task._apply_align_plan(7, plan)
+            body = next((e[2] or {}).get('body', '') for e in write_log if e[0] == 'POST')
+            assert '通した' not in body and '飛ばした' in body, body
+
+        t('_apply_align_plan は着手可へ 1 件も書かなかったとき「通した」を書かない',
+          _apply_align_plan_no_waived_line_when_nothing_written)
 
         def _after_merge_closes_parent() -> None:
             items = [
