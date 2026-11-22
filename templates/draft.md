@@ -8,7 +8,7 @@ decisions: <従う決定（例: ADR-0002。無ければ —）>
 upstream: <前提にする領域か提案の slug（無ければ —）>
 downstream: <これを前提にするもの（無ければ —）>
 supersedes: <置き換えた提案（無ければ —）>
-wave: <入る wave>
+wave: <入る wave（`tasks: github-project` のリポだけ。台帳の形は —）>
 status: 起案
 approvals: 要件=PR #<n> 設計=PR #<n> task=PR #<n>
 approved_at:
@@ -20,7 +20,7 @@ merged_into:
 
 ### 提案: <何をどうする提案かを 1 文で>
 
-承認カードの語で書く（型は `docs/rules-reference/approval-template.md`）。起票（`hirai-task new --from-table`）がここから feature の承認カードを作る。
+承認カードの語で書く（型は `docs/rules-reference/approval-template.md`）。`tasks: github-project` のリポでは、起票（`hirai-task new --from-table`）がここから feature の承認カードを作る。
 
 **決めること**: <この提案を採るか、を 1 文で>。**推奨**: <承認する／承認しない／条件つき（条件）>
 
@@ -102,7 +102,7 @@ merged_into:
 
 ### 11-2. impact の出力
 
-<`hirai-task impact <この draft の path>` の出力（11-1 の `#番号` に 種別・Status・親・子・blocked by・閉じたか を注記する）。引いた日を添える>
+<`tasks: github-project` のリポは `hirai-task impact <この draft の path>` の出力（11-1 の `#番号` に 種別・Status・親・子・blocked by・閉じたか を注記する）。引いた日を添える。台帳の形は「なし」と書く>
 
 ### 11-3. 表
 
@@ -111,7 +111,7 @@ merged_into:
 | <id_prefix>-F1 | feature | <stream> | <feature の題> | wave #<番号> | — | | — |
 | <id_prefix>-01 | task | <stream> | <task の題> | <id_prefix>-F1 | — | <id_prefix>-R1 | <判定できる条件> |
 
-表の読まれ方（`hirai-task new --from-table`）: 親は `wave #<番号>` か表の feature の id、止める依存は表の id か `#<番号>`（`—` は無し）。題名の先頭の `[操作]`・`[User]` は目印で、題にそのまま残る。`[要判断]` を含む行は起票されない。
+表の読まれ方（台帳の形は `/hirai-lite:new-task` が §10 完了条件と §11-3 の表の行から task ファイルを作る。`tasks: github-project` のリポは `hirai-task new --from-table`）: 親は `wave #<番号>` か表の feature の id、止める依存は表の id か `#<番号>`（`—` は無し）。題名の先頭の `[操作]`・`[User]` は目印で、題にそのまま残る。`[要判断]` を含む行は起票されない。
 
 ## 12. 履歴
 

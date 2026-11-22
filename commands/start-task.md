@@ -6,21 +6,21 @@ description: タスクに着手する。台帳から対象を読み、feature br
 
 ## 形の見分け (最初に 1 回)
 
-台帳の形 (このファイル本来の手順) と GHP の形 (GitHub Project) は排他ではなく、リポごとに見分ける。
+タスク管理の形は、リポの `.claude/mode.yml` の `tasks:`（`ledger` か `github-project`。項目が無ければ `ledger`）が決める。Project の有無・remote・gh の結果からは見分けない（GitHub を叩かず、尋ねて止まらない）。`ledger` が台帳の形（このファイル本来の手順）、`github-project` が GitHub Project の形。
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 [ -f "$P/scripts/tasks-path.sh" ] || { echo "プラグイン本体が見つからない"; exit 2; }
-. "$P/scripts/tasks-path.sh"; harness_ghp_form "$PWD"
+. "$P/scripts/tasks-path.sh"; harness_tasks_form "$PWD"
 ```
 
-exit code が 2 (プラグイン本体が見つからない) なら、その場で報告して停止する (台帳の手順にもフォールバックしない)。出力が空で exit code が 1 の場合は `harness_ghp_refresh now "$PWD"` を 1 回呼んで取り直し、もう一度上のコマンドを実行する。それでも空、または `ambiguous` なら、GHP と台帳のどちらで進めるか user に尋ねて停止する。`ghp` が出たら、下の「## GHP の形の場合」だけを行い、以降の台帳の手順は行わない (台帳は作らず、書かない)。`none` が出たら、この節は無視して下の「## 台帳の解決」から続ける。
+exit code が 2 (プラグイン本体が見つからない) なら、その場で報告して停止する (台帳の手順にもフォールバックしない)。出力が `github-project` なら、下の「## GitHub Project の形の場合」だけを行い、以降の台帳の手順は行わない (台帳は作らず、書かない)。`ledger` なら、この節は無視して下の「## 台帳の解決」から続ける。
 
-## GHP の形の場合
+## GitHub Project の形の場合
 
 引数が空なら `hirai-task ready` の結果を一覧表示し、どの id に着手するか聞き返して停止する。
 
-1. `hirai-task start <task-id>` を呼び、Status を 進行中 にする。着手可の task は、親を見ずに進行中にする（自分の未完了の blocked by だけを見る）。承認待ちの task は、目印が無く、親の feature が着手可で、自分と親の feature に未完了の blocked by が無いときだけ進める（先の wave が出ていなくても止めない）（today の align が着手可へ動かす子と同じ。あとから足した task も同じ）。断られるのは、親が無い・親の種別が feature でない・親が着手可でない・未完了の blocked by があるとき（理由に親の番号と Status が出る）。閉じた issue も断られる（`reopen` で開き直す）。`set` で進行中を書けるのは、今の Status がレビュー中・進行中・完了のときだけ（承認待ち・判断待ち・依存待ち・保留・着手可・空からは `start`）。レビュー中・完了を `set`・`review` で書けるのも、進行中・レビュー中・完了の task からだけ（そのほかからは exit 2。2 手で進行中に回れない）。`[User]` の task は、道具が着手可にしない（ユーザーの手作業）。ユーザーがボードで着手可にしたものは、着手可からの `start` が通る。`[操作]` の task は `--approved <出どころ>` を付ける経路がある。`command -v hirai-task` が無ければ「hirai-task が見つからない（PATH に入っていない）」と報告して終了する。
+1. `hirai-task start <task-id>` を呼び、Status を 進行中 にする。着手可の task は、親を見ずに進行中にする（自分の未完了の blocked by だけを見る）。承認待ちの task は、目印が無く、親の feature が着手可で、自分と親の feature に未完了の blocked by が無いときだけ進める（先の wave が出ていなくても止めない）（today の align が着手可へ動かす子と同じ。あとから足した task も同じ）。断られるのは、親が無い・親の種別が feature でない・親が着手可でない・未完了の blocked by があるとき（理由に親の番号と Status が出る）。閉じた issue も断られる（`reopen` で開き直す）。`set` で進行中を書けるのは、今の Status がレビュー中・進行中・完了のときだけ（承認待ち・判断待ち・依存待ち・保留・着手可・空からは `start`）。レビュー中・完了を `set`・`review` で書けるのも、進行中・レビュー中・完了の task からだけ（そのほかからは exit 2。2 手で進行中に回れない）。`[User]` の task は、道具が着手可にしない（ユーザーの手作業）。ユーザーがボードで着手可にしたものは、着手可からの `start` が通る。`[操作]` の task は `--approved <出どころ>` を付ける経路がある。`command -v hirai-task` が無ければ「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と 1 行で報告して終了する（台帳の手順にもフォールバックしない）。
 2. `hirai-task start` が着手のあとに出す「読む束」（issue の本文の先頭の目印の `reads=` を 1 件 1 行）を上から順に読む。読む束の外は読まず、足りなければ「読む束に無い: `<path>`」と issue にコメントして止まる。reads が無い issue（目印の無いもの・目印はあって `reads=` が空のもの）は「読む束なし」の下に本文に出てくる docs/ の path の一覧が出る。束の外を読まないのは reads があるときだけ。reads が無いときは、出た docs/ の path の一覧は手がかりで、本文の参照の path（docs 以外も）も読む。「まだ無い」と出た path は成果物か移動・削除なので、無いことを確かめて先へ進む（path が出なければ本文の path を読む。`hirai-task show <n>` でも同じ束が出る）。
    読む束の中の `[要判断]` で止まるのは、その task の要件 ID（目印の `reqs=` の各 ID と受入 `<ID>.<n>`）を含む行だけ。ほかの未決は止まらず、末尾の「読む束の未決 N 件（止めない）」に `path:行` で出る。読んで task に効きそうなら issue にコメントして人に返す。
    `hirai-task start` が「着手不可」（目印の rev が古い・取り込み済みの提案）で止まったら、issue にコメントして読む束を読み直し、`hirai-task start <task-id> --reread` で目印を書き直して着手する。失効の提案・`[要判断]` は `--reread` でも止まる（人が判断する）。
@@ -35,7 +35,7 @@ exit code が 2 (プラグイン本体が見つからない) なら、その場�
 台帳パスは `$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > (旧レイアウト) `.claude/tasks/list.md` の順に解決する。**新しく作るときは常に `docs/tasks/list.md`**。
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 [ -f "$P/scripts/tasks-path.sh" ] || { echo "プラグイン本体が見つからない"; exit 2; }
 . "$P/scripts/tasks-path.sh"; LIST="$(harness_tasks_file "$PWD")"; echo "台帳 ${LIST:-なし}"
 ```

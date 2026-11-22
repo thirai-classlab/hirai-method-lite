@@ -9,6 +9,7 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
   全体像: board（HTML・--text の木・--summary の要約。--publish <issue> で要約を issue の目印の間に書く）
   立ち上げ: setup（GitHub Project の作成・紐づけ・項目・ビュー。既定は計画だけで、--apply で書く。scripts/hirai_project_setup.py）
   カード: card <issue> [--sync]（承認・判断・人の作業のカードを読んで形を確かめ、承認カードを項目「ひとこと」「推奨」に写す）／ card --lint（読むだけ）
+  表示: line [--refresh]（やることの 1 行。土台の会話の開始時・画面下が呼ぶ。控えを読むだけで、--refresh で背景の取り直しを起こす）
   ほか: sync（field・option の id の取り直し）/ --selftest（gh を使わない自己検査）
 
 なぜ script にするか:
@@ -70,7 +71,7 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
   （作った直後の行が REST の検索に載る速さは未確認のため）。
 
   書き込みが 1 件でも成功したあと、控え（画面下の件数）を harness_ghp_refresh now で
-  取り直す（プラグイン本体の scripts/tasks-path.sh が見つかるときだけ。見つからない・
+  取り直す（このプラグインの scripts/ghp-path.sh が見つかるときだけ。見つからない・
   失敗しても書き込みの結果は変えない。refresh_board_counts）。
 
   new の親: 種別 task・feature は親が必須（task は feature、feature は wave）で、
@@ -5232,12 +5233,19 @@ def _plugin_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
 
+GHP_LIBRARY = 'ghp-path.sh'  # <このプラグイン>/scripts/ghp-path.sh（GitHub Project 用のシェル関数）
+
+
+def _ghp_library() -> str:
+    return os.path.join(_plugin_root(), 'scripts', GHP_LIBRARY)
+
+
 def refresh_board_counts() -> None:
     """画面下の「やること」の件数の控えを、書き込みの直後に取り直す。
-    プラグイン本体の scripts/tasks-path.sh の harness_ghp_refresh now を呼ぶ
-    （シェルの関数なので bash を 1 回起こす）。本体が見つからない・bash や gh が無い・
+    このプラグインの scripts/ghp-path.sh の harness_ghp_refresh now を呼ぶ
+    （シェルの関数なので bash を 1 回起こす）。ライブラリが見つからない・bash や gh が無い・
     失敗した、のどれでも書き込みの結果は変えない（何も出さずに戻る）。"""
-    library = os.path.join(_plugin_root(), 'scripts', 'tasks-path.sh')
+    library = _ghp_library()
     if not os.path.isfile(library):
         return
     try:
@@ -5247,6 +5255,32 @@ def refresh_board_counts() -> None:
         )
     except Exception:
         return
+
+
+def cmd_line(tail: list[str]) -> int:
+    """会話の開始時と画面下に出す、やることの 1 行（件数の控えを読むだけ）を標準出力へ出す。
+    土台の hooks/session-start.sh と scripts/statusline.sh が `tasks: github-project` のときに呼ぶ。
+    --refresh を付けると、出したあとに件数の取り直し（harness_ghp_refresh background。Project の見分けは
+    24 時間に 1 回・件数は 2 分に 1 回まで）を切り離して背景で起こす。付けない呼び出しは控えを読むだけ
+    （画面下は何度も呼ばれるので gh を打たせない）。控えが無い・form が ghp でないときは何も出さず exit 0
+    （呼ぶ側は行が空かで分ける）。ライブラリが無い・bash が無いときも exit 0。"""
+    if any(a != '--refresh' for a in tail):
+        die('使い方: hirai-task line [--refresh]', 2)
+    library = _ghp_library()
+    if not os.path.isfile(library):
+        return 0
+    script = '. "$1" && { harness_ghp_line "$2" 2>/dev/null; true; }'
+    if '--refresh' in tail:
+        script += ' && { harness_ghp_refresh_async background "$2"; true; }'
+    try:
+        res = subprocess.run(
+            ['bash', '-c', script, 'hirai-task', library, _root()],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception:
+        return 0
+    sys.stdout.write(res.stdout)
+    return 0
 
 
 def _load_setup_module():
@@ -5287,13 +5321,16 @@ def main(argv: list[str]) -> int:
         '           board [--text [--wave N|--feature N|--task N] | [--summary] [--publish <issue>]]'
         ' [--out <path>] [--refresh | --from <json>]\n'
         '           setup [--title <名前>] [--from-template <owner>/<番号>] [--apply] [--json]\n'
-        '           card <issue> [--sync] | card --lint'
+        '           card <issue> [--sync] | card --lint\n'
+        '           line [--refresh]'
     )
     if not argv:
         die(usage, 2)
     sub, tail = argv[0], argv[1:]
     if sub == '--selftest':
         return _run_selftest()
+    if sub == 'line':  # 控えを読むだけ。GitHub も repo の判定も要らない（土台の session-start・statusline が呼ぶ）。
+        return cmd_line(tail)
     if sub == 'design-merge':  # ローカルの file だけを書く。GitHub も repo の判定も要らない。
         return cmd_design_merge(tail)
     if sub == 'board':  # 引数は gh より先に確かめる。--from は repo の判定も要らない（cmd_board が見る）。

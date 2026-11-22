@@ -1,29 +1,29 @@
 ---
-description: タスクを完了させる。完了条件のコマンドを実行して exit 0 を確認し、list.md を「完了」に更新して台帳ごと 1 commit にまとめる。GitHub Project の形では issue 本文の完了条件を読む。
+description: タスクを完了させる。完了条件のコマンドを実行して exit 0 を確認し、list.md を「完了」に更新して台帳ごと 1 commit にまとめる。GitHub Project の形（`tasks: github-project`）では issue 本文の完了条件を読む。PR があるときは merge を頼む前に検査と AI レビューの合格を見る。
 ---
 
 # /finish-task <task-id>
 
 ## 形の見分け (最初に 1 回)
 
-台帳の形 (このファイル本来の手順) と GHP の形 (GitHub Project) は排他ではなく、リポごとに見分ける。
+タスク管理の形は、リポの `.claude/mode.yml` の `tasks:`（`ledger` か `github-project`。項目が無ければ `ledger`）が決める。Project の有無・remote・gh の結果からは見分けない（GitHub を叩かず、尋ねて止まらない）。`ledger` が台帳の形（このファイル本来の手順）、`github-project` が GitHub Project の形。
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 [ -f "$P/scripts/tasks-path.sh" ] || { echo "プラグイン本体が見つからない"; exit 2; }
-. "$P/scripts/tasks-path.sh"; harness_ghp_form "$PWD"
+. "$P/scripts/tasks-path.sh"; harness_tasks_form "$PWD"
 ```
 
-exit code が 2 (プラグイン本体が見つからない) なら、その場で報告して停止する (台帳の手順にもフォールバックしない)。出力が空で exit code が 1 の場合は `harness_ghp_refresh now "$PWD"` を 1 回呼んで取り直し、もう一度上のコマンドを実行する。それでも空、または `ambiguous` なら、GHP と台帳のどちらで進めるか user に尋ねて停止する。`ghp` が出たら、下の「## GHP の形の場合」だけを行い、以降の台帳の手順は行わない (台帳は作らず、書かない)。`none` が出たら、この節は無視して下の「## 台帳の解決」から続ける。
+exit code が 2 (プラグイン本体が見つからない) なら、その場で報告して停止する (台帳の手順にもフォールバックしない)。出力が `github-project` なら、下の「## GitHub Project の形の場合」だけを行い、以降の台帳の手順は行わない (台帳は作らず、書かない)。`ledger` なら、この節は無視して下の「## 台帳の解決」から続ける。
 
-## GHP の形の場合
+## GitHub Project の形の場合
 
 引数が空なら `hirai-task today` の結果から 進行中 の id を選び、どの id を完了させるか聞き返して停止する。
 
 1. issue `<task-id>` の本文の「完了条件」の節から検証コマンドを取り出す（`gh issue view <task-id> --json body --jq .body` などで読む）。1 つずつ実行し、1 つでも exit code が 0 以外なら、その出力の末尾 20 行を提示して停止する。完了条件が書かれていなければ `/hirai-lite:verify` を実行し、build / test / lint が全部 exit 0 になることを確認する。
 2. PR の `Closes` と base を確かめる。`gh pr view --json baseRefName,closingIssuesReferences` を実行する。`baseRefName` が既定ブランチ（`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` で引く）でない、または `closingIssuesReferences` が空なら、base を既定ブランチに直すか `Closes #<task-id>` を足すよう案内して停止する。
-3. `hirai-task review <task-id>` を呼ぶ（Status を レビュー中 に書くだけの補助。2 の確認はこのコマンドの役目ではない）。進行中の task にだけ使える（承認待ち・着手可などからは exit 2）。`command -v hirai-task` が無ければ「hirai-task が見つからない（PATH に入っていない）」と報告して終了する。
-4. 台帳は読まない・書かない（GHP の形は台帳を持たない）。実装の commit は通常の作業中（`/hirai-lite:commit` 等）に作られている前提とし、ここでは新たに commit を作らない。
+3. `hirai-task review <task-id>` を呼ぶ（Status を レビュー中 に書くだけの補助。2 の確認はこのコマンドの役目ではない）。進行中の task にだけ使える（承認待ち・着手可などからは exit 2）。`command -v hirai-task` が無ければ「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と 1 行で報告して終了する（台帳の手順にもフォールバックしない）。
+4. 台帳は読まない・書かない（GitHub Project の形は台帳を持たない）。実装の commit は通常の作業中（`/hirai-lite:commit` 等）に作られている前提とし、ここでは新たに commit を作らない。
 
 判定できる終了条件: 1・2 の確認が exit 0、かつ `hirai-task review` が exit 0 だったこと。1 つでも成立しなければ原因を 1 行で報告して停止する。
 
@@ -34,7 +34,7 @@ exit code が 2 (プラグイン本体が見つからない) なら、その場�
 台帳パスは `$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > (旧レイアウト) `.claude/tasks/list.md` の順に解決する。**新しく作るときは常に `docs/tasks/list.md`**。
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 [ -f "$P/scripts/tasks-path.sh" ] || { echo "プラグイン本体が見つからない"; exit 2; }
 . "$P/scripts/tasks-path.sh"; LIST="$(harness_tasks_file "$PWD")"; echo "台帳 ${LIST:-なし}"
 ```
@@ -79,6 +79,16 @@ git show --stat --name-only HEAD | grep 'docs/tasks/list.md'
 - `grep '<task-id>' docs/tasks/list.md` の出力に `完了` が含まれる。
 
 3 つ全部が成立した時点でタスク完了とする。
+
+## merge を頼む前の確かめ（どちらの形も）
+
+PR が GitHub に出ているときだけ。user に merge を頼む前に、次の 3 つを 1 行ずつ報告する（`rules/code.md`「PR」と同じ内容）。
+
+1. 必須の検査が全て pass: `gh pr checks <PR 番号>` の全行が pass（pending・fail が 1 行でもあれば頼まない）
+2. AI レビューが CRITICAL・HIGH 0 件で終わっている（巡数と残った指摘は PR 本文に書く）
+3. PR 本文に `Closes #<task-id>` が 1 行ある（台帳の形は `task-<id>`）。部分の PR は、残りの完了条件を別 task へ移してから `Closes` にする
+
+検査が起動しない・止まっているときは、手元で通した CI の結果（実行したコマンドと exit code）を PR のコメントに残してから頼む。
 
 ## push は別扱い
 

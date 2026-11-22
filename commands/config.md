@@ -13,19 +13,19 @@ disable-model-invocation: true
 ## 読み取り (ここでは 1 バイトも書き換えない)
 置き場所は人によって 2 通りある (このプロジェクトの `.claude/` と全プロジェクト共通の `~/.claude/`)。**解決を自分で組み立てず**、セッション冒頭・画面下部と同じ共通ライブラリに任せる。
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 . "$P/scripts/tasks-path.sh"
 R="$(harness_rules_dir "$PWD")"; D="$(dirname "$R")"
 m="$(harness_mode "$PWD")"; case "$m" in normal) m="normal（確認あり）" ;; loop) m="loop（自動で進む）" ;; esac
 echo "mode（進め方）: $m / 設定ファイル: $(harness_mode_write_file "$PWD")"
-gform="$(harness_ghp_form "$PWD" 2>/dev/null || true)"
-if [ "$gform" = "ghp" ]; then
-  gf="$(harness_ghp_cache_file "$PWD")"
-  gn="$(harness_ghp_cache_get "$gf" project_number 2>/dev/null || echo '?')"
-  echo "設定一式の置き場: $D / 紐づく GitHub Project: #$gn"
+tform="$(harness_tasks_form "$PWD")"
+if [ "$tform" = "github-project" ]; then
+  command -v hirai-task >/dev/null 2>&1 && ht="あり" || ht="なし（/plugin install hirai-project-method@hirai-lite）"
+  echo "設定一式の置き場: $D / やること管理: GitHub Project（tasks: github-project。hirai-task: $ht）"
 else
   echo "設定一式の置き場: $D / やること一覧: $(harness_tasks_file "$PWD" || echo '(まだありません)')"
 fi
+echo "tasks: $tform / worktree: $(harness_yml_value "$PWD" worktree | grep . || echo off) / notify: $(harness_yml_value "$PWD" notify | grep . || echo off)"
 grep -q '"ultracode"[[:space:]]*:[[:space:]]*true' "$D/settings.json" 2>/dev/null && echo "ultracode: 有効" || echo "ultracode: 無効"
 grep -q '"statusLine"' "$D/settings.json" 2>/dev/null && echo "statusLine（画面下部の情報表示）: 有効" || echo "statusLine（画面下部の情報表示）: 無効"
 for f in CLAUDE.md "$HOME/.claude/CLAUDE.md" "$R"/*.md; do
@@ -69,23 +69,26 @@ echo "更新後の入れ替え: $as / 設定ファイル: $(harness_mode_write_f
 6. 更新の確認          有効（最後に確認したのは 2026-08-27 10:12）
 7. 更新の自動化        プラグイン本体: 無効 ／ 更新後の入れ替え: 無効
                        どちらも既定は無効です（更新は動きの変更なので、黙って変えません）
+8. 形と Orca           やること管理 → 台帳（tasks: ledger）
+                       Orca の worktree → 見張らない（worktree: off）／ 知らせ → 送らない（notify: off）
 
 番号か項目名を言ってもらえれば変更します（例:「1 を loop に」）。
 ```
 
 - 1 は `loop` なら `loop（自動で進む）— 確認を求めず最後まで進みます`（`normal` / `loop` 以外の値はそのまま出す）。2 は無効なら `無効（利用量は増えません）`
 - 3 は警告を超えていたら 1 行足す: `警告線を超えています。ルールを 1 件減らすことを勧めます`
-- 4 は置き場が `~/.claude` なら `全プロジェクト共通（~/.claude/）`。台帳が無ければ `やること一覧 → まだありません`。GitHub の形（`harness_ghp_form` が `ghp`）なら 2 行目を `紐づく GitHub Project → #<番号>` に差し替える（番号が控えに無ければ `#?`）
+- 4 は置き場が `~/.claude` なら `全プロジェクト共通（~/.claude/）`。台帳が無ければ `やること一覧 → まだありません`。`tasks: github-project` なら 2 行目を `やること管理 → GitHub Project（hirai-task: あり／なし）` に差し替える
 - 6 は一度も調べていなければ `有効（まだ一度も確認していません）`
+- 8 は `tasks` が `github-project` なら `GitHub Project（足すプラグイン hirai-project-method）`、`worktree` が `warn` なら `Orca の worktree でない会話に警告を出す`、`block` なら `Orca の worktree でない会話の、git に入るファイルの編集と git commit を止める`、`notify` が `orca` なら `Orca のコーディネーターへ知らせる`
 - 7 はどちらか一方でも有効なら、その行を `有効` に差し替えて 2 行目を `プラグイン本体が新しくなると自動で入れ替わります` にする
 
 ## 変更する
-変えられるのは 1・2・5・6・7 の 5 つ。**3 と 4 は表示のみ**（3 は `/hirai-lite:add-rule`、4 は `/hirai-lite:init` の担当）。どれも「これから変わるファイル」を 1 行見せてから実行し、終わったら結果を 1 行で報告する。
+変えられるのは 1・2・5・6・7・8 の 6 つ。**3 と 4 は表示のみ**（3 は `/hirai-lite:add-rule`、4 は `/hirai-lite:init` の担当）。どれも「これから変わるファイル」を 1 行見せてから実行し、終わったら結果を 1 行で報告する。
 
 ### 1. mode（進め方）
 `/hirai-lite:config mode loop` のように引数で直接指定してもよい（`進め方 確認あり` / `進め方 自動` のような日本語でも受け付ける）。書き込み先は**すでに在る側**で、両方に無いときだけこのプロジェクト側に作る（共通側に置いている人のプロジェクトへ新しく作ると、共通側を黙って覆い隠す）。
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 . "$P/scripts/tasks-path.sh"
 f="$(harness_mode_write_file "$PWD")"; echo "変えるファイル: $f"
 harness_yml_set "$f" mode normal   # 自動で進めるときは loop
@@ -98,7 +101,7 @@ grep -c '^mode: \(normal\|loop\)$' "$f"
 
 **`loop`（自動で進む）の間の振る舞い。** 作り方の選び方・branch 名・commit の件名・ビルドが通るまでの試行錯誤は聞かずに決める。止まるのは 3 つだけ（「stop」と言われた / やることが終わった / 続けられないエラー）。ただし新しい設計を足すとき・決めた内容から外れるとき・元に戻せない操作（`main` への push / PR の取り込み / 本番反映 / DB の作り替え / 秘密情報）は自動でも必ず確認を取る。作業を任せた相手を待つ間は別の作業を進め、会話の使用量が 50% に達したら `/hirai-lite:state save` を実行する。
 
-`loop` にしたと報告するとき、1 行添える: `ターンをまたいで止まらずに続けさせたいときは、組み込みの /goal に終わりの条件を渡してください（例: /goal hirai-task ready が空で、着手した task はすべて PR を出した）。終わったかは別のモデルが判定します`。`/goal` は組み込みのコマンドで Claude からは呼べないので、打つのは利用者。
+`loop` にしたと報告するとき、1 行添える: `ターンをまたいで止まらずに続けさせたいときは、組み込みの /goal に終わりの条件を渡してください（例: `tasks: github-project` のリポは /goal hirai-task ready が空で、着手した task はすべて PR を出した。台帳のリポは /goal 台帳に未着手の行が無く、着手した task はすべて PR を出した）。終わったかは別のモデルが判定します`。`/goal` は組み込みのコマンドで Claude からは呼べないので、打つのは利用者。
 
 ### 2. ultracode（深く考えて自動で手分けする。利用量が増える）
 `$D/settings.json` の `ultracode` を切り替える。**有効にすると利用量（費用）が増える。** 無効にするときは `ultracode` だけを外す（`workflowSizeGuideline` は ultracode と別の設定で、on・off のどちらでも効く）。設定ファイルを変えずにこの会話だけ試したいと言われたら、組み込みの `/effort ultracode on`（戻すときは `off`。Claude Code 2.1.284 以降。打つのは利用者）を案内する。書き換えたら `python3 -m json.tool "$D/settings.json"` を通し、失敗したら編集前へ戻す。
@@ -148,7 +151,7 @@ python3 -m json.tool "$f" >/dev/null && echo "OK $f"
 プラグイン本体が新しくなっても、`/hirai-lite:init` で**導入先へ複製された** 3 本（`statusline.sh` / `tasks-path.sh` / `context-usage.sh`）は古いまま残る。有効にすると、**プラグインの版が変わった回のセッション冒頭だけ**、その 3 本を配布版に揃え、何件入れ替えたかを 1 行で報告する（中身が違うものは `.bak` に控えてから）。**決まりごと・安全設定・`CLAUDE.md`・やることの一覧表には触らない。** 版が同じ回は何もしない（手を入れた複製も、その版のうちは上書きされない）。
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 . "$P/scripts/tasks-path.sh"
 f="$(harness_mode_write_file "$PWD")"; echo "変えるファイル: $f"
 harness_yml_set "$f" auto_sync on   # 止めるときは off
@@ -157,9 +160,22 @@ harness_auto_sync "$PWD"
 
 報告書式: `更新後の入れ替えを有効にしました → <パス>。プラグインが新しくなった回に、画面下部などのスクリプトを自動で最新にします（元の内容は .bak に残します）` ／ 無効にしたときは `更新後の入れ替えを無効にしました → <パス>。これまでどおり /hirai-lite:update で手動更新してください`。書き込み先が `~/.claude/mode.yml` だったときだけ 1 行足す: `この設定はすべてのプロジェクトに効きます`
 
+### 8. 形と Orca（tasks / worktree / notify）
+3 つとも `.claude/mode.yml` の 1 行で、`harness_yml_set` が**その 1 行だけ**を書き換える（書き込み先は 1 の `harness_mode_write_file`）。値は `tasks`: `ledger`（既定）／ `github-project`、`worktree`: `off`（既定）／ `warn` ／ `block`、`notify`: `off`（既定）／ `orca`。
+`tasks: github-project` にするときは、足すプラグインを入れてから（`/plugin install hirai-project-method@hirai-lite`）。`/hirai-lite:start-task` などが `hirai-task` を呼ぶ形に変わる。
+`worktree: block` は、Orca の worktree でない会話からの、git に入るファイルの編集と `git commit` を止める（読み取り・リポの外・git に入らない場所への書き込み・`git switch` は止めない）。**止める設定なので、有効にする前に承認カードで確認を取る**（2 と同じ型。「しないと」は並行の会話が同じ作業ツリーを触る事故が残ること）。`warn` と `off`、`notify` の切り替えに確認は要らない。
+```bash
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+. "$P/scripts/tasks-path.sh"
+f="$(harness_mode_write_file "$PWD")"; echo "変えるファイル: $f"
+harness_yml_set "$f" worktree warn   # tasks / notify も同じ書き方
+harness_yml_value "$PWD" worktree
+```
+報告書式: `worktree を warn にしました → <パス>。Orca の worktree でない会話に、開始時に警告を出します`。書き込み先が `~/.claude/mode.yml` だったときだけ 1 行足す: `この設定はすべてのプロジェクトに効きます`
+
 ## 判定できる終了条件
 
-- 引数なしのとき、7 項目すべてに実測値が入っている。
+- 引数なしのとき、8 項目すべてに実測値が入っている。
 - 7 の 2 つの値が、`extraKnownMarketplaces.hirai-lite.autoUpdate`（無ければ無効）と `harness_auto_sync "$PWD"` の実測値と一致している。
 - 1・2・5 の表示が `<正式名>（<解説>）` の形になっている（`normal` / `loop` / `ultracode` / `statusLine` の文字が出ている）。
 - 変更したときは、変更したファイルのパスが報告に入っており、`mode` なら `harness_mode "$PWD"` が指定した値と一致する。

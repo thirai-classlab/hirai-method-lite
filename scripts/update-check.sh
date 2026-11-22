@@ -12,24 +12,22 @@
 # file-top に set -e / set -o pipefail を書かない。source 元の shell flags を汚染し、
 # パイプ先の早期終了で呼び出し元ごと落ちる事故を防ぐため (関数内で局所化する)。
 
-HARNESS_UPDATE_URL_DEFAULT="https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/v2/VERSION"
+HARNESS_UPDATE_URL_DEFAULT="https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/main/VERSION"
 
-# 2.x の配布系列 (marketplace のエントリ名)。配布先の marketplace.json の 2.x の entry 名と
-# 同じ値で、変えるときは、この 1 行と commands/*.md の素材行の同じ文字列と
-# scripts/tasks-path.sh の HARNESS_GHP_ID (<entry 名>-<カタログ名>) を合わせる
-# (tests/smoke.sh case 9 が entry 名と HARNESS_GHP_ID を、case 10 が素材行を突き合わせる。
-# ズレていても壊れ方は fail-open — 解決できずに空を返すだけで、旧い版を掴んだりはしない)。
-HARNESS_V2_ENTRY_NAME="hirai-lite-v2"
+# このプラグインの配布の entry 名 (marketplace.json の entry 名と同じ値)。変えるときは、この 1 行と
+# commands/*.md の素材行の同じ文字列を合わせる (tests/smoke.sh が素材行と突き合わせる。
+# ズレていても壊れ方は fail-open — 解決できずに空を返すだけで、別の版を掴んだりはしない)。
+# 足すプラグイン hirai-project-method の控えの id は、足すプラグイン側の scripts/ghp-path.sh が持つ。
+# 3.0.0 で退役した旧系列 hirai-lite-v2 の entry は探さない (退役した版の置き場へ落ちない)。
+HARNESS_ENTRY_NAME="hirai-lite"
 
 # --- プラグイン本体の置き場所 --------------------------------------------------
 # $CLAUDE_PLUGIN_ROOT は**空で渡ることがある**。渡らない実行経路があるため、これを直に
 # パスの前に置いた行は「/VERSION」を読みに行って失敗する (v1.14.0 の /update が実環境で
 # 動かなかった原因)。空・不在なら 3 段で探す — 環境変数 → installed_plugins.json の
-# 2.x の行のうち版が最新の installPath → キャッシュ (2.x の entry 名で、版が最新のもの)。
-# 4 段目 (marketplaces/hirai-lite = main = 1.x) には落とさない — 1.x の案件が誤って
-# 2.x のスクリプトを読む向きの事故を、その逆 (2.x の案件が 1.x の置き場へ落ちる)
-# でも起こさないため。commands/*.md 冒頭の「素材行」と同じ 3 段で、tests/smoke.sh
-# case 10 (f) が「素材行の結果」と「この関数の結果」の一致を検査する。
+# hirai-lite の行のうち版が最新の installPath → キャッシュ (hirai-lite の entry 名で、版が最新のもの)。
+# commands/*.md 冒頭の「素材行」と同じ 3 段で、tests/smoke.sh が「素材行の結果」と
+# 「この関数の結果」の一致を検査する。
 # シェルから使えるのはこの関数だが、**コマンド手順書は素材行のほうを使う** —
 # 関数を読むには先にこのファイルの場所が要る (それを解決するのが素材行の仕事)。
 #
@@ -55,10 +53,10 @@ harness_plugin_root() (
   set -uo pipefail
   local p="${1:-${CLAUDE_PLUGIN_ROOT:-}}"
   if [ ! -d "$p" ]; then
-    p="$(harness_plugin_root_from_installed "$HARNESS_V2_ENTRY_NAME" 2>/dev/null)"
+    p="$(harness_plugin_root_from_installed "$HARNESS_ENTRY_NAME" 2>/dev/null)"
   fi
   if [ ! -d "$p" ]; then
-    p="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/"$HARNESS_V2_ENTRY_NAME"/*/ 2>/dev/null | sort -V | tail -1)"
+    p="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/"$HARNESS_ENTRY_NAME"/*/ 2>/dev/null | sort -V | tail -1)"
     p="${p%/}"
   fi
   printf '%s' "$p"

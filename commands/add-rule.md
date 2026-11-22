@@ -9,7 +9,7 @@ description: ルールを 6 工程パイプライン (分類→重複検査→�
 **ルールの置き場を決め打ちしない。** ルールはこのプロジェクト (`.claude/rules/`) と全プロジェクト共通 (`~/.claude/rules/`) の 2 通りに置ける (`/init` に `user` を付けたかで決まる)。工程 ② と ⑤ は下のブロック（1 行目が素材行）で置き場を解決してから走らせる。決め打ちすると、全プロジェクト共通に置いた利用者に対して「既存ルール 0 件・予算 0 tokens」と誤判定し、重複ルールを素通しさせる。
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 . "$P/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"; echo "ルールの置き場 $R"
 bash "$P/scripts/scope-check.sh" .claude "$HOME/.claude"
 ```
@@ -45,7 +45,7 @@ bash "$P/scripts/scope-check.sh" .claude "$HOME/.claude"
 ## ⑤ 予算チェック
 T0 実測 (frontmatter に `paths:` を持たないファイルの合計) を測る。`CLAUDE.md` も置き場に合わせて 2 通りあるので、在るものだけを足す。`AGENTS.md` も、CLAUDE.md が無ければそのまま、あれば `@AGENTS.md` で毎回読まれるので足す（CLAUDE.md が取り込んでいないときは多めに出る）。
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite-v2 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite-v2/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 . "$P/scripts/tasks-path.sh"; R="$(harness_rules_dir "$PWD")"
 for f in CLAUDE.md "$HOME/.claude/CLAUDE.md" AGENTS.md .claude/AGENTS.md "$R"/*.md; do  # AGENTS.md は直接か @AGENTS.md で毎回読まれる
   [ -f "$f" ] || continue
@@ -74,7 +74,9 @@ T1 は対象 1 ファイルのみ同じ式で測る。追加案の推定バイ�
 4. **ロード検証**: user に新しいセッションを開いてもらい、次を実測する。
    - T0 → 新セッション冒頭で当該ルール文字列がコンテキストに載る。
    - T1 → 新セッション冒頭では載らず、`paths:` の glob に一致するファイルを Read・Write・Edit したか、Bash の単一ファイルの読み (`cat`・`head` など) で開いた後に載る (Claude Code 2.1.293 以降。それより前は Read のときだけ)。
-5. 実測が想定と食い違えば frontmatter を修正して 4 をやり直す。想定どおりなら完了報告 1 行を出す。
+5. 実測が想定と食い違えば frontmatter を修正して 4 をやり直す。
+6. **開いている PR に知らせる。** ルールを変える PR を出すとき、`gh pr list --state open --json number,title,headRefName` で開いている PR を引く（`gh` が使えないリポは飛ばして「飛ばした」と 1 行出す）。自分の PR 以外が 1 件でもあれば、規範が変わったことと、取り込む手順（base を merge して衝突を見る）を 1 行ずつ、その PR にコメントしてよいか user に確かめてから書く。0 件なら「開いている PR 0 件」と 1 行出す。
+7. 想定どおりなら完了報告 1 行を出す。
 
 ## 対話イメージ
 ```

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SessionStart hook: 現在の mode / 未完了タスク数 / 直近 state を 5 行以内で出力する。
+# SessionStart hook: 現在の mode と効いている設定 / 未完了タスク数 / 直近 state を 5 行以内で出力する。
 # 更新の合図と「更新後の入れ替え」の報告は、該当する回だけ末尾に 1 行ずつ足す。
 # 対象ファイルが 1 つも無くても正常終了する (fail-open)。
 #
@@ -39,17 +39,29 @@ case "$mode" in
   *)      mode_line="$mode" ;;
 esac
 
-# --- やること: GHP の形の控えがあれば置き換え、無ければ台帳の形 (名前も意味も不変) ---
-# GHP の形の見分け・件数の取り直しは gh を叩く。ここ (前景) では控えを読むだけにし、
-# 取り直しは detach した背景処理に投げる (harness_ghp_refresh_async)。
-# 台帳の形かどうかの判定 (harness_tasks_file の有無) は変えない — GHP の控えが無い・
-# 「ghp」でない場合は、必ずこの下の台帳の形にフォールバックする。
-ghp_line=""
-if command -v harness_ghp_line >/dev/null 2>&1; then
-  ghp_line="$(harness_ghp_line "$root" 2>/dev/null || true)"
+# --- タスク管理の形: .claude/mode.yml の tasks: が決める (自動では見分けない) ---
+# ledger (既定) は台帳の件数 (1.x と同じ。通信しない)。github-project のときだけ、足すプラグイン
+# hirai-project-method の hirai-task を PATH で呼ぶ (土台は GitHub の関数を直接呼ばない)。
+tasks_form="ledger"
+if command -v harness_tasks_form >/dev/null 2>&1; then
+  tasks_form="$(harness_tasks_form "$root" 2>/dev/null || echo ledger)"
 fi
-if [ -n "$ghp_line" ]; then
-  task_line="Project: あなたの番 ${ghp_line}"
+if [ "$tasks_form" = "github-project" ]; then
+  if command -v hirai-task >/dev/null 2>&1; then
+    # 件数は控えを読むだけ (通信しない)。取り直しは別に切り離して起こす。
+    # **取り直しを $(...) の中で呼ばない。** hirai-task line --refresh は背景の子が出力の
+    # パイプを持ったまま走るので、$(...) が子の終了まで戻らず、hook の 5 秒の timeout を食う。
+    # 出力を捨て、stdin も閉じて、この shell の直下で切り離す。
+    ghp_line="$(hirai-task line 2>/dev/null || true)"
+    hirai-task line --refresh >/dev/null 2>&1 </dev/null &
+    if [ -n "$ghp_line" ]; then
+      task_line="Project: あなたの番 ${ghp_line}"
+    else
+      task_line="Project: 件数を取得中です (hirai-task today で見られます)"
+    fi
+  else
+    task_line="tasks: github-project ですが hirai-task が見つかりません → /plugin install hirai-project-method@hirai-lite"
+  fi
 else
   list=""
   if command -v harness_tasks_file >/dev/null 2>&1; then
@@ -61,14 +73,6 @@ else
     task_line="やること一覧はまだありません (/hirai-lite:new-task で作れます)"
   fi
 fi
-# **ここに >/dev/null 2>&1 を付けない。** 関数自身が内部で出力を抑えて detach しているため
-# 不要なだけでなく、外側の redirect を bash がこの 1 コマンドの間だけ適用しようとして元の fd 1
-# (hook runner が読むパイプ) を高位 fd に控える。その控えを、内側の background subshell が
-# fork 時にそのまま継承し、gh が終わるまで元のパイプの書き手が居続けることになり、
-# hook runner がパイプを read している環境では 5 秒の timeout の建付けが効かなくなる
-# (bash 3.2 で確認: 2 秒 sleep する偽の子で、外側に redirect が付くと `bash x.sh | cat` が
-# 2 秒かかり、外す と 0 秒になる)。
-command -v harness_ghp_refresh_async >/dev/null 2>&1 && harness_ghp_refresh_async background "$root"
 
 # --- 更新検知: 取得は背景 + 24h に 1 回、表示は前回キャッシュ値 (通信を待たない) ---
 # 版を比べる VERSION はプラグイン側にあるので plugin_root を渡す。
@@ -102,7 +106,18 @@ for d in "$root/.claude/state" "$root/docs/state"; do
   [ -n "$f" ] && state="${d#"$root"/}/$f" && break
 done
 
-echo "[harness] 進め方: ${mode_line}"
+# --- 効いている設定: 版と tasks / worktree / notify を 1 行で (何が効いているかを 1 か所で見る) ---
+plugin_version=""
+command -v harness_local_version >/dev/null 2>&1 && plugin_version="$(harness_local_version "$plugin_root" 2>/dev/null || true)"
+cfg_worktree="${HC_WORKTREE:-}"; cfg_notify="${HC_NOTIFY:-}"
+if command -v harness_yml_value >/dev/null 2>&1; then
+  [ -n "$cfg_worktree" ] || cfg_worktree="$(harness_yml_value "$root" worktree 2>/dev/null || true)"
+  [ -n "$cfg_notify" ] || cfg_notify="$(harness_yml_value "$root" notify 2>/dev/null || true)"
+fi
+settings_line="hirai-lite ${plugin_version:+v${plugin_version}・}tasks: ${tasks_form}・worktree: ${cfg_worktree:-off}・notify: ${cfg_notify:-off}"
+
+# 5 行以内を守るため、効いている設定は進め方の行の後ろに足す (行を増やさない)
+echo "[harness] 進め方: ${mode_line} ／ ${settings_line}"
 echo "[harness] ${task_line}"
 if [ -n "$state" ]; then
   echo "[harness] 前回の続き: ${state} (/hirai-lite:state resume で読み込めます)"
@@ -111,5 +126,7 @@ else
 fi
 [ -n "$update_line" ] && echo "$update_line"
 [ -n "$sync_line" ] && echo "$sync_line"
+# Orca の worktree の警告・知らせ方 (worktree / notify が off なら何も出ない)
+[ -f "$plugin_root/scripts/orca-context.sh" ] && CLAUDE_PROJECT_DIR="$root" bash "$plugin_root/scripts/orca-context.sh" 2>/dev/null
 
 exit 0

@@ -138,7 +138,7 @@ issue の本文では `<!-- card:work -->` で囲む。
 
 ### GitHub Project の承認ビューで受ける
 
-GitHub Project でやることを管理しているリポでは、**着手の承認は承認ビューで受ける**。feature の本文の先頭に承認カードを置き、`hirai-task card <番号> --sync` で項目「ひとこと」「推奨」に写す。会話では「承認ビューに N 件あります」と件数を案内する。
+（`tasks: github-project` のリポだけ。道具 `hirai-task` はプラグイン hirai-project-method にある。）GitHub Project でやることを管理しているリポでは、**着手の承認は承認ビューで受ける**。feature の本文の先頭に承認カードを置き、`hirai-task card <番号> --sync` で項目「ひとこと」「推奨」に写す。会話では「承認ビューに N 件あります」と件数を案内する。
 
 | 答え | ボードですること | AI がすること |
 |---|---|---|
@@ -270,7 +270,7 @@ GitHub Project でやることを管理しているリポでは、**着手の承
 | commit の分割 / 元に戻せない操作 | `commit.md` | 手順 3 / 「承認が要る操作」 | 承認 |
 | 費用や動きに影響する設定変更 | `config.md` | 2（ultracode）/ 7（更新の自動化） | 承認 |
 | 参照されていないファイルの削除 | `verify.md` | 6 | 承認 |
-| GitHub Project の作成・項目とビューの追加 | `project-setup.md` | 2 | 承認 |
+| GitHub Project の作成・項目とビューの追加 | `project-setup.md`（プラグイン hirai-project-method の `/hirai-project-method:project-setup`） | 2 | 承認 |
 | feature の着手 | （ボードの承認ビュー） | feature の本文の先頭 | 承認 |
 | 人の権限が要る操作を AI が行う | （`[操作]` の issue） | 本文の先頭 | 承認 |
 | 裁定 | （判断待ちの issue） | 本文の先頭 | 判断 |

@@ -54,6 +54,13 @@ git status --porcelain            # 出力が空、または意図的に残し�
 
 feature branch への `git push` と `gh pr create` は実行してよい。この 2 つは別々の Bash 呼び出しに分けて実行する。
 
+## PR を作る
+
+- 1 PR = 1 task。差分が 500 行を超えるなら task を分けて、下の PR から積む。
+- 本文に `Closes #<n>` を 1 行入れる（台帳の形は `task-<id>`）。部分の PR は、残りの完了条件を別 task へ移してから `Closes` にする。
+- 積み上げた PR の下が squash で入ったら `scripts/pr-retarget.sh`（プラグイン同梱）で付け替える。
+- merge を頼む前に `gh pr checks <n>` を見る手順は `rules/code.md` の「PR」にある。
+
 ## 判定できる終了条件
 
 - `git log --oneline -1` が新しい commit を返す。

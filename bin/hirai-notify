@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# hirai-notify: Orca のコーディネーターへ、担当の会話の「問い」「完了」「停止」を知らせる。
+#
+#   hirai-notify question|done|stopped <file> <要約> [--dispatch-id <id>] [--to <run:id>]
+#
+#   question : 決めてもらうことができた。<file> は単独で読める問い（決めること・案・帰結・推し）。
+#   done     : 終わった。<file> は報告。
+#   stopped  : 続けられないエラーで止まった。<file> は報告。
+#
+# 送り方:
+#   Orca に立ち上げられた担当（--dispatch-id か環境変数 HIRAI_DISPATCH_ID で Dispatch の id を渡されたとき。
+#   id は Orca が担当の最初に差し込む前置きの文にある。Orca は id を環境変数では渡さない
+#   — `orca orchestration send --help` の「injected preambles include the correct --from value」）:
+#       question → orchestration send --type question
+#       done     → --type worker_done --outcome succeeded --report-path <file>
+#       stopped  → --type worker_done --outcome failed    --report-path <file>
+#     --to は省く（「From an active Dispatch, an omitted recipient defaults to its owning Run mailbox」）。
+#   立ち上げられていない会話（宛先を --to か環境変数 HIRAI_COORDINATOR で渡されたとき）:
+#       question → --type question --to <宛先>
+#       done|stopped → --type status --subject 完了|停止 --to <宛先>
+#
+# `.claude/mode.yml` の `notify: off`（既定）なら何もせず exit 0。env HC_NOTIFY が優先。
+# 送れなかったときは理由を stderr に出して exit 1（黙って捨てない）。
+# 送る操作は、検査の結果を見てから別の呼び出しで打つ（`;` `&&` `||` の分岐の後ろに繋げない）。
+set -uo pipefail
+
+usage() { echo "usage: hirai-notify question|done|stopped <file> <要約> [--dispatch-id <id>] [--to <run:id>]" >&2; }
+
+kind="${1:-}"; file="${2:-}"; summary="${3:-}"
+case "$kind" in question|done|stopped) ;; *) usage; exit 2 ;; esac
+[ -n "$file" ] && [ -n "$summary" ] || { usage; exit 2; }
+shift 3
+to="${HIRAI_COORDINATOR:-}"
+dispatch="${HIRAI_DISPATCH_ID:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --to) to="${2:-}"; shift 2 ;;
+    --dispatch-id) dispatch="${2:-}"; shift 2 ;;
+    *) usage; exit 2 ;;
+  esac
+done
+
+# notify の値: env HC_NOTIFY > プロジェクトの mode.yml > ホームの mode.yml > off
+notify="${HC_NOTIFY:-}"
+if [ -z "$notify" ]; then
+  lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/scripts/tasks-path.sh"
+  if [ -f "$lib" ]; then
+    notify="$( . "$lib" 2>/dev/null && harness_yml_value "${CLAUDE_PROJECT_DIR:-$PWD}" notify )" || notify=""
+  fi
+fi
+[ "$notify" = "orca" ] || exit 0
+
+if ! command -v orca >/dev/null 2>&1; then
+  echo "hirai-notify: orca コマンドが PATH に無い" >&2
+  exit 1
+fi
+
+args=()
+if [ -n "$dispatch" ]; then
+  case "$kind" in
+    question) args=(--type question --subject "$summary" --body "$file｜$summary") ;;
+    done)     args=(--type worker_done --outcome succeeded --report-path "$file" --subject "$summary") ;;
+    stopped)  args=(--type worker_done --outcome failed --report-path "$file" --subject "$summary") ;;
+  esac
+  args+=(--dispatch-id "$dispatch")
+elif [ -n "$to" ]; then
+  case "$kind" in
+    question) args=(--type question --subject "$summary" --body "$file｜$summary") ;;
+    done)     args=(--type status --subject "完了: $summary" --body "$file｜$summary") ;;
+    stopped)  args=(--type status --subject "停止: $summary" --body "$file｜$summary") ;;
+  esac
+  args+=(--to "$to")
+else
+  echo "hirai-notify: 送り先が無い（--dispatch-id / HIRAI_DISPATCH_ID も --to / HIRAI_COORDINATOR も無い）" >&2
+  exit 1
+fi
+
+orca orchestration send "${args[@]}"

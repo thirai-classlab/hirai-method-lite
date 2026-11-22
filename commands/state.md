@@ -15,7 +15,7 @@ context 使用率 50% 到達時と、作業を中断する時に実行する。
 ## 手順
 
 1. `git rev-parse --abbrev-ref HEAD` / `git log --oneline -5` / `git status --porcelain` を実行し、現在の git 状態を実測する。
-2. 進行中の issue を 1 件控える。形の見分けは `start-task` の「形の見分け」と同じ手順で `harness_ghp_form "$PWD"` を見る。`ghp` なら state の issue を控える（番号は user に聞くか、直近の commit 件名の `(#n)` から取る）。それ以外（台帳の形）なら台帳（`harness_tasks_file "$PWD"`）の進行中の行の id を控える。
+2. 進行中のタスクを 1 件控える。形は `.claude/mode.yml` の `tasks:` が決める（`. "$P/scripts/tasks-path.sh"; harness_tasks_form "$PWD"` が `ledger` か `github-project` を返す。`$P` の探し方は `start-task` の「形の見分け」と同じ）。`github-project` なら進行中の issue を控える（番号は user に聞くか、直近の commit 件名の `(#n)` から取る）。`ledger` なら台帳 (`$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > 旧レイアウトの `.claude/tasks/list.md`。`harness_tasks_file "$PWD"`) を Read し、status が `進行中` の行と `未着手` の行の id を取り出す。
 3. `.claude/state/latest.md` を以下の書式で**上書き**保存する。ディレクトリが無ければ `mkdir -p .claude/state` で作る。
 
 ```markdown
@@ -28,12 +28,12 @@ context 使用率 50% 到達時と、作業を中断する時に実行する。
   <ファイル名を最大 10 件列挙。11 件以上は「他 N 件」と書く>
 
 ## 進行中タスク
-- issue #<番号>: <タイトル> / 次にやる作業: <概要>
+- issue #<番号>（台帳の形は task-<id>）: <タイトル> / 次にやる作業: <概要>
 - 直前に実行して成功したコマンド: <コマンド>
 - 次に実行するコマンド: <コマンド 1 つ>
 
 ## 未着手タスク
-- <issue #番号 または 台帳の id>: <タイトル>（`hirai-task ready` の先頭 3 件。台帳の形では未着手の行）
+- <issue #番号 または 台帳の id>: <タイトル>（`github-project` は `hirai-task ready` の先頭 3 件。`ledger` は台帳の未着手の行）
 
 ## 判明した事実
 - <このセッションで実測して確定した事実。1 行 1 件、推測は書かない>
@@ -117,7 +117,7 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 2. `git rev-parse --abbrev-ref HEAD` を実行し、state に書かれた branch と突き合わせる。不一致なら state の branch 名を提示し「切替えますか?」と聞く。承認されたら `git switch <state の branch>` を実行する。承認が無ければ現 branch のまま 3 へ進む。
 3. `git log --oneline -1` を実行し、HEAD を突き合わせる。state の HEAD と一致しなければ、`git log --oneline <state の hash>..HEAD` で state 保存後に積まれた commit を列挙し、チャットに提示する。
 
-4. `harness_ghp_form "$PWD"` が `ghp` のとき、`hirai-task show <n>` で state の issue の Status と開閉を確かめる。進行中でない・閉じているなら「state より GitHub 側が新しい」と報告し、GitHub 側を正とする。`command -v hirai-task` が無ければ「hirai-task が見つからない (PATH に入っていない)」と報告して 5 へ進む。`ghp` 以外なら台帳の該当行を読み、`status` が進行中かを見る。
+4. 形は `.claude/mode.yml` の `tasks:` が決める（`. "$P/scripts/tasks-path.sh"; harness_tasks_form "$PWD"` が `ledger` か `github-project` を返す。`$P` の探し方は `start-task` の「形の見分け」と同じ）。`github-project` のとき、`hirai-task show <n>` で state の issue の Status と開閉を確かめる。進行中でない・閉じているなら「state より GitHub 側が新しい」と報告し、GitHub 側を正とする。`command -v hirai-task` が無ければ「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と報告して 5 へ進む。`ledger` のとき、台帳を Read し、state の「進行中タスク」の id が今も `進行中` かを確認する。`完了` になっていれば「state より台帳が新しい」と報告し、台帳側を正とする。
 5. 4 で読んだ issue の本文（台帳の形では完了条件の列）から、まだ満たしていない完了条件を 1 つ選ぶ。
 6. 再開サマリを次の書式で 1 回だけ出す。
 
@@ -132,7 +132,10 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 
 ## loop 引数
 
-`/state resume loop` で呼ばれた場合、6 のサマリ出力後に mode（進め方）を `loop`（自動で進む）へ書き換え（書き込み先は決め打ちせず `tasks-path.sh` の `harness_mode_write_file "$PWD"` が返す**すでに在る側**。`/hirai-lite:config` と同じ経路）、`hirai-task ready` の結果を上から順に着手する。`command -v hirai-task` が無ければ「hirai-task が見つからない (PATH に入っていない)」と報告して終了する。一覧が空になったら、その旨を報告して停止する。続けるのを仕組みに任せたいときは、組み込みの `/goal hirai-task ready が空で、着手した task はすべて PR を出した` を打つよう 1 行で案内する（`/goal` は Claude からは呼べない）。
+`/state resume loop` で呼ばれた場合、6 のサマリ出力後に mode（進め方）を `loop`（自動で進む）へ書き換え（書き込み先は決め打ちせず `tasks-path.sh` の `harness_mode_write_file "$PWD"` が返す**すでに在る側**。`/hirai-lite:config` と同じ経路）、形に合わせて連続で着手する。
+
+- `ledger`: 台帳の `進行中` → `未着手` の順に着手する。着手できるのは対応 draft の `approved_at:` が埋まっているタスクのみ。空のタスクに到達したら、その id を報告して停止する。GitHub は呼ばない
+- `github-project`: `hirai-task ready` の結果を上から順に着手する。`command -v hirai-task` が無ければ「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と報告して終了する。一覧が空になったら、その旨を報告して停止する。続けるのを仕組みに任せたいときは、組み込みの `/goal hirai-task ready が空で、着手した task はすべて PR を出した` を打つよう 1 行で案内する（`/goal` は Claude からは呼べない）
 
 loop 実行を止める条件は 3 つ。
 - user が停止を指示した。

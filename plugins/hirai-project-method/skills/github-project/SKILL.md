@@ -13,6 +13,7 @@ description: GitHub Project でやること（wave・feature・task の issue �
 - **feature の着手可は人だけ**: メインエージェントは、feature の着手を人がボードで「着手可」にするまで待ち、自分では動かさない ／ 例: feature が着手可で、未完了の blocked by が無ければ（先の wave が出ていなくても。着手可が wave の門を越えてよいの意思表示）、子の task はあとから足したものも `hirai-task start` で着手してよい（feature が承認待ちの間は呼ばない） ／ 失効: なし
 - **完了条件は検証可能に**: メインエージェントは、issue の完了条件を再現コマンドか観察可能な事実で書く ／ 例: 「ログイン E2E が green」「`GET /health` が 200 を返す」 ／ 失効: なし
 - **書き込みはメイン専任**: サブエージェントは issue を読むだけにし、Status や本文の変更は結果報告でメインに返す ／ 例: 報告に「#12 完了、Status を 完了 へ」と書く ／ 失効: なし
+- **見回りの時機**: メインエージェントは、会話の最初に `hirai-task today`、自分が出した PR の merge の直後に `hirai-task after-merge <PR 番号>` を回す ／ 例: 新しい会話の最初の操作は `today` ／ 失効: 正本を GitHub 以外へ移したとき
 
 ## 承認の場所とカード（v2.8.0）
 
@@ -25,7 +26,7 @@ description: GitHub Project でやること（wave・feature・task の issue �
 
 ## 関連
 
-- 立ち上げ・Status の動かし方・ビュー: `docs/rules-reference/project-setup.md`（無ければプラグイン同梱の同名ファイル）。新しいリポでは利用者に `/hirai-lite:project-setup` を打ってもらう（Claude からは呼べない）
-- 全体像と、どこで何件止まっているか: `/hirai-lite:board`（`hirai-task board`）
+- 立ち上げ・Status の動かし方・ビュー: `docs/rules-reference/project-setup.md`（無ければプラグイン同梱の同名ファイル）。新しいリポでは利用者に `/hirai-project-method:project-setup` を打ってもらう（Claude からは呼べない）
+- 全体像と、どこで何件止まっているか: `/hirai-project-method:board`（`hirai-task board`）
 - 承認を求めるときの型（承認カード・判断カード・人の作業カード）: `docs/rules-reference/approval-template.md`
 - 進め方の用語: `docs/rules-reference/glossary.md`（案件を知らない人に渡すとき）

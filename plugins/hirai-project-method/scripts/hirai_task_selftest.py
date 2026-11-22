@@ -22,8 +22,8 @@ gh を実行しない。`gh_task.run_gh` を差し替えて、偽の GraphQL・R
      `updateProjectV2ItemFieldValue` を呼ばない。`rest_item_id`
      の 0 件（Project に居ない）・2 件以上（repo: で絞る・それでも複数なら候補を
      出す）の扱いも見る
-  7. 書き込みのあとの件数の取り直し（refresh_board_counts）は、プラグイン本体の
-     tasks-path.sh を偽物に差し替えて見る（書いたときだけ呼ぶ・失敗しても結果を
+  7. 書き込みのあとの件数の取り直し（refresh_board_counts）と `line` は、このプラグインの
+     scripts/ghp-path.sh を偽物に差し替えて見る（書いたときだけ呼ぶ・失敗しても結果を
      変えない）。gh は呼ばない
 
 落ちる条件: 検査が 1 件でも FAIL → exit 1
@@ -45,6 +45,25 @@ import tempfile
 import urllib.parse
 from contextlib import redirect_stdout
 from importlib import machinery, util
+
+
+def _base_plugin_root() -> str:
+    """土台（hirai-lite）のルート。approval-template.md と templates/draft.md を読むために探す。
+    HIRAI_LITE_ROOT > このリポの配置（plugins/hirai-project-method の 2 つ上）> installed_plugins.json の
+    entry `hirai-lite`。見つからなければ AssertionError（検査を飛ばさず落とす）。"""
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    marker = os.path.join('docs', 'rules-reference', 'approval-template.md')
+    candidates = [os.environ.get('HIRAI_LITE_ROOT', '').strip(), os.path.dirname(os.path.dirname(here))]
+    try:
+        with open(os.path.expanduser('~/.claude/plugins/installed_plugins.json'), encoding='utf-8') as f:
+            entries = json.load(f).get('plugins', {}).get('hirai-lite@hirai-lite', [])
+        candidates += [e.get('installPath', '') for e in entries]
+    except (OSError, ValueError, AttributeError):
+        pass
+    for c in candidates:
+        if c and os.path.isfile(os.path.join(c, marker)):
+            return c
+    raise AssertionError(f'土台（hirai-lite）が見つからない: HIRAI_LITE_ROOT を指す（候補: {candidates}）')
 
 
 def _load_tool():
@@ -1207,7 +1226,7 @@ def _card_checks(t, tmp_dir: str) -> None:
 
     def _module_selftest() -> None:
         cards = gh_task._load_card_module()
-        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        root = _base_plugin_root()
         with open(os.path.join(root, 'docs', 'rules-reference', 'approval-template.md'), encoding='utf-8') as f:
             results = cards.selftest(f.read())
         failed = [f'{name}: {detail}' for name, ok, detail in results if not ok]
@@ -5658,7 +5677,7 @@ def main() -> int:
 
         def _draft_template_explanations_above_delta_headings() -> None:
             # 2 巡目の指摘 5: 雛形の説明の段落が区分の見出しの下にあると、そのまま使って unreadable で exit 1 になる
-            template = _read(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'templates', 'draft.md'))
+            template = _read(os.path.join(_base_plugin_root(), 'templates', 'draft.md'))
             template = template.replace('<現在形の id_prefix>', 'CHAT').replace('<id_prefix>', 'ATT')
             delta = gh_task.parse_delta(template.split('\n'))
             assert [r for r, _, _ in delta['added'] + delta['changed']] == ['ATT-R1', 'CHAT-R2'], delta
@@ -7843,11 +7862,11 @@ def main() -> int:
 
         # ── 書き込みのあとの件数の取り直し（refresh_board_counts・_entry） ──
         def _fake_plugin(function_body: str) -> tuple[str, str]:
-            """tasks-path.sh の偽物を持つプラグインの置き場所と、呼ばれた記録のパスを返す。"""
+            """ghp-path.sh の偽物を持つプラグインの置き場所と、呼ばれた記録のパスを返す。"""
             root = tempfile.mkdtemp(dir=cache_tmp_dir)
             os.makedirs(os.path.join(root, 'scripts'))
             marker = os.path.join(root, 'called.txt')
-            with open(os.path.join(root, 'scripts', 'tasks-path.sh'), 'w', encoding='utf-8') as f:
+            with open(os.path.join(root, 'scripts', 'ghp-path.sh'), 'w', encoding='utf-8') as f:
                 f.write(f'harness_ghp_refresh() {{\n  printf "%s|%s\\n" "$1" "$2" >> "{marker}"\n{function_body}\n}}\n')
             return root, marker
 
@@ -7869,7 +7888,7 @@ def main() -> int:
                 lines = f.read().splitlines()
             assert lines == [f'now|{gh_task._root()}'], f'harness_ghp_refresh now <root> を 1 回呼ぶはず: {lines}'
 
-        t('refresh_board_counts は tasks-path.sh の harness_ghp_refresh now <作業ツリー> を呼ぶ', _refresh_calls_now_with_root)
+        t('refresh_board_counts は ghp-path.sh の harness_ghp_refresh now <作業ツリー> を呼ぶ', _refresh_calls_now_with_root)
 
         def _entry_refreshes_only_after_a_write() -> None:
             root, marker = _fake_plugin('return 0')
@@ -7946,6 +7965,59 @@ def main() -> int:
             _with_plugin_root(os.path.join(cache_tmp_dir, 'no-such-plugin'), gh_task.refresh_board_counts)
 
         t('件数の取り直しは、失敗しても本体が無くても例外を出さない', _refresh_failure_and_missing_library_are_silent)
+
+        def _line_plugin(line_body: str) -> tuple[str, str]:
+            """harness_ghp_line と harness_ghp_refresh_async の偽物を持つプラグインの置き場所と、呼ばれた記録のパス。"""
+            root = tempfile.mkdtemp(dir=cache_tmp_dir)
+            os.makedirs(os.path.join(root, 'scripts'))
+            marker = os.path.join(root, 'called.txt')
+            with open(os.path.join(root, 'scripts', 'ghp-path.sh'), 'w', encoding='utf-8') as f:
+                f.write(f'harness_ghp_line() {{\n{line_body}\n}}\n'
+                        f'harness_ghp_refresh_async() {{\n  printf "%s|%s\\n" "$1" "$2" >> "{marker}"\n}}\n')
+            return root, marker
+
+        def _run_line(root: str, args: list[str]) -> tuple[int, str]:
+            out = io.StringIO()
+            holder = {}
+
+            def _call() -> None:
+                with redirect_stdout(out):
+                    holder['rc'] = gh_task.main(['line'] + args)
+
+            _with_plugin_root(root, _call)
+            return holder['rc'], out.getvalue()
+
+        def _line_prints_the_cached_line_and_refreshes_only_with_flag() -> None:
+            root, marker = _line_plugin("  printf '3（承認 1・裁定 1・取り込み 1）／進行中 2／待ち解け —（09:00 時点）'")
+            rc, out = _run_line(root, [])
+            assert rc == 0 and out == '3（承認 1・裁定 1・取り込み 1）／進行中 2／待ち解け —（09:00 時点）', (rc, out)
+            assert not os.path.exists(marker), '--refresh なしで背景の取り直しを起こした'
+            rc, out = _run_line(root, ['--refresh'])
+            assert rc == 0 and out.startswith('3（承認'), (rc, out)
+            with open(marker, encoding='utf-8') as f:
+                assert f.read().splitlines() == [f'background|{gh_task._root()}'], '--refresh は background を 1 回起こす'
+
+        t('line は控えの 1 行を出し、--refresh のときだけ背景の取り直しを起こす（GitHub も repo の判定も要らない）', _line_prints_the_cached_line_and_refreshes_only_with_flag)
+
+        def _line_is_silent_when_cache_missing_or_library_absent() -> None:
+            root, _ = _line_plugin('  return 1')
+            rc, out = _run_line(root, [])
+            assert rc == 0 and out == '', '控えが無い（harness_ghp_line が rc 1）なら何も出さず exit 0'
+            rc, out = _run_line(os.path.join(cache_tmp_dir, 'no-such-plugin'), ['--refresh'])
+            assert rc == 0 and out == '', 'ライブラリが無くても exit 0・出力なし'
+
+        t('line は控えが無い・ライブラリが無いとき、何も出さず exit 0', _line_is_silent_when_cache_missing_or_library_absent)
+
+        def _line_rejects_unknown_flag() -> None:
+            root, _ = _line_plugin('  return 1')
+            try:
+                _run_line(root, ['--bogus'])
+            except gh_task.GhError as exc:
+                assert exc.code == 2, exc.code
+                return
+            raise AssertionError('未知の引数を受け付けた')
+
+        t('line は未知の引数を exit 2 で断る', _line_rejects_unknown_flag)
 
         def _state_dirs_live_in_git_dir() -> None:
             import subprocess

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-hirai_project_setup.py — このリポの GitHub Project を、hirai-lite v2 の形
+hirai_project_setup.py — このリポの GitHub Project を、hirai-project-method の形
 （docs/rules-reference/project-setup.md）に立ち上げる。
 
   python3 scripts/hirai_project_setup.py [--title <名前>] [--from-template <owner>/<number>] [--apply] [--json]
   python3 scripts/hirai_project_setup.py --selftest
 
 既定は計画を出すだけ（読むだけで、GitHub には 1 バイトも書かない）。--apply を付けたときだけ書く。
-Project を作るのは外向きの操作なので、呼ぶ側（/hirai-lite:project-setup）が計画を見せて承認を取ってから --apply する。
+Project を作るのは外向きの操作なので、呼ぶ側（/hirai-project-method:project-setup）が計画を見せて承認を取ってから --apply する。
 
 対象のリポは bin/hirai-task と同じく HIRAI_TASK_REPO（既定は `git remote get-url origin`）。
 Project の選び方も同じ: HIRAI_TASK_PROJECT があればその番号、無ければリポに紐づいた Project

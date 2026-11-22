@@ -1,6 +1,6 @@
 # タスク台帳と構造の実務
 
-**この文書は、やることをファイルの一覧表（`docs/tasks/list.md`。台帳）に持つ形のリポの記録である。** GitHub Project に載せる形のリポの規範は `rules/tasks.md`、立ち上げは [`project-setup.md`](project-setup.md) を読む。どちらの形かは `rules/tasks.md` の冒頭で見分ける。
+**この文書は、やることをファイルの一覧表（`docs/tasks/list.md`。台帳）に持つ形のリポの記録である。** どちらの形で回すかは `.claude/mode.yml` の `tasks:`（`ledger` か `github-project`）が決める。GitHub Project の形の規範と立ち上げは、足すプラグイン hirai-project-method の skill `github-project` と `/hirai-project-method:project-setup`（手順の本体はそのプラグインの `docs/rules-reference/project-setup.md`）を読む。
 
 ## 2 つの形の区別（項目 1 の「中間階層を作らない」を読み違えないために）
 

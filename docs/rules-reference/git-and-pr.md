@@ -1,6 +1,6 @@
 # git / PR の落とし穴
 
-`rules/core.md` の commit 粒度・承認が要る操作、`rules/code.md` の commit 規約の背景。
+`rules/core.md` の commit 粒度・承認が要る操作、`rules/code.md` の commit 規約・PR の規範の背景。
 
 ---
 
@@ -59,6 +59,22 @@ merge 後に統合先ブランチ上で完了の印だけを直すことはで�
 ## 6. 着手前に「すでに直っていないか」を履歴で確認する
 
 指摘に対する作業を計画・委譲したが、既存の commit ですでに解消済みで空振りした記録がある。`git log --all --grep <キーワード>` を計画段階で掛ける。詳細は [`design-process.md`](design-process.md) の項目 10 を参照。
+
+---
+
+## 7. 積み上げた PR は、下が squash で入ったら付け替えて出し直す
+
+**何が起きたか**: 下の PR が squash で入ったあと、上の PR の base を `gh pr edit --base` で付け替えた。付け替えが起こすのは `edited` だけで、CI もレビューも走らず、検査の結果は古い base で測ったまま残った。
+
+**どう対処するか**: `git fetch origin` → `git rebase --onto origin/<既定の branch> <下の PR の最後の commit> <上の branch>` → `git push --force-with-lease`（user の承認を取る）→ `bash scripts/pr-retarget.sh <PR 番号> <新しい base>`（プラグイン同梱）。閉じて開き直すので `reopened` で CI とレビューが起動する。付け替えのあとは `gh pr checks <n>` で新しい実行を待つ。
+
+---
+
+## 8. merge を頼む前に、検査とレビューの合格を見る
+
+**何が起きたか**: 検査が止まっている（課金・queue）PR と、AI レビューが終わっていない PR に merge を頼み、merge のあとで直しが入って追いの PR になった。
+
+**どう対処するか**: merge を頼む前に、`gh pr checks <n>` で必須の検査が全て pass、AI レビューが CRITICAL・HIGH 0 件で終わっていることを見る。検査が走らない事情があるときは、手元で通した CI の全ジョブの結果を PR に貼り、user に「検査が止まっている」と伝えたうえで頼む。PR を作る手順では、本文に `Closes #<n>`（台帳の形は `task-<id>`）を 1 行入れる。
 
 ---
 

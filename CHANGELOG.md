@@ -1,8 +1,28 @@
 # 変更履歴
 
-版の付け方は [semver](https://semver.org/lang/ja/)。`VERSION` / `.claude-plugin/plugin.json` / `.claude-plugin/marketplace.json`（この branch の `ref` を source に持つ entry の行）の 3 つは常に同じ値を持ち、`tests/smoke.sh` case 9 が一致を検証する。
+版の付け方は [semver](https://semver.org/lang/ja/)。`VERSION` / `.claude-plugin/plugin.json` / `.claude-plugin/marketplace.json` の `hirai-lite` の行の 3 つは常に同じ値を持つ（3.0.0 から。足すプラグインは自分の `plugins/hirai-project-method/` の `VERSION`・`plugin.json` とカタログの `hirai-project-method` の行の 3 つ）。`tests/smoke.sh` case 9 が一致を検証する。
 
 更新のしかたは [README の「更新する」](README.md#更新する既定では自動で新しくなりません)。**既定では自動更新しない**（v1.13.0 から opt-in で自動にできる）。
+
+## v3.0.0
+1.x（`hirai-lite`・1.16.0）と 2.x（`hirai-lite-v2`・2.9.0）の続き。**土台を `hirai-lite` に戻し、GitHub Project のタスク管理を足すプラグイン `hirai-project-method`（1.0.0）に分けた。** 配る系列は `main` の 1 本になり、2.x（`v2` ブランチ）は退役して凍結する（新しい版は出さない。`CHANGELOG.md` の 2.x の記録はそのまま残す）。破壊的変更を含むので 3.0.0 に上げる。設計の正本は rmp-app の `.tmp/harness/design-split.md`（2026-11-23 承認）。
+
+- **やることの形は `.claude/mode.yml` の `tasks:` が決める（自動では見分けない）。** `ledger`（既定・台帳 `docs/tasks/list.md`）と `github-project`。`tasks:` が無い・未知の値なら `ledger`。`/hirai-lite:new-task`・`start-task`・`finish-task`・`state`（save・resume・resume loop）・`init` は `ledger` のとき 1.x の台帳の手順で動き、尋ねて止まらず、GitHub に通信しない（remote 無し・GitHub 以外・gh の失敗・Project 0 件でも）。`github-project` のときだけ、足すプラグインの `hirai-task` を PATH で呼ぶ。`hirai-task` が無ければ `/plugin install hirai-project-method@hirai-lite` を 1 行で示して止まる（台帳へ落とさない）。2.x の「Project の『種別』で形を見分ける」は廃止した。
+- **足すプラグイン `hirai-project-method` 1.0.0**（`plugins/hirai-project-method/`）。`hirai-task`（`bin/`）・`/hirai-project-method:board`・`:project-setup`・skill `github-project`・`docs/rules-reference/project-setup.md`・`glossary.md` を `git mv` で移した（履歴は残る）。`plugin.json` の `dependencies` に `hirai-lite >=3.0.0`。`hirai-task line` を足した（会話の開始時と画面下部の 1 行。`--refresh` は開始時だけ）。呼び名の頭が `/hirai-lite:board`・`:project-setup` から `/hirai-project-method:…` に変わる。
+- **会話の開始時の表示に、版と効いている設定を出す**: `hirai-lite v3.0.0・tasks: ledger・worktree: off・notify: off`（5 行以内のまま。「進め方」の行の後ろ）。
+- **Orca の選べる機能（既定 off）**: `.claude/mode.yml` の `worktree: off|warn|block` と `notify: off|orca`。`worktree: block` のとき、新しい hook `hooks/worktree-guard.sh`（PreToolUse）が、Orca の worktree でない会話からの、リポの中の git に入るファイルの Edit・Write・NotebookEdit と `git commit` を止め、worktree の作り方を 1 行で示す。読み取り・リポの外・git に入らない場所への書き込み・`git switch`・`git checkout` は止めない。`rules/_meta.md` 条 5（機械強制は不可逆操作のみ）に、この 1 つの例外を足した（失効: `worktree: block` を外したとき）。`bin/hirai-notify`（`notify: orca` のとき、終わった・止まった・決めてもらうことができたをコーディネーターへ送る）と `scripts/orca-context.sh`（開始時の警告・知らせ方）を足した。
+- **進め方の直し**（2.x にだけあった改善を 1.x の利用者にも）: T0 の「設計の起点」を、新機能だけから現在形の文書を変えること全般へ。分かれ道（提案が要らない変更／決定だけ ADR／提案が要る変更）を `commands/new-draft.md` と `docs/rules-reference/design-process.md` に置いた。外で決まったことの受け方、PR の単位と作り方（1 PR = 1 task・本文に `Closes`）、merge を頼む前の確かめ（必須の検査の緑と AI レビューの合格。止まっているとき手元の CI の結果を PR に残す）、委譲のモデル・Workflow の args・branch の固定・否定の確かめ、「同種を横に探す」を subagent にも・「壊して確かめる」をテストにも、規則を変える PR で開いている PR に知らせる（`/add-rule`）。`scripts/pr-retarget.sh`（積み上げた PR の付け替え）を土台の道具にした。
+- **2.x から土台へ戻したもの**: 名前空間、組み込みのレビュー、tdd-guide の基準、MCP の二重読みの解消、更新フラグの案件別化、session-start の fd の直し、本体が見つからないときの exit 2、既定ブランチの引き方、draft の 12 節の雛形（`new-task` は §2・§10・§11-3 から写す）。
+- **`hirai-lite-v2` の決め打ちを外した**: 本体探し（`installed_plugins.json` の entry 名・cache の dir）は `hirai-lite`。更新の確認先は `main` の `VERSION`（`v2` から変更）。`HARNESS_V2_ENTRY_NAME` は `HARNESS_ENTRY_NAME`（値 `hirai-lite`）に改名。足すプラグインの控えの置き場は `~/.claude/plugins/data/hirai-project-method-hirai-lite/`。
+- **更新のときの移行**: `/hirai-lite:update` が、`mode.yml` に `tasks:` が無いときだけ 1 度書き込む（2.x の控え `data/hirai-lite-v2-hirai-lite/tasks-*.json` の `form` が `ghp` なら `github-project`、それ以外は `ledger`）。書いたことは 1 行で報告する。
+- **カタログ（`marketplace.json`）は 3 行**: `hirai-lite`（3.0.0・`source: "./"`）、`hirai-project-method`（1.0.0・`./plugins/hirai-project-method`）、`hirai-lite-v2`（2.9.0・`ref: v2` のまま。退役の案内）。足すプラグインの版の tag は `hirai-project-method--v<版>`、土台は `hirai-lite--v<版>`。
+- **数の予算**: hook 4/5（`worktree-guard.sh` が増えた）、skill 2/3（`github-project` が足すプラグインへ移った）、command 12（`board`・`project-setup` が移った）、smoke case 10/10（増やさず、既存の case に確かめを足した）。足すプラグインは command 2・skill 1。
+- **検査**: `tests/smoke.sh` の case 1 を、台帳の形 5 場合（remote 無し・GitHub 以外・gh が失敗・Project 0 件・`tasks: github-project` で hirai-task 無し）で冒頭と画面下部が尋ねず・gh を 1 回も呼ばないこと、`tasks: github-project` + 偽の hirai-task の表示に作り直した。case 8 は `tasks: github-project` と更新あり・入れ替えが同時でも 5 行以内。case 9 はカタログ 3 行・版・依存・`hirai-lite-v2` の決め打ちが無いこと。case 10 は本体探しが退役した `hirai-lite-v2` の大きい版に落ちないこと・足すプラグインの `hirai-task` の selftest。`worktree-guard` の止める・止めない・条 5 の全文は case 2・5 に足した。足すプラグインは `plugins/hirai-project-method/tests/smoke.sh`（6 case）。
+- **導入先で要る操作**:
+  1. 1.x から: `/plugin marketplace update hirai-lite` → `/plugin update hirai-lite@hirai-lite` → 開き直し → `/hirai-lite:update`。台帳の形のまま動く。
+  2. 2.x から: `/plugin install hirai-lite@hirai-lite` → `/plugin uninstall hirai-lite-v2@hirai-lite`（同じ範囲で）。GitHub Project で回すリポは `/plugin install hirai-project-method@hirai-lite` も。`.claude/settings.json` の `enabledPlugins` を書いているリポは entry 名を書き換える。開き直して `/hirai-lite:update`。
+  3. `worktree: block` を使うリポは、`rules/_meta.md` 条 5 の例外の全文を導入先の `_meta.md` にも入れる（`/hirai-lite:add-rule` の承認を通す）。
+- **未確認**: 実機での `dependencies` の解決と bin/ の PATH 入り、`worktree-guard.sh` の PreToolUse の deny の実機動作、Orca の Dispatch の担当の見分け（`hirai-notify` は `--dispatch-id` か環境変数 `HIRAI_DISPATCH_ID` で id を受ける。Orca は id を環境変数でなく担当の最初の前置きの文で渡す — `orca orchestration send --help`）、`orca orchestration send` の実送信。
 
 ## v2.9.0
 着手可の feature の子は、先の wave が出ていなくても着手できるようにした。rmp-app の裁定（2026-11-19・issue #1053・ADR-0760）: ユーザーが feature を 着手可 にしたことを「wave の門を越えてよい」の意思表示として扱う。wave の門は「承認待ちの feature を自動で着手可にしない」門として残る。

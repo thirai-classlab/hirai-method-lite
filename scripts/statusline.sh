@@ -100,17 +100,25 @@ case "$mode" in
   *)      mode_label="$mode";                mode_col="$DIM" ;;
 esac
 
-# 未完了タスク: GHP の形の控えがあれば置き換え、無ければ台帳の形 (名前も意味も不変)。
-# ここは通信しない (この scripts の既定方針) — 控えを読むだけで、取り直しは
-# session-start.sh の背景処理 (harness_ghp_refresh_async) に任せる。
-# GHP の形のときは見出し語も「あなたの番」に替える — 「やること 6（承認…」だと
-# 6 を Project 番号のように読めるため。
+# 未完了タスク: tasks: (mode.yml) が決める。ledger (既定) は台帳の件数、github-project は
+# 足すプラグインの `hirai-task line` (控えを読むだけ。--refresh を付けないので gh を叩かない。
+# 取り直しは session-start.sh が起こす)。github-project のときだけ見出し語を「あなたの番」に替える —
+# 「やること 6（承認…」だと 6 を Project 番号のように読めるため。
+# この複製は古い tasks-path.sh と組になることがある (harness_tasks_form が無い) — その場合は ledger。
 todo="—"
 todo_label="やること"
-if command -v harness_ghp_line >/dev/null 2>&1 && todo_ghp="$(harness_ghp_line "$root" 2>/dev/null)" \
-  && [ -n "$todo_ghp" ]; then
-  todo="$todo_ghp"
+tasks_form="ledger"
+if command -v harness_tasks_form >/dev/null 2>&1; then
+  tasks_form="$(harness_tasks_form "$root" 2>/dev/null || echo ledger)"
+fi
+if [ "$tasks_form" = "github-project" ]; then
   todo_label="あなたの番"
+  if command -v hirai-task >/dev/null 2>&1; then
+    todo_ghp="$(hirai-task line 2>/dev/null || true)"
+    [ -n "$todo_ghp" ] && todo="$todo_ghp"
+  else
+    todo="hirai-project-method が未導入"
+  fi
 elif command -v harness_tasks_file >/dev/null 2>&1; then
   list="$(harness_tasks_file "$root" 2>/dev/null || true)"
   if [ -n "$list" ] && [ -f "$list" ]; then todo="$(harness_open_tasks "$list")"; fi

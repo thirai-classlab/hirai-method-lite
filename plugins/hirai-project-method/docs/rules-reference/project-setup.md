@@ -2,7 +2,7 @@
 
 `/hirai-lite:init` が案内する、GitHub の形（GitHub Project にやることを載せる形）の立ち上げ手順。設定のファイルは作らない。共通の仕組みはプラグインに入っており、案件ごとの中身（wave・feature・順番・期日）は Project の中に持つ。
 
-**自動で立ち上げる（v2.7.0）**: `/hirai-lite:project-setup`（中身は `hirai-task setup`）が、下の手順 1 と 3（Project の作成・リポへの紐づけ・項目と Status の 8 値）と 6 章のビュー 8 枚を API で行う。最初は計画を出すだけで、承認してから書き込む。すでに Project があれば、足りないものだけを足す。組織のテンプレートの Project があれば `--from-template <owner>/<番号>` で複製する（ビュー・項目・auto-add 以外の自動化を引き継ぐ。[GitHub Docs: Copying an existing project](https://docs.github.com/en/issues/planning-and-tracking-with-projects/creating-projects/copying-an-existing-project)）。画面でしかできない作業（手順 2 と 7 章）は、URL と設定値の表で出す。
+**自動で立ち上げる（v2.7.0）**: `/hirai-project-method:project-setup`（中身は `hirai-task setup`）が、下の手順 1 と 3（Project の作成・リポへの紐づけ・項目と Status の 8 値）と 6 章のビュー 8 枚を API で行う。最初は計画を出すだけで、承認してから書き込む。すでに Project があれば、足りないものだけを足す。組織のテンプレートの Project があれば `--from-template <owner>/<番号>` で複製する（ビュー・項目・auto-add 以外の自動化を引き継ぐ。[GitHub Docs: Copying an existing project](https://docs.github.com/en/issues/planning-and-tracking-with-projects/creating-projects/copying-an-existing-project)）。画面でしかできない作業（手順 2 と 7 章）は、URL と設定値の表で出す。
 
 ## 1. 立ち上げの 4 手順
 
