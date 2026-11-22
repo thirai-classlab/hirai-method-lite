@@ -11,10 +11,15 @@ description: タスクを完了させる。完了条件のコマンドを実行�
 ```bash
 P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 [ -f "$P/scripts/tasks-path.sh" ] || { echo "プラグイン本体が見つからない"; exit 2; }
-. "$P/scripts/tasks-path.sh"; harness_tasks_form "$PWD"
+. "$P/scripts/tasks-path.sh"; harness_tasks_form "$PWD"; echo
+HT="$(harness_pm_task_bin 2>/dev/null || true)"; echo "hirai-task: ${HT:-なし}"
 ```
 
-exit code が 2 (プラグイン本体が見つからない) なら、その場で報告して停止する (台帳の手順にもフォールバックしない)。出力が `github-project` なら、下の「## GitHub Project の形の場合」だけを行い、以降の台帳の手順は行わない (台帳は作らず、書かない)。`ledger` なら、この節は無視して下の「## 台帳の解決」から続ける。
+exit code が 2 (プラグイン本体が見つからない) なら、その場で報告して停止する (台帳の手順にもフォールバックしない)。1 行目の出力が `github-project` なら、下の「
+
+**`hirai-task` は PATH に頼らず絶対 path で呼ぶ。** 上の 2 行目の `hirai-task: <絶対 path>` を `$HT` として、以降の `hirai-task <サブコマンド>` は `"$HT" <サブコマンド>` と読み替える（足すプラグインの `bin/` が PATH に入るのは Bash ツールだけで、hook と画面下には入らない。同じ関数でそろえてある）。`なし` なら、`github-project` の形では「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と 1 行で報告して終了する。
+
+## GitHub Project の形の場合」だけを行い、以降の台帳の手順は行わない (台帳は作らず、書かない)。`ledger` なら、この節は無視して下の「## 台帳の解決」から続ける。
 
 ## GitHub Project の形の場合
 
@@ -22,7 +27,7 @@ exit code が 2 (プラグイン本体が見つからない) なら、その場�
 
 1. issue `<task-id>` の本文の「完了条件」の節から検証コマンドを取り出す（`gh issue view <task-id> --json body --jq .body` などで読む）。1 つずつ実行し、1 つでも exit code が 0 以外なら、その出力の末尾 20 行を提示して停止する。完了条件が書かれていなければ `/hirai-lite:verify` を実行し、build / test / lint が全部 exit 0 になることを確認する。
 2. PR の `Closes` と base を確かめる。`gh pr view --json baseRefName,closingIssuesReferences` を実行する。`baseRefName` が既定ブランチ（`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` で引く）でない、または `closingIssuesReferences` が空なら、base を既定ブランチに直すか `Closes #<task-id>` を足すよう案内して停止する。
-3. `hirai-task review <task-id>` を呼ぶ（Status を レビュー中 に書くだけの補助。2 の確認はこのコマンドの役目ではない）。進行中の task にだけ使える（承認待ち・着手可などからは exit 2）。`command -v hirai-task` が無ければ「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と 1 行で報告して終了する（台帳の手順にもフォールバックしない）。
+3. `hirai-task review <task-id>` を呼ぶ（Status を レビュー中 に書くだけの補助。2 の確認はこのコマンドの役目ではない）。進行中の task にだけ使える（承認待ち・着手可などからは exit 2）。`$HT` が `なし` なら「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と 1 行で報告して終了する（台帳の手順にもフォールバックしない）。
 4. 台帳は読まない・書かない（GitHub Project の形は台帳を持たない）。実装の commit は通常の作業中（`/hirai-lite:commit` 等）に作られている前提とし、ここでは新たに commit を作らない。
 
 判定できる終了条件: 1・2 の確認が exit 0、かつ `hirai-task review` が exit 0 だったこと。1 つでも成立しなければ原因を 1 行で報告して停止する。

@@ -47,13 +47,21 @@ if command -v harness_tasks_form >/dev/null 2>&1; then
   tasks_form="$(harness_tasks_form "$root" 2>/dev/null || echo ledger)"
 fi
 if [ "$tasks_form" = "github-project" ]; then
-  if command -v hirai-task >/dev/null 2>&1; then
+  # hook の PATH にプラグインの bin/ は入らない (Bash ツールだけに入る)。PATH に頼らず
+  # harness_pm_task_bin (installed_plugins.json の最大版 → cache の最大版 → PATH) で絶対 path を引く。
+  pm_task=""
+  if command -v harness_pm_task_bin >/dev/null 2>&1; then
+    pm_task="$(harness_pm_task_bin 2>/dev/null || true)"
+  elif command -v hirai-task >/dev/null 2>&1; then
+    pm_task="$(command -v hirai-task)"
+  fi
+  if [ -n "$pm_task" ]; then
     # 件数は控えを読むだけ (通信しない)。取り直しは別に切り離して起こす。
     # **取り直しを $(...) の中で呼ばない。** hirai-task line --refresh は背景の子が出力の
     # パイプを持ったまま走るので、$(...) が子の終了まで戻らず、hook の 5 秒の timeout を食う。
     # 出力を捨て、stdin も閉じて、この shell の直下で切り離す。
-    ghp_line="$(hirai-task line 2>/dev/null || true)"
-    hirai-task line --refresh >/dev/null 2>&1 </dev/null &
+    ghp_line="$("$pm_task" line 2>/dev/null || true)"
+    "$pm_task" line --refresh >/dev/null 2>&1 </dev/null &
     if [ -n "$ghp_line" ]; then
       task_line="Project: あなたの番 ${ghp_line}"
     else
@@ -124,9 +132,19 @@ if [ -n "$state" ]; then
 else
   echo "[harness] 前回の続き: なし"
 fi
-[ -n "$update_line" ] && echo "$update_line"
-[ -n "$sync_line" ] && echo "$sync_line"
-# Orca の worktree の警告・知らせ方 (worktree / notify が off なら何も出ない)
-[ -f "$plugin_root/scripts/orca-context.sh" ] && CLAUDE_PROJECT_DIR="$root" bash "$plugin_root/scripts/orca-context.sh" 2>/dev/null
+# 更新の合図と入れ替えの報告は、重なっても 1 行にまとめる
+extra_line="$update_line"
+if [ -n "$sync_line" ]; then
+  if [ -n "$extra_line" ]; then extra_line="${extra_line} ／ ${sync_line#\[harness\] }"; else extra_line="$sync_line"; fi
+fi
+[ -n "$extra_line" ] && echo "$extra_line"
+# Orca の worktree の警告・知らせ方 (worktree / notify が off なら何も出ない)。
+# 何行出ても 1 行にまとめる (開始時の表示は 5 行以内: 設定 / タスク / 前回 / 更新 / Orca)。
+if [ -f "$plugin_root/scripts/orca-context.sh" ]; then
+  orca_out="$(CLAUDE_PROJECT_DIR="$root" bash "$plugin_root/scripts/orca-context.sh" 2>/dev/null || true)"
+  if [ -n "$orca_out" ]; then
+    printf '%s\n' "$orca_out" | awk 'NR==1{printf "%s", $0; next} {sub(/^\[harness\] /, ""); printf " ／ %s", $0} END{printf "\n"}'
+  fi
+fi
 
 exit 0

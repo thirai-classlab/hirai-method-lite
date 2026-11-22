@@ -66,7 +66,7 @@ merge 後に統合先ブランチ上で完了の印だけを直すことはで�
 
 **何が起きたか**: 下の PR が squash で入ったあと、上の PR の base を `gh pr edit --base` で付け替えた。付け替えが起こすのは `edited` だけで、CI もレビューも走らず、検査の結果は古い base で測ったまま残った。
 
-**どう対処するか**: `git fetch origin` → `git rebase --onto origin/<既定の branch> <下の PR の最後の commit> <上の branch>` → `git push --force-with-lease`（user の承認を取る）→ `bash scripts/pr-retarget.sh <PR 番号> <新しい base>`（プラグイン同梱）。閉じて開き直すので `reopened` で CI とレビューが起動する。付け替えのあとは `gh pr checks <n>` で新しい実行を待つ。
+**どう対処するか**: `git fetch origin` → `git rebase --onto origin/<既定の branch> <下の PR の最後の commit> <上の branch>` → `git push --force-with-lease`（user の承認を取る）→ `hirai-pr-retarget <PR 番号> <新しい base>`（土台の `bin/`。Bash ツールでは PATH に入る）。閉じて開き直すので `reopened` で CI とレビューが起動する。付け替えのあとは `gh pr checks <n>` で新しい実行を待つ。
 
 ---
 

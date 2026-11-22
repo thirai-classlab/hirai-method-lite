@@ -13,14 +13,19 @@ description: 承認済 draft から docs/tasks/task-<id>-<slug>.md を作り、d
 ```bash
 P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 [ -f "$P/scripts/tasks-path.sh" ] || { echo "プラグイン本体が見つからない"; exit 2; }
-. "$P/scripts/tasks-path.sh"; harness_tasks_form "$PWD"
+. "$P/scripts/tasks-path.sh"; harness_tasks_form "$PWD"; echo
+HT="$(harness_pm_task_bin 2>/dev/null || true)"; echo "hirai-task: ${HT:-なし}"
 ```
 
-exit code が 2 (プラグイン本体が見つからない) なら、その場で報告して停止する (台帳の手順にもフォールバックしない)。出力が `github-project` なら、下の「## GitHub Project の形の場合」だけを行い、以降の台帳の手順は行わない (台帳は作らず、書かない)。`ledger` なら、この節は無視して下の「## 台帳の解決」から続ける。
+exit code が 2 (プラグイン本体が見つからない) なら、その場で報告して停止する (台帳の手順にもフォールバックしない)。1 行目の出力が `github-project` なら、下の「
+
+**`hirai-task` は PATH に頼らず絶対 path で呼ぶ。** 上の 2 行目の `hirai-task: <絶対 path>` を `$HT` として、以降の `hirai-task <サブコマンド>` は `"$HT" <サブコマンド>` と読み替える（足すプラグインの `bin/` が PATH に入るのは Bash ツールだけで、hook と画面下には入らない。同じ関数でそろえてある）。`なし` なら、`github-project` の形では「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と 1 行で報告して終了する。
+
+## GitHub Project の形の場合」だけを行い、以降の台帳の手順は行わない (台帳は作らず、書かない)。`ledger` なら、この節は無視して下の「## 台帳の解決」から続ける。
 
 ## GitHub Project の形の場合
 
-台帳は読まない・作らない・書かない。`command -v hirai-task` が無ければ「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と 1 行で報告して終了する（台帳の手順にもフォールバックしない）。題名が無ければ聞き返して停止する。
+台帳は読まない・作らない・書かない。`$HT` が `なし` なら「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と 1 行で報告して終了する（台帳の手順にもフォールバックしない）。題名が無ければ聞き返して停止する。
 
 `hirai-task new` は issue を作るだけで、親の決め方や依存の張り方は決めない。決めてから `new` を呼ぶ。判定はここで、書き込みは `hirai-task` で行う。
 

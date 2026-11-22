@@ -24,7 +24,7 @@
 | ファイル | 内容 | 読むとき |
 |---|---|---|
 | [`approval-template.md`](approval-template.md) | **人に頼むときの型（承認カード・判断カード・人の作業カード）**と記入例 5 つ、悪い例と良い例、使う場面の一覧 | 承認・判断・人の作業を頼むとき（着手 / ルール追加 / 設計 / 設定変更 / 元に戻せない操作 / 裁定 / 外部の手続き） |
-| [`glossary.md`](glossary.md) | **進め方の用語**（段・機能のまとまり・作業・8 つの状態・目印・カード） | 案件を知らない人がカードやボードを読むとき |
+| `glossary.md`（足すプラグイン hirai-project-method の `docs/rules-reference/`） | **進め方の用語**（段・機能のまとまり・作業・8 つの状態・目印・カード）。`tasks: github-project` のリポだけ | 案件を知らない人がカードやボードを読むとき |
 | [`incidents.md`](incidents.md) | **このハーネスで起きた**事故の台帳。1 事故 = 1 行、再発回数つき | 事故が起きたとき / 2 回目かを判定するとき |
 | [`incidents-legacy.md`](incidents-legacy.md) | **前ハーネスで起きた**事故 33 件。参考資料で、判定には使わない | 過去に同種の事例があったか調べるとき |
 | [`subagent-operations.md`](subagent-operations.md) | 並列起動数の実測、委譲、共有ファイル競合、ファイル間契約、委譲先の検証 | subagent を立てる前 |

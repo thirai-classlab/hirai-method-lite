@@ -16,6 +16,9 @@
 # 読む人   : プラグインの hooks/session-start.sh と scripts/statusline.sh
 # 設定の 3 項目 (tasks / worktree / notify) は、下の auto_sync のあとに置いている。会話の開始時に、
 # 版と効いている 3 項目が 1 行で出る。
+# 読む順 : 項目ごとに「環境変数 → プロジェクトのこのファイル → ホームの ~/.claude/mode.yml → 既定」。
+#          値は " や ' で囲んでもよく、行末に # のコメントを書いてもよい。
+# tasks / worktree / notify はプロジェクトのこのファイルにだけ書く (ホームに書くと他のリポにも効く)。
 mode: normal
 
 # auto_sync（更新後の入れ替え） — 値は on か off の 2 つだけ。**既定は off。**

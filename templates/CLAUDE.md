@@ -40,6 +40,7 @@
 | `docs/architecture.md` | 構成 / データの持ち方 / 技術判断とその理由 |
 | `docs/tasks/list.md` | やること一覧（台帳）。**いまどこまで進んでいるかもここで分かる**（進捗表は別に作らない）。`.claude/mode.yml` が `tasks: github-project` のリポは、この行を「GitHub Project」に置き換える（立ち上げは `/hirai-project-method:project-setup`） |
 | `docs/draft/` | 設計メモ（承認後に task 化） |
+| `docs/adr/` | 決定の記録（ADR。1 決定 = 1 ファイル。置き場を変えたら、この行も直す） |
 | `docs/rules-reference/` | 背景・事故記録・承認の型（必要なとき読む） |
 
 `.claude/rules/` のルールは、この表に書かなくても自動で読み込まれる（frontmatter 無し = 常時 / `paths:` 付き = 該当ファイルを触った時）。この表は所在を把握するためのもの。**実在しない行は消す**（`/hirai-lite:init` の 2 回目が実際に作った分だけ残す）。

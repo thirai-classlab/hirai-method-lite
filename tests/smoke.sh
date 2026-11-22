@@ -382,6 +382,67 @@ EOF6
   rm -rf "$gw"
   if [ -n "$bad5" ]; then fail 1 "tasks: の形で やること が出る (台帳の形 5 場合は尋ねず・GraphQL を打たない)" "$bad5"; return; fi
 
+  # --- 足すプラグインの道具の場所・mode.yml の読み方・2.x からの移行・台帳の作り分け (1 巡目の直し) ---
+  # hook と画面下では足すプラグインの bin/ は PATH に入らない。PATH に hirai-task が無くても、
+  # installed_plugins.json の版が最大の行 (先頭でも末尾でもない並びで置く) から見つけること。
+  # 値の引用符・行末コメント・ホームとプロジェクトの順・末尾 / の remote は /bin/bash (3.2) で見る。
+  local mw mhome mpm mrepo mout msl mbad="" mblk mu mo
+  mw="$(mktemp -d)"; mhome="$mw/home"; mpm="$mw/pm/1.0.0"; mrepo="$mw/repo"
+  mkdir -p "$mhome/.claude/plugins" "$mpm/bin" "$mrepo/.claude"; git -C "$mrepo" init -q 2>/dev/null
+  printf '#!/usr/bin/env bash\n[ "$1" = line ] && echo "7（承認 3・裁定 1・取り込み 3）／進行中 2／待ち解け —"\nexit 0\n' > "$mpm/bin/hirai-task"
+  chmod +x "$mpm/bin/hirai-task"
+  printf '{"plugins":{"hirai-project-method@hirai-lite":[{"version":"0.9.0","installPath":"%s/n1"},{"version":"1.0.0","installPath":"%s"},{"version":"0.1.0","installPath":"%s/n2"}]}}\n' \
+    "$mw" "$mw/pm/1.0.0" "$mw" > "$mhome/.claude/plugins/installed_plugins.json"
+  printf 'tasks: "github-project"  # c\nnotify: '"'orca'"'\nworktree: "block" # x\n' > "$mrepo/.claude/mode.yml"
+  mout="$(env -i HOME="$mhome" PATH=/usr/bin:/bin CLAUDE_PLUGIN_ROOT="$ROOT" CLAUDE_PROJECT_DIR="$mrepo" /bin/bash "$HOOKS/session-start.sh" 2>&1 </dev/null)"
+  printf '%s' "$mout" | grep -qF 'Project: あなたの番 7' || mbad="$mbad [PATH に hirai-task 無し] 開始時が足すプラグインを見つけない: $mout"
+  printf '%s' "$mout" | grep -qF 'tasks: github-project' || mbad="$mbad [引用符・行末コメント] tasks: が読めない: $mout"
+  [ "$(printf '%s\n' "$mout" | grep -c . || true)" -le 5 ] || mbad="$mbad [notify: orca] 開始時が 5 行を超えた"
+  printf '%s' "$mout" | grep -qF 'notify: orca' || mbad="$mbad [notify: 'orca'] 引用符つきの値が読めない"
+  msl="$(printf '{"context_window":{"used_percentage":12}}' | env -i HOME="$mhome" PATH=/usr/bin:/bin TMPDIR="$mw" NO_COLOR=1 \
+         CLAUDE_PROJECT_DIR="$mrepo" /bin/bash "$ROOT/scripts/statusline.sh" 2>&1)"
+  printf '%s' "$msl" | grep -qF 'あなたの番 7' || mbad="$mbad [PATH に hirai-task 無し] 画面下が足すプラグインを見つけない: $msl"
+  # ホームとプロジェクトの順: 項目ごとにプロジェクト > ホーム。プロジェクトに無い項目はホームを読む
+  printf 'tasks: github-project\nnotify: orca\n' > "$mhome/.claude/mode.yml"
+  rm -f "$mrepo/.claude/mode.yml"
+  mu="$(cd "$mrepo" && HOME="$mhome" /bin/bash -c ". \"$ROOT/scripts/tasks-path.sh\"; harness_tasks_form \"\$PWD\"")"
+  [ "$mu" = github-project ] || mbad="$mbad [ホームだけ] tasks: がホームから読めない: ${mu}"
+  printf 'tasks: ledger\nworktree: block\n' > "$mrepo/.claude/mode.yml"
+  mu="$(cd "$mrepo" && HOME="$mhome" /bin/bash -c ". \"$ROOT/scripts/tasks-path.sh\"; harness_tasks_form \"\$PWD\"")"
+  [ "$mu" = ledger ] || mbad="$mbad [両方] プロジェクトの tasks: がホームに負けた: ${mu}"
+  mo="$(cd "$mrepo" && HOME="$mhome" /bin/bash -c ". \"$ROOT/scripts/tasks-path.sh\"; harness_yml_value \"\$PWD\" notify")"
+  [ "$mo" = orca ] || mbad="$mbad [項目ごと] プロジェクトに無い notify: をホームから読まない: ${mo}"
+  # /update 手順 2b を逐語に取り出して実行する。2.x の控え (末尾 / の remote) があれば github-project を書き、
+  # 痕跡が無ければ推定で書かず、どちらもホームの mode.yml は作らない。
+  mblk="$(awk '/^## 手順 2b/ {s=1} s && /^```bash$/ {c=1; next} c && /^```$/ {exit} c' "$ROOT/commands/update.md")"
+  if [ -z "$mblk" ]; then mbad="$mbad [2b] update.md から手順 2b の bash を取り出せない"; else
+    rm -rf "$mhome/.claude/mode.yml" "$mrepo/.claude/mode.yml"
+    git -C "$mrepo" remote add origin https://github.com/acme/widgets/ 2>/dev/null
+    mout="$(cd "$mrepo" && env HOME="$mhome" CLAUDE_PLUGIN_ROOT="$ROOT" /bin/bash -c "$mblk" 2>&1)"
+    printf '%s' "$mout" | grep -qF '2.x の痕跡なし' || mbad="$mbad [2b] 2.x の痕跡が無いのに推定で書いた/案内しない: $mout"
+    [ -e "$mrepo/.claude/mode.yml" ] && mbad="$mbad [2b] 2.x の痕跡が無いのに tasks: を書いた"
+    mkdir -p "$mhome/.claude/plugins/data/hirai-lite-v2-hirai-lite"
+    printf '{"form": "ghp"}\n' > "$mhome/.claude/plugins/data/hirai-lite-v2-hirai-lite/tasks-acme-widgets.json"
+    mout="$(cd "$mrepo" && env HOME="$mhome" CLAUDE_PLUGIN_ROOT="$ROOT" /bin/bash -c "$mblk" 2>&1)"
+    grep -qx 'tasks: github-project' "$mrepo/.claude/mode.yml" 2>/dev/null \
+      || mbad="$mbad [2b] 末尾 / の remote で 2.x の控えを見つけて github-project を書かない: $mout"
+    [ -e "$mhome/.claude/mode.yml" ] && mbad="$mbad [2b] ホームの mode.yml を作った"
+  fi
+  # /init 手順 7: tasks: github-project のリポには台帳 (list.md・parking-lot.md) を作らず、ledger (既定) では作る
+  mblk="$(awk '/^## 7\. / {s=1} s && /^```bash$/ {c=1; next} c && /^```$/ {exit} c' "$ROOT/commands/init.md")"
+  if [ -z "$mblk" ]; then mbad="$mbad [init 7] init.md から手順 7 の bash を取り出せない"; else
+    mkdir -p "$mw/g/.claude" "$mw/l"
+    printf 'tasks: github-project\n' > "$mw/g/.claude/mode.yml"
+    (cd "$mw/g" && env HOME="$mhome" CLAUDE_PLUGIN_ROOT="$ROOT" /bin/bash -c "$mblk") >/dev/null 2>&1
+    { [ -e "$mw/g/docs/tasks/list.md" ] || [ -e "$mw/g/docs/tasks/parking-lot.md" ]; } && mbad="$mbad [init 7] github-project のリポに台帳を作った"
+    [ -e "$mw/g/docs/rules-reference/incidents.md" ] || mbad="$mbad [init 7] github-project のリポに事故記録が無い"
+    rm -f "$mhome/.claude/mode.yml"
+    (cd "$mw/l" && env HOME="$mhome" CLAUDE_PLUGIN_ROOT="$ROOT" /bin/bash -c "$mblk") >/dev/null 2>&1
+    { [ -e "$mw/l/docs/tasks/list.md" ] && [ -e "$mw/l/docs/tasks/parking-lot.md" ]; } || mbad="$mbad [init 7] ledger のリポに台帳を作らない"
+  fi
+  rm -rf "$mw"
+  if [ -n "$mbad" ]; then fail 1 "足すプラグインの道具は PATH 無しで見つかり、mode.yml は引用符・順を守って読まれ、移行と init は形に従う" "$mbad"; return; fi
+
   # --- new-task / start-task / finish-task: 形の見分け (harness_tasks_form) を先に行い、
   # GitHub Project の形の節は hirai-task を呼ぶだけで台帳 (list.md 系) を読み書きしない。
   # 土台は足すプラグインの関数 (harness_ghp_*) を直接呼ばない。
@@ -409,7 +470,7 @@ EOF6
   fi
   if [ -n "$bad6" ]; then fail 1 "new-task・start-task・finish-task は形の見分けを先に行い、github-project の形で hirai-task を呼び、台帳を書かない" "$bad6"; return; fi
 
-  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く / /update 手順 2-2 の移行は中身を保ち同名は上書きせず両方残し、移行後は冒頭と画面下部が docs/ の台帳を読む / /init 第 2 段階は 事実収集 → 範囲提示 → grilling 呼び出し の順で、事実収集の bash は中身ありでも空でも exit 0、grilling へ渡す指示に範囲の制約 (調達・法務へ踏み込まない / 不要な質問は落とす / 事実は自分で調べる) が入っている / tasks: の形は mode.yml が決め (自動で見分けない)、台帳の形 5 場合 (remote 無し・GitHub 以外・gh が失敗・Project 0 件・tasks: github-project で hirai-task 無し) で冒頭と画面下部が尋ねず exit 0・5 行以内・gh を 1 回も呼ばず、hirai-task 無しは入れ方を 1 行示し、tasks: github-project + hirai-task は冒頭が取り直しを待たず画面下部が --refresh を付けずに あなたの番 を出す / new-task・start-task・finish-task は形の見分けを先に行い、GitHub Project の形の節は hirai-task を呼び入れ方を示し台帳を書かず、土台は harness_ghp_* を直接呼ばない"
+  pass 1 "session-start.sh は対象ファイル不在でも exit 0 / ${lines} 行 / [harness] prefix あり / statusline も空 stdin・壊れた JSON・控え不在/空/壊れで 2 行 + 設定リンク常時 + exit 0 (色あり/NO_COLOR とも) / 進め方は置き場 5 通りで冒頭と画面下部が一致し /config は在る側に書く / /update 手順 2-2 の移行は中身を保ち同名は上書きせず両方残し、移行後は冒頭と画面下部が docs/ の台帳を読む / /init 第 2 段階は 事実収集 → 範囲提示 → grilling 呼び出し の順で、事実収集の bash は中身ありでも空でも exit 0、grilling へ渡す指示に範囲の制約 (調達・法務へ踏み込まない / 不要な質問は落とす / 事実は自分で調べる) が入っている / tasks: の形は mode.yml が決め (自動で見分けない)、台帳の形 5 場合 (remote 無し・GitHub 以外・gh が失敗・Project 0 件・tasks: github-project で hirai-task 無し) で冒頭と画面下部が尋ねず exit 0・5 行以内・gh を 1 回も呼ばず、hirai-task 無しは入れ方を 1 行示し、tasks: github-project + hirai-task は冒頭が取り直しを待たず画面下部が --refresh を付けずに あなたの番 を出す / PATH に hirai-task が無くても開始時と画面下が installed_plugins.json の版が最大の行から足すプラグインを見つけ、mode.yml の引用符・行末コメントを外して読み、項目ごとにプロジェクト > ホームの順で読み、notify: orca でも開始時は 5 行以内、/update 手順 2b は末尾 / の remote でも 2.x の控えを見つけて github-project を書き痕跡が無ければ書かずホームに書かず、/init 手順 7 は ledger のときだけ台帳を作る (/bin/bash 3.2) / new-task・start-task・finish-task は形の見分けを先に行い、GitHub Project の形の節は hirai-task を呼び入れ方を示し台帳を書かず、土台は harness_ghp_* を直接呼ばない"
 }
 
 # ---------- case 2: UserPromptSubmit の 2 本は、出してよい時だけ出す ----------
@@ -581,6 +642,77 @@ EOF_GUARD
   [ -z "$gout" ] || bad="$bad [guard:worktree の項目が無いのに止めた] ${gout}"
   git -C "$gm" worktree remove --force "$gl" 2>/dev/null
   rm -rf "$gw"
+  # (c2) 守るリポの決め方・コマンド形の読み取り・jq 無し (1 巡目の直し)。block のリポ P と無印のリポ Q を置き、
+  # cwd ではなく**操作の対象**のリポで決めること、`git commit` の形が崩れても落とさないこと、heredoc の本文と
+  # --dry-run を止めないこと、.tmp/ と .claude/state/ を止めないこと、jq が無くても python3 で読むことを見る。
+  local g2w g2p g2q g2n g2bin g2t g2i=0 g2c g2out g2got
+  g2w="$(mktemp -d)"; g2p="$g2w/P"; g2q="$g2w/Q"; g2n="$g2w/NR"
+  mkdir -p "$g2p/.claude" "$g2q" "$g2n" "$g2w/home" "$g2w/bin"
+  for g2c in "$g2p" "$g2q"; do
+    git -C "$g2c" init -q 2>/dev/null; printf 'x\n' > "$g2c/a.txt"; git -C "$g2c" add -A 2>/dev/null
+    git -C "$g2c" -c user.name=t -c user.email=t@example.com commit -q -m init 2>/dev/null
+  done
+  printf 'worktree: "block"  # c\n' > "$g2p/.claude/mode.yml"
+  # g2 <名前> <deny|pass> <JSON> [bash の実行ファイル] [PATH]
+  g2() {
+    g2out="$(printf '%s' "$3" | env -u ORCA_WORKTREE_ID -u HC_WORKTREE HOME="$g2w/home" CLAUDE_PROJECT_DIR="${G2_PROJ:-$g2p}" \
+             PATH="${5:-$PATH}" "${4:-bash}" "$wg" 2>&1)"; g2got=$?
+    [ "$g2got" -eq 0 ] || { bad="$bad [guard2:$1] exit=${g2got}"; return; }
+    if printf '%s' "$g2out" | grep -q '"permissionDecision": *"deny"'; then g2got=deny; else g2got=pass; fi
+    [ "$g2got" = "$2" ] || bad="$bad [guard2:$1] 期待=$2 実際=${g2got}: ${g2out}"
+  }
+  g2b() { jq -nc --arg c "$1" --arg d "$2" '{tool_name:"Bash",cwd:$d,tool_input:{command:$c}}'; }
+  g2e() { jq -nc --arg f "$1" --arg d "$2" '{tool_name:"Edit",cwd:$d,tool_input:{file_path:$f}}'; }
+  # 守るリポは操作の対象で決める (cwd ではない)
+  g2 "別リポへの git -C commit (P から Q)" pass "$(g2b "git -C $g2q commit -m x" "$g2p")"
+  G2_PROJ="$g2q" g2 "別リポへの git -C commit (Q から P)" deny "$(g2b "git -C $g2p commit -m x" "$g2q")"
+  g2 "別リポの Edit (cwd は P)" pass "$(g2e "$g2q/a.txt" "$g2p")"
+  G2_PROJ="$g2q" g2 "P の Edit (cwd は Q)" deny "$(g2e "$g2p/a.txt" "$g2q")"
+  g2 "P の Edit (cwd が非リポ)" deny "$(g2e "$g2p/a.txt" "$g2n")"
+  g2 "cwd が非リポの git commit" deny "$(g2b 'git commit -m x' "$g2n")"
+  G2_PROJ="$g2q" g2 "cwd が非リポの git -C P commit" deny "$(g2b "git -C $g2p commit -m x" "$g2n")"
+  # 止めない場所
+  g2 ".tmp/ は .gitignore に無くても通す" pass "$(g2e "$g2p/.tmp/x.md" "$g2p")"
+  g2 ".claude/state/ は通す" pass "$(g2e "$g2p/.claude/state/latest.md" "$g2p")"
+  g2 "docs/ の新規は止める" deny "$(g2e "$g2p/docs/n.md" "$g2p")"
+  g2 "--dry-run は通す" pass "$(g2b 'git commit --dry-run' "$g2p")"
+  g2 "--help は通す" pass "$(g2b 'git commit --help' "$g2p")"
+  g2 "heredoc の本文の git commit は通す" pass "$(g2b $'cat > .tmp/s.md <<\'EOF\'\ngit commit -m "feat: x"\nEOF' "$g2p")"
+  g2 "heredoc の後ろの本物は止める" deny "$(g2b $'cat <<EOF >/dev/null\nhi\nEOF\ngit commit -m x' "$g2p")"
+  # commit の形 12 + 引用符つきの空白 path の -C + バックスラッシュ改行 + &&
+  while IFS= read -r g2c; do
+    [ -n "$g2c" ] || continue; g2i=$((g2i + 1))
+    g2 "M1-${g2i}: ${g2c}" deny "$(g2b "$g2c" "$g2p")"
+  done <<'EOF_M1'
+if true; then git commit -m x; fi
+{ git commit -m x; }
+for i in 1; do git commit -m x; done
+! git commit -m x
+time git commit -m x
+env GIT_EDITOR=true git commit -m x
+echo a | xargs git commit -m
+bash -c 'git commit -m x'
+/usr/bin/git commit -m x
+GIT_AUTHOR_NAME="a b" git commit -m x
+git --git-dir=.git --work-tree=. commit -m x
+pnpm ci:local && git commit -m x
+EOF_M1
+  mkdir -p "$g2w/sp dir/.claude"; git -C "$g2w/sp dir" init -q 2>/dev/null; printf 'worktree: block\n' > "$g2w/sp dir/.claude/mode.yml"
+  G2_PROJ="$g2q" g2 "-C の引用符つき空白 path" deny "$(g2b "git -C \"$g2w/sp dir\" commit -m x" "$g2q")"
+  g2 "バックスラッシュ改行" deny "$(g2b $'git \\\ncommit -m x' "$g2p")"
+  g2 "git log --grep commit は通す" pass "$(g2b 'git log --grep commit' "$g2p")"
+  g2 "bash 3.2 でも止める" deny "$(g2b 'git commit -m x' "$g2p")" /bin/bash
+  # jq が無いとき: python3 で読んで止める。jq も python3 も無いときは止めず (fail-open) 無出力
+  for g2t in bash sh cat sed awk head git env dirname basename tr python3 mktemp grep ls uname; do
+    command -v "$g2t" >/dev/null 2>&1 && ln -sf "$(command -v "$g2t")" "$g2w/bin/$g2t"
+  done
+  g2 "jq 無し (python3 あり) の git commit" deny "$(g2b 'git commit -m x' "$g2p")" /bin/bash "$g2w/bin"
+  g2 "jq 無し (python3 あり) の Edit" deny "$(g2e "$g2p/a.txt" "$g2p")" /bin/bash "$g2w/bin"
+  rm -f "$g2w/bin/python3"
+  g2 "jq も python3 も無いときは止めない" pass "$(g2b 'git commit -m x' "$g2p")" /bin/bash "$g2w/bin"
+  g2out="$(env -u ORCA_WORKTREE_ID -u HC_WORKTREE PATH="$g2w/bin" CLAUDE_PROJECT_DIR="$g2p" HOME="$g2w/home" /bin/bash "$ROOT/scripts/orca-context.sh" 2>&1)"
+  printf '%s' "$g2out" | grep -qF '止まりません' || bad="$bad [orca-context:jq も python3 も無いのに止まると言う] ${g2out}"
+  rm -rf "$g2w"
   # hooks.json が PreToolUse を worktree-guard.sh に結んでいる (hook 本体があっても結ばれていなければ働かない)
   python3 - "$ROOT/hooks/hooks.json" <<'PYEOF' || bad="$bad [hooks.json に PreToolUse の worktree-guard.sh が結ばれていない]"
 import json, sys
@@ -591,7 +723,7 @@ sys.exit(0 if ok else 1)
 PYEOF
   if [ -n "$bad" ]; then fail 2 "止める手段と fail-open" "$bad"; return; fi
 
-  pass 2 "context-budget.sh は既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% ちょうどで発火 / loop-reminder.sh は置き場 6 通りで loop のときだけ ${lines} 行を出し normal では 1 バイトも出さない (要点 4 つ入り・全行 [harness] 始まり) / HC_LOOP_REMINDER=off・大文字 LOOP・壊れた/読めない mode.yml・共通ライブラリ不在でも exit 0 無出力 / worktree-guard.sh は worktree: block のとき、Orca の worktree でない会話からの git に入るファイルの Edit・Write と git commit を止めて worktree の作り方を出し (6 場合)、.tmp・リポの外・git switch・git checkout -b・読み取り・Orca の worktree の編集と commit・off・warn は通し (9 場合)、壊れた入力は fail-open、mode.yml の項目で働き、hooks.json の PreToolUse に結ばれている"
+  pass 2 "context-budget.sh は既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% ちょうどで発火 / loop-reminder.sh は置き場 6 通りで loop のときだけ ${lines} 行を出し normal では 1 バイトも出さない (要点 4 つ入り・全行 [harness] 始まり) / HC_LOOP_REMINDER=off・大文字 LOOP・壊れた/読めない mode.yml・共通ライブラリ不在でも exit 0 無出力 / worktree-guard.sh は worktree: block のとき、Orca の worktree でない会話からの git に入るファイルの Edit・Write と git commit を止めて worktree の作り方を出し (6 場合)、.tmp・リポの外・git switch・git checkout -b・読み取り・Orca の worktree の編集と commit・off・warn は通し (9 場合)、壊れた入力は fail-open、mode.yml の項目で働き、hooks.json の PreToolUse に結ばれている / 守るリポは cwd ではなく操作の対象 (git -C・Edit の file_path) で決め (別リポ・cwd が非リポ 7 場合)、git commit の形 12 と引用符つき -C・バックスラッシュ改行を止め、heredoc の本文・--dry-run・--help・.tmp/・.claude/state/ は止めず、/bin/bash 3.2 でも止め、jq 無しは python3 で読み、どちらも無ければ止めずに orca-context が「止まりません」と言う"
 }
 
 # ---------- case 3: 閾値超過で 1 度だけ発火 ----------
@@ -1862,9 +1994,73 @@ JSONEOF
   fi
   grep -q '/tmp/rules' "$ROOT/commands/update.md" \
     && pr_bad="$pr_bad 控えが /tmp 直下に置かれている (再起動で消えるうえ他の利用者と混ざる)"
+
+  # (g) hirai-notify の 6 経路 (1 巡目の直し)。偽の orca が引数を記録する。/bin/bash (3.2)・UTF-8・サブ dir・相対 path で打つ:
+  #   H1 サブ dir から打っても root の mode.yml を読む (値は引用符つき) / H2 <file> を絶対 path に直し無ければ exit 2 /
+  #   DC-03 本文は <絶対 path>｜<要約> (波括弧なしの変数は bash 3.2 の全角の区切りで壊れる) / M4 値の無い --to・--dispatch-id は exit 2 /
+  #   M6 引数が環境変数より先・両方の引数なら --dispatch-id / notify: off は何もしない。
+  local nw nbin nlog nrepo nsub nabs nrc nline nb=""
+  nw="$(mktemp -d)"; nbin="$nw/bin"; nlog="$nw/orca.log"; nrepo="$nw/repo"; nsub="$nrepo/apps/api"
+  mkdir -p "$nbin" "$nsub" "$nrepo/.claude" "$nw/home"; git -C "$nrepo" init -q 2>/dev/null
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$nlog" > "$nbin/orca"; chmod +x "$nbin/orca"
+  printf 'notify: "orca"  # c\n' > "$nrepo/.claude/mode.yml"
+  printf 'q\n' > "$nrepo/.tmp-q.md"; nabs="$(cd "$nrepo" && pwd -P)/.tmp-q.md"
+  # nrun <引数...> -> サブ dir から /bin/bash で打つ。exit は nrc、記録は nlog
+  nrun() {
+    : > "$nlog"
+    ( cd "$nsub" && env -i HOME="$nw/home" PATH="$nbin:/usr/bin:/bin" LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 ${NENV:-NOP=1} \
+        /bin/bash "$ROOT/bin/hirai-notify" "$@" ) >/dev/null 2>&1
+    nrc=$?
+  }
+  nrun question ../../.tmp-q.md 要約A --to run:R1
+  nline="$(cat "$nlog")"
+  { [ "$nrc" -eq 0 ] && printf '%s' "$nline" | grep -qF -- "--body ${nabs}｜要約A" && printf '%s' "$nline" | grep -qF -- '--to run:R1'; } \
+    || nb="$nb [サブ dir・相対 path・引用符つき notify から question] exit=${nrc} 記録=[${nline}] (期待: --body ${nabs}｜要約A)"
+  nrun done ../../.tmp-q.md 要約B --to run:R1
+  nline="$(cat "$nlog")"
+  { [ "$nrc" -eq 0 ] && printf '%s' "$nline" | grep -qF -- "--body ${nabs}｜要約B" && printf '%s' "$nline" | grep -qF -- '--subject 完了: 要約B'; } \
+    || nb="$nb [done --to] exit=${nrc} 記録=[${nline}]"
+  nrun stopped ../../.tmp-q.md 要約C --dispatch-id d1
+  nline="$(cat "$nlog")"
+  { [ "$nrc" -eq 0 ] && printf '%s' "$nline" | grep -qF -- "--report-path ${nabs}" && printf '%s' "$nline" | grep -qF -- '--outcome failed' \
+      && printf '%s' "$nline" | grep -qF -- '--dispatch-id d1'; } || nb="$nb [stopped --dispatch-id] exit=${nrc} 記録=[${nline}]"
+  nrun done ../../.tmp-q.md 要約D --to run:X --dispatch-id d2
+  nline="$(cat "$nlog")"
+  { [ "$nrc" -eq 0 ] && printf '%s' "$nline" | grep -qF -- '--dispatch-id d2' && ! printf '%s' "$nline" | grep -qF -- '--to run:X'; } \
+    || nb="$nb [--to と --dispatch-id の両方] --dispatch-id を採らない exit=${nrc} 記録=[${nline}]"
+  NENV="HIRAI_DISPATCH_ID=d-OLD" nrun question ../../.tmp-q.md 要約E --to run:NEW
+  nline="$(cat "$nlog")"
+  { [ "$nrc" -eq 0 ] && printf '%s' "$nline" | grep -qF -- '--to run:NEW' && ! printf '%s' "$nline" | grep -qF 'd-OLD'; } \
+    || nb="$nb [環境変数の Dispatch が明示の --to に勝った] exit=${nrc} 記録=[${nline}]"
+  nrun done ../../.tmp-q.md 要約F --to
+  { [ "$nrc" -eq 2 ] && [ ! -s "$nlog" ]; } || nb="$nb [値の無い --to] exit=${nrc} (期待 2・送らない)"
+  nrun done ../../.tmp-q.md 要約F --dispatch-id
+  { [ "$nrc" -eq 2 ] && [ ! -s "$nlog" ]; } || nb="$nb [値の無い --dispatch-id] exit=${nrc} (期待 2・送らない)"
+  nrun done 要約G ../../.tmp-q.md --to run:R1
+  { [ "$nrc" -eq 2 ] && [ ! -s "$nlog" ]; } || nb="$nb [<file> と <要約> の取り違え] exit=${nrc} (期待 2・送らない)"
+  printf 'notify: off\n' > "$nrepo/.claude/mode.yml"
+  nrun done ../../.tmp-q.md 要約H --to run:R1
+  { [ "$nrc" -eq 0 ] && [ ! -s "$nlog" ]; } || nb="$nb [notify: off] exit=${nrc} 送った: $(cat "$nlog")"
+  rm -rf "$nw"
+  [ -z "$nb" ] || pr_bad="$pr_bad hirai-notify:${nb}"
+
+  # (h) 3.0.0 の直しが残っている: pr-retarget は bin/ にあり scripts/ に無い (Bash ツールでは土台の bin/ が PATH に入る) /
+  # 承認ビューの節の本体は足すプラグインにあり土台の approval-template には指しだけ / 設計の起点は 3 行以内
+  [ -x "$ROOT/bin/hirai-pr-retarget" ] || pr_bad="$pr_bad bin/hirai-pr-retarget が実行できない"
+  [ ! -e "$ROOT/scripts/pr-retarget.sh" ] || pr_bad="$pr_bad scripts/pr-retarget.sh が残っている (bin/hirai-pr-retarget へ移したはず)"
+  grep -rn 'pr-retarget\.sh' "$ROOT/rules" "$ROOT/commands" "$ROOT/docs" "$ROOT/README.md" "$ROOT/templates" 2>/dev/null | grep -q . \
+    && pr_bad="$pr_bad 旧い pr-retarget.sh の名前が残っている: $(grep -rn 'pr-retarget\.sh' "$ROOT/rules" "$ROOT/commands" "$ROOT/docs" "$ROOT/README.md" "$ROOT/templates" | head -1)"
+  grep -qF '| 答え | ボードですること' "$PM/docs/rules-reference/approval-view.md" 2>/dev/null || pr_bad="$pr_bad 足すプラグインの docs/rules-reference/approval-view.md に承認ビューの節の本体が無い"
+  grep -qF '| 答え | ボードですること' "$ROOT/$APPROVAL_TEMPLATE" \
+    && pr_bad="$pr_bad approval-template.md に承認ビューの節の本体が残っている (足すプラグインへ移したはず)"
+  local n_core
+  n_core="$(awk '/^- \*\*設計の起点\*\*/ {f=1; n=0} f && /^- \*\*/ && !/設計の起点/ {exit} f {n++} END {print n+0}' "$ROOT/rules/core.md")"
+  { [ "${n_core:-0}" -ge 1 ] && [ "${n_core:-0}" -le 3 ]; } || pr_bad="$pr_bad core.md の 設計の起点 が ${n_core} 行 (1〜3 行)"
+  grep -q 'docs/adr/' "$ROOT/templates/CLAUDE.md" || pr_bad="$pr_bad templates/CLAUDE.md の書類の表に ADR の置き場の行が無い"
+  grep -q 'CLAUDE.md' "$ROOT/commands/new-draft.md" || pr_bad="$pr_bad new-draft.md の分かれ道 B が導入先の CLAUDE.md の表を指さない"
   if [ -n "$pr_bad" ]; then fail 10 "commands はプラグイン本体の場所を素材行で解決する" "$pr_bad"; return; fi
 
-  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) にカード 3 種と目印 + カードの 7 語 + AskUserQuestion + 記入例 ${n_ex} 件 (どれも長さの決まりの内) + 悪い例/良い例 + 進め方の用語集 / 承認を求める ${n_site} コマンドすべてが AskUserQuestion と同じ行にポインタを持ちカードの 7 語を備える / 手順書の逐語実行で /init は承認の型を導入先へ置き 2 回目は上書きせず user では docs/ を作らず、/update は無いときだけ足し在れば触らず docs/ を新設しない / commands の CLAUDE_PLUGIN_ROOT 無防備使用 0 件・素材行 ${n_boot} 本が 1 種類で \$P を使う全ブロックに在り、未設定でも installed_plugins.json の hirai-lite の最大版 (辞書順では負ける 3.10.0 で確認。退役した hirai-lite-v2 の大きい版には落ちない) → hirai-lite キャッシュの最大版の順で解決し harness_plugin_root と一致 / update.md ${n_up} 行 (<=220) / init.md ${n_in} 行 (<=310) / 手順 0 の逐語実行で 控えはコピー (project 側も home 側も元が残る)・置き場は一時領域の rules-backup-*・消えるタイミングを表示 を実挙動で確認 / hirai-task は偽の HOME・gh 無しで --selftest が通り、引数なしと git の外では exit 2、gh を呼ばず、絶対パスを持たない (内部の名前は HIRAI_INTERNAL_WORDS を渡したときだけ見る)"
+  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) にカード 3 種と目印 + カードの 7 語 + AskUserQuestion + 記入例 ${n_ex} 件 (どれも長さの決まりの内) + 悪い例/良い例 + 進め方の用語集 / 承認を求める ${n_site} コマンドすべてが AskUserQuestion と同じ行にポインタを持ちカードの 7 語を備える / 手順書の逐語実行で /init は承認の型を導入先へ置き 2 回目は上書きせず user では docs/ を作らず、/update は無いときだけ足し在れば触らず docs/ を新設しない / commands の CLAUDE_PLUGIN_ROOT 無防備使用 0 件・素材行 ${n_boot} 本が 1 種類で \$P を使う全ブロックに在り、未設定でも installed_plugins.json の hirai-lite の最大版 (辞書順では負ける 3.10.0 で確認。退役した hirai-lite-v2 の大きい版には落ちない) → hirai-lite キャッシュの最大版の順で解決し harness_plugin_root と一致 / update.md ${n_up} 行 (<=220) / init.md ${n_in} 行 (<=310) / 手順 0 の逐語実行で 控えはコピー (project 側も home 側も元が残る)・置き場は一時領域の rules-backup-*・消えるタイミングを表示 を実挙動で確認 / hirai-notify は サブ dir・相対 path・引用符つき notify・/bin/bash 3.2・UTF-8 で <絶対 path>｜<要約> を送り、値の無い --to・--dispatch-id と取り違えは exit 2、引数が環境変数より先、notify: off は何も送らない / pr-retarget は bin/ にあり旧名が無く、承認ビューの節は足すプラグインにあり、設計の起点は 3 行以内で、ADR の置き場の行がある / hirai-task は偽の HOME・gh 無しで --selftest が通り、引数なしと git の外では exit 2、gh を呼ばず、絶対パスを持たない (内部の名前は HIRAI_INTERNAL_WORDS を渡したときだけ見る)"
 }
 
 case_1; case_2; case_3; case_4; case_5; case_6; case_7; case_8; case_9; case_10

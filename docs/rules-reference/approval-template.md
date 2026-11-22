@@ -42,7 +42,7 @@
 承認すると: <始まること・規模（件数・本数・期間か費用）。「戻せる」か「戻せない」>
 しないと: <誰が・いつ・何に困るか。困らないなら「困らない」>
 注意: <いちばん大きいリスクか、判断が要る点を 1 つ。推測は「推測」>
-詳しく: <番号・リンク>／用語: docs/rules-reference/glossary.md
+詳しく: <番号・リンク>（`tasks: github-project` のリポだけ、続けて `／用語: docs/rules-reference/glossary.md`）
 ```
 
 issue の本文に置くときは目印で囲み、ラベルを太字にする（GitHub で読みやすく、道具が読める）。
@@ -138,17 +138,7 @@ issue の本文では `<!-- card:work -->` で囲む。
 
 ### GitHub Project の承認ビューで受ける
 
-（`tasks: github-project` のリポだけ。道具 `hirai-task` はプラグイン hirai-project-method にある。）GitHub Project でやることを管理しているリポでは、**着手の承認は承認ビューで受ける**。feature の本文の先頭に承認カードを置き、`hirai-task card <番号> --sync` で項目「ひとこと」「推奨」に写す。会話では「承認ビューに N 件あります」と件数を案内する。
-
-| 答え | ボードですること | AI がすること |
-|---|---|---|
-| 承認する | 状態を「着手可」に動かす | 中の作業を始める |
-| 条件つきで承認する | 「着手可」に動かし、条件をコメントに書く | 条件を本文の承認の記録に写してから始める |
-| 承認しない | 状態を「保留」に動かし、理由をコメントに書く | 理由と再開の条件を本文に写す。言い換えて出し直さない |
-| 直して出し直す | 直してほしい点をコメントに書く（状態は承認待ちのまま） | 次の会話の最初に `hirai-task comments` で拾い、カードを直して `--sync` |
-
-- **一覧は 1 行、決めるのはカードで。** 承認ビューの「ひとこと」「推奨」は並べて選ぶためのもの。決める前に本文のカード（7 行）を開く。
-- PR の取り込み（merge）は出来上がりの確認であって、着手の承認ではない。設計メモの承認を設計の PR の merge で受けることはある（着手の承認とは別）。
+`tasks: github-project` のリポだけ。節の本体は足すプラグイン hirai-project-method の `docs/rules-reference/approval-view.md`（`hirai-task card <番号> --sync` で承認ビューの項目に写す）。
 
 ### 詳しい版（issue の本文）
 
@@ -182,7 +172,7 @@ issue の本文では `<!-- card:work -->` で囲む。
 承認すると: AIが3つの作業を順に進め、変更3本で出す。1本ずつ戻せる
 しないと: 公開後、総当たりの攻撃を止める手段がない（推測。今は観測なし）
 注意: 正しい利用者が5回間違えると15分待つ。問い合わせが増えるおそれ
-詳しく: feature #7（作業 #31〜#33）／用語: docs/rules-reference/glossary.md
+詳しく: feature #7（作業 #31〜#33）／用語は「進め方の用語」
 ```
 
 ## 記入例 2: ルールの追加（承認カード）
@@ -285,7 +275,7 @@ issue の本文では `<!-- card:work -->` で囲む。
 
 ## 関連
 
-- 進め方の用語（段・機能のまとまり・作業・8 つの状態・目印）: `docs/rules-reference/glossary.md`（無ければプラグイン同梱の同名ファイル）
+- 進め方の用語（段・機能のまとまり・作業・8 つの状態・目印）: `tasks: github-project` のリポだけ。足すプラグイン hirai-project-method の `docs/rules-reference/glossary.md`
 - 層の選び方（T0 / T1 / T2 / T3 のどこに置くか）: `/hirai-lite:context-engineering` skill
 - ルール追加の 6 工程: `commands/add-rule.md`（`/hirai-lite:add-rule`）
 - 条文: `rules/_meta.md` 条 8（追加は承認必須）/ 条 9（無い保証を書かない）

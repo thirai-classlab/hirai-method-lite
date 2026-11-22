@@ -20,7 +20,7 @@ m="$(harness_mode "$PWD")"; case "$m" in normal) m="normal（確認あり）" ;;
 echo "mode（進め方）: $m / 設定ファイル: $(harness_mode_write_file "$PWD")"
 tform="$(harness_tasks_form "$PWD")"
 if [ "$tform" = "github-project" ]; then
-  command -v hirai-task >/dev/null 2>&1 && ht="あり" || ht="なし（/plugin install hirai-project-method@hirai-lite）"
+  [ -n "$(harness_pm_task_bin 2>/dev/null)" ] && ht="あり" || ht="なし（/plugin install hirai-project-method@hirai-lite）"
   echo "設定一式の置き場: $D / やること管理: GitHub Project（tasks: github-project。hirai-task: $ht）"
 else
   echo "設定一式の置き場: $D / やること一覧: $(harness_tasks_file "$PWD" || echo '(まだありません)')"
@@ -161,17 +161,17 @@ harness_auto_sync "$PWD"
 報告書式: `更新後の入れ替えを有効にしました → <パス>。プラグインが新しくなった回に、画面下部などのスクリプトを自動で最新にします（元の内容は .bak に残します）` ／ 無効にしたときは `更新後の入れ替えを無効にしました → <パス>。これまでどおり /hirai-lite:update で手動更新してください`。書き込み先が `~/.claude/mode.yml` だったときだけ 1 行足す: `この設定はすべてのプロジェクトに効きます`
 
 ### 8. 形と Orca（tasks / worktree / notify）
-3 つとも `.claude/mode.yml` の 1 行で、`harness_yml_set` が**その 1 行だけ**を書き換える（書き込み先は 1 の `harness_mode_write_file`）。値は `tasks`: `ledger`（既定）／ `github-project`、`worktree`: `off`（既定）／ `warn` ／ `block`、`notify`: `off`（既定）／ `orca`。
+3 つとも `.claude/mode.yml` の 1 行で、`harness_yml_set` が**その 1 行だけ**を書き換える（書き込み先は**常にプロジェクトの `.claude/mode.yml`**。`mode` と違い、ホームの mode.yml には書かない。他のリポにも効いてしまうため。読むときは項目ごとに 環境変数 → プロジェクト → ホーム → 既定の順）。値は `tasks`: `ledger`（既定）／ `github-project`、`worktree`: `off`（既定）／ `warn` ／ `block`、`notify`: `off`（既定）／ `orca`。
 `tasks: github-project` にするときは、足すプラグインを入れてから（`/plugin install hirai-project-method@hirai-lite`）。`/hirai-lite:start-task` などが `hirai-task` を呼ぶ形に変わる。
 `worktree: block` は、Orca の worktree でない会話からの、git に入るファイルの編集と `git commit` を止める（読み取り・リポの外・git に入らない場所への書き込み・`git switch` は止めない）。**止める設定なので、有効にする前に承認カードで確認を取る**（2 と同じ型。「しないと」は並行の会話が同じ作業ツリーを触る事故が残ること）。`warn` と `off`、`notify` の切り替えに確認は要らない。
 ```bash
 P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 . "$P/scripts/tasks-path.sh"
-f="$(harness_mode_write_file "$PWD")"; echo "変えるファイル: $f"
+f="$PWD/.claude/mode.yml"; echo "変えるファイル: $f"
 harness_yml_set "$f" worktree warn   # tasks / notify も同じ書き方
 harness_yml_value "$PWD" worktree
 ```
-報告書式: `worktree を warn にしました → <パス>。Orca の worktree でない会話に、開始時に警告を出します`。書き込み先が `~/.claude/mode.yml` だったときだけ 1 行足す: `この設定はすべてのプロジェクトに効きます`
+報告書式: `worktree を warn にしました → <パス>。Orca の worktree でない会話に、開始時に警告を出します`。
 
 ## 判定できる終了条件
 

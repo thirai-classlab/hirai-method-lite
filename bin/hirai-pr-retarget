@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# pr-retarget.sh — PR の base を付け替え、CI とレビューを新しい base で走らせ直す。
+# hirai-pr-retarget — PR の base を付け替え、CI とレビューを新しい base で走らせ直す。
 #
 # なぜ script にするか:
 #   base の付け替え（`gh pr edit --base`）が起こすのは pull_request の `edited` だけで、
@@ -11,8 +11,8 @@
 #   （GITHUB_TOKEN が起こしたイベントは workflow を起動しない）。
 #
 # 使い方:
-#   bash scripts/pr-retarget.sh <PR 番号> <新しい base>   # 例: bash scripts/pr-retarget.sh 389 main
-#   bash scripts/pr-retarget.sh --help
+#   hirai-pr-retarget <PR 番号> <新しい base>   # 例: hirai-pr-retarget 389 main
+#   hirai-pr-retarget --help
 #   対象のリポは、環境変数 PR_RETARGET_REPO（owner/name）が無ければ、いまの checkout の gh の既定のリポ。
 #
 # 注意: Projects の組込 workflow「Item closed」を有効にしていると、閉じた時点でこの PR の

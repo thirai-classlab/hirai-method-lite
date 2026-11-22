@@ -148,7 +148,7 @@ GitHub Project でやることを回すリポだけが入れます。
 /plugin install hirai-project-method@hirai-lite
 ```
 
-- 依存で、土台の hirai-lite 3.0.0 以上も一緒に入ります（足すプラグインだけを入れても土台が入る。土台を切ると足すプラグインは読み込まれません。実機での確かめは未実施で、リリースの前に使い捨ての HOME で行います）
+- 依存で、土台の hirai-lite 3.0.0 以上も一緒に入ります（足すプラグインだけを入れても土台が入る。土台だけを切ることはできません。先に足すプラグインを切ります。使い捨ての HOME で `claude plugin disable hirai-lite@hirai-lite` が「still required by hirai-project-method」で断られることを確かめた）
 - 中身: `hirai-task`（`bin/`）・`/hirai-project-method:board`・`/hirai-project-method:project-setup`・skill `github-project`
 - `mode.yml` に `tasks: github-project` を書いたあとで使えます
 
@@ -182,7 +182,7 @@ GitHub Project でやることを回すリポだけが入れます。
 - **あなたの番**: 人が動かすもの（承認待ちの feature・判断待ち・`[User]`・レビュー中の PR）
 - wave ごと × Status の件数
 
-会話には短い表で出し、詳しい版は HTML（wave の依存図・wave ごとの feature 表・止まっている task の表）に書き出してパスを出します。ターミナルでは `hirai-task board --text` で wave → feature → task の木も見られます。着手できるかの最終判断は `hirai-task ready` が正です（「着手できる」の数は `ready` と同じ判定で数えます）。HTML と取得の控えは git の管理ディレクトリの下（`.git/hirai-task/`）に置くので、作業ツリーは汚れません。控えは 10 分使い、そのあいだは GitHub に問い合わせません（今すぐ取り直すときは `/hirai-lite:board refresh`）。
+会話には短い表で出し、詳しい版は HTML（wave の依存図・wave ごとの feature 表・止まっている task の表）に書き出してパスを出します。ターミナルでは `hirai-task board --text` で wave → feature → task の木も見られます。着手できるかの最終判断は `hirai-task ready` が正です（「着手できる」の数は `ready` と同じ判定で数えます）。HTML と取得の控えは git の管理ディレクトリの下（`.git/hirai-task/`）に置くので、作業ツリーは汚れません。控えは 10 分使い、そのあいだは GitHub に問い合わせません（今すぐ取り直すときは `/hirai-project-method:board refresh`）。
 
 ### 承認・判断・人の作業をカードで受ける（v2.8.0）
 
@@ -216,8 +216,8 @@ feature を起こすと（`hirai-task new --kind feature`・`new --from-table`�
 | いま | 移り方 |
 |---|---|
 | 1.x（`hirai-lite@hirai-lite`） | 更新だけ（`/plugin marketplace update hirai-lite` → `/plugin update hirai-lite@hirai-lite` → 開き直し → `/hirai-lite:update`）。台帳の形のまま動きます（`mode.yml` に `tasks: ledger` が 1 度だけ書かれます） |
-| 2.x（退役した `hirai-lite-v2@hirai-lite`）で台帳の形 | `/plugin install hirai-lite@hirai-lite` → `/plugin uninstall hirai-lite-v2@hirai-lite`（同じ範囲で）→ 開き直し → `/hirai-lite:update`。`tasks: ledger` が書かれます |
-| 2.x で GitHub Project の形 | 上に加えて `/plugin install hirai-project-method@hirai-lite`。`/hirai-lite:update` が 2.x の控え（`~/.claude/plugins/data/hirai-lite-v2-hirai-lite/`）を見て `tasks: github-project` を書きます（書いたことは 1 行で報告されます）。呼び名は `/hirai-lite:board`・`:project-setup` から `/hirai-project-method:board`・`:project-setup` に変わります |
+| 2.x（退役した `hirai-lite-v2@hirai-lite`）で台帳の形 | `/plugin marketplace update hirai-lite` → `/plugin install hirai-lite@hirai-lite` → 開き直し → `/hirai-lite:update`（`tasks: ledger` が書かれます）→ そのあと `/plugin uninstall hirai-lite-v2@hirai-lite`（同じ範囲で）。**uninstall は update のあと**です（uninstall すると 2.x の控えが消え、`/hirai-lite:update` が 2.x の形を読めません） |
+| 2.x で GitHub Project の形 | 上の順の `/plugin install hirai-lite@hirai-lite` と同じ時点で `/plugin install hirai-project-method@hirai-lite` も入れ、開き直して `/hirai-lite:update` を回してから `hirai-lite-v2` を uninstall します。`/hirai-lite:update` が 2.x の控え（`~/.claude/plugins/data/hirai-lite-v2-hirai-lite/`）を見て `tasks: github-project` を書きます（書いたことは 1 行で報告されます）。呼び名は `/hirai-lite:board`・`:project-setup` から `/hirai-project-method:board`・`:project-setup` に変わります |
 
 `enabledPlugins` を直接書いているリポ（`.claude/settings.json`）は、2.x の `hirai-lite-v2@hirai-lite` を `hirai-lite@hirai-lite`（と、使うなら `hirai-project-method@hirai-lite`）に書き換えます。
 
@@ -249,7 +249,7 @@ GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf GIT_CONFIG
 詳しく: feature #7（作業 #31〜#33）／用語は「進め方の用語」
 ```
 
-「どれにするか」は**判断カード**（選択肢・推奨・期限）、人の手が要る作業は**人の作業カード**（やること・手順・終わったら）で頼みます。**同じ型を、頼むすべての場面で使います** — ルール追加、タスクの着手・完了、設計メモの承認、ルールの棚卸し、commit の分割と元に戻せない操作、費用や動きが変わる設定、参照されていないファイルの削除、既存の安全設定への差分の反映、GitHub Project の立ち上げ。型の本体は `docs/rules-reference/approval-template.md`（記入例 5 つと、悪い例→良い例つき）で、**常時読まれる場所にはカードの名前と 1 行目の形だけ**を置いています。この型と進め方の用語集（`glossary.md`）は **`/init` が導入先の `docs/rules-reference/` にも配置します**。すでに入っている環境では `/update` が、写しが古い型のままかを見分け、置き換えてよいかを承認カードで伺います（元の写しは `.bak` に残します）。
+「どれにするか」は**判断カード**（選択肢・推奨・期限）、人の手が要る作業は**人の作業カード**（やること・手順・終わったら）で頼みます。**同じ型を、頼むすべての場面で使います** — ルール追加、タスクの着手・完了、設計メモの承認、ルールの棚卸し、commit の分割と元に戻せない操作、費用や動きが変わる設定、参照されていないファイルの削除、既存の安全設定への差分の反映、GitHub Project の立ち上げ。型の本体は `docs/rules-reference/approval-template.md`（記入例 5 つと、悪い例→良い例つき）で、**常時読まれる場所にはカードの名前と 1 行目の形だけ**を置いています。この型は **`/init` が導入先の `docs/rules-reference/` にも配置します**（進め方の用語集 `glossary.md` は足すプラグイン hirai-project-method にあり、`/init` は配置しません）。すでに入っている環境では `/update` が、写しが古い型のままかを見分け、置き換えてよいかを承認カードで伺います（元の写しは `.bak` に残します）。
 
 GitHub Project でやることを管理するリポでは、**着手の承認はボードの承認ビューで受けます**。feature の本文の先頭に承認カードを置き、項目「ひとこと」「推奨」に写すので、ボードの表で一覧を並べて選べます。承認ビューのこの 2 列は `/hirai-project-method:project-setup`（`hirai-task setup`）が出します（今の列は消さず末尾に足します。v2.8.1。スマートフォンの GitHub アプリでこの列がどう見えるかは未確認です）。決めるのは本文のカード（7 行）を開いてからです。答え方は 4 つです — **承認する**: 状態を「着手可」に ／ **条件つきで承認する**: 「着手可」にして条件をコメント ／ **承認しない**: 「保留」にして理由をコメント ／ **直して出し直す**: 直してほしい点をコメント（AI が次の会話の最初に拾ってカードを直します）。会話や PR では着手の承認を求めません（PR の取り込みは出来上がりの確認です）。
 
@@ -501,13 +501,12 @@ export HC_CONTEXT_WINDOW=1000000   # 窓が 1M の会話
 
 ## 同梱している skill（スキル）
 
-`skills/` に 3 つ（上限 3）。コマンドと違って**こちらから呼び出さなくてよい** — 必要な場面を AI が判断して自分で読む手引き。名前と説明だけが常時載り、**本文は読まれた時にだけ**コンテキストに入る（[公式](https://code.claude.com/docs/en/skills)）ので、長い手引きを持っても普段の容量を食わない。
+`skills/` に 2 つ（上限 3。`github-project` は足すプラグインへ移した）。コマンドと違って**こちらから呼び出さなくてよい** — 必要な場面を AI が判断して自分で読む手引き。名前と説明だけが常時載り、**本文は読まれた時にだけ**コンテキストに入る（[公式](https://code.claude.com/docs/en/skills)）ので、長い手引きを持っても普段の容量を食わない。
 
 | 名前 | 役割 |
 |---|---|
 | `grilling` | 決めごとを掘り下げて聞く進め方。決定事項を design tree に置き、**前提が確定した質問だけをまとめて 1 ラウンドで出し、各問に推奨回答を添える**。事実（ファイルの中身・依存・既存コマンド）は AI が自分で調べ、**決定だけを利用者に聞く** |
 | `context-engineering` | 決まったこと・学んだことを**次のセッションでも読まれる場所**へ置く判断。T0（毎回）/ T1（該当ファイルを触った時）/ T2（明示 Read のみ）/ T3（読まない）のどれに何をどう書くか、予算をどう守るかを、**Anthropic 公式の記述と URL つき**でまとめてある。承認の型は全作業に効く汎用規範なのでこの skill には入れず、T2 に置いてある（v1.14.0） |
-| `github-project` | GitHub Project でやること（wave・feature・task の issue と Status）を読み書きするときの決まり。v2.7.0 で `rules/tasks.md` から移した — `hirai-task` と `gh` だけで進む作業はファイルに触れないので、`paths:` 付きのルールでは読まれないため |
 
 `/hirai-lite:init` の 2 回目（案件ヒアリング）が `grilling` を呼ぶ。単体でも「この案を詰めたい」「grill me」のように頼めば起動する。`context-engineering` は `/hirai-lite:state save` の「次回に効くものを置く」工程と `/hirai-lite:add-rule` が参照する。出典は `skills/context-engineering/references/official-sources.md` に逐語引用と取得日つきで置いてある。
 
@@ -550,7 +549,7 @@ claude plugins install mattpocock-skills
 
    commands / hooks / agents / MCP サーバー定義はこの時点で有効になる。**rules はまだ配られていない** — プラグインには rules というコンポーネントが無いため。
 
-2. **rules を配置する** — 対象プロジェクトを開いて `/hirai-lite:init` を実行する（全プロジェクト共通に入れるなら `/hirai-lite:init user`）。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ（`mode:` の値は手順 1 の質問 3 の答え。ホーム側にすでにあればそちらを使い、プロジェクト側に新設しない）、`templates/CLAUDE.md` をリポジトリ直下の `CLAUDE.md` へ（`user` 指定なら `~/.claude/CLAUDE.md`）、`scripts/statusline.sh` と `scripts/tasks-path.sh` と `scripts/context-usage.sh` を `.claude/` へ配置し、draft dir・事故記録・`.claude/rules-archive/` を作る（台帳は作らない。やること管理は GitHub Project へ案内する）。既存ファイルは上書きしない。
+2. **rules を配置する** — 対象プロジェクトを開いて `/hirai-lite:init` を実行する（全プロジェクト共通に入れるなら `/hirai-lite:init user`）。`rules/*.md` を `.claude/rules/` へ、`templates/settings.json` の permissions と `statusLine` を `.claude/settings.json` へ、`templates/mode.yml` を `.claude/mode.yml` へ（`mode:` の値は手順 1 の質問 3 の答え。ホーム側にすでにあればそちらを使い、プロジェクト側に新設しない）、`templates/CLAUDE.md` をリポジトリ直下の `CLAUDE.md` へ（`user` 指定なら `~/.claude/CLAUDE.md`）、`scripts/statusline.sh` と `scripts/tasks-path.sh` と `scripts/context-usage.sh` を `.claude/` へ配置し、draft dir・事故記録・`.claude/rules-archive/` を作る（`tasks: ledger` のリポでは `docs/tasks/list.md` と `parking-lot.md` も作る。`tasks: github-project` のリポでは作らない）。既存ファイルは上書きしない。
 
    draft / 事故記録は **常に `docs/` 配下に作る（`docs/` が無ければ作る）**。旧レイアウト（`.claude/tasks/` `.claude/draft/` `.claude/rules-reference/` が残っている環境）のときは**ここでは何も作らず `/hirai-lite:update` の手順 2 に回す** — `docs/` 側に作るとパス解決が `docs/` を先に見るため既存の台帳が黙って隠れるので、先に `mv` で移してから 1 通りに揃える。`scripts/tasks-path.sh` の解決順（`$HARNESS_TASKS_FILE` → `docs/…` → `.claude/…`）は移行前・未移行の環境で台帳を見失わないために残してある。`user` 指定時は draft / 事故記録を作らず、`statusLine.command` だけ絶対パスへ書き換える。
 
@@ -576,7 +575,7 @@ claude plugins install mattpocock-skills
 | `rules/` | **プラグインは読まない。** `/init` が配置先の `.claude/rules/` へ配る素材 |
 | `scripts/` | hook / statusline が source する共通ライブラリ（パス解決 `tasks-path.sh` / context 使用率 `context-usage.sh` / 更新検知 `update-check.sh`）+ `/init` の二重ロード検査 |
 | `templates/` | `settings.json` / `mode.yml` / `CLAUDE.md` / draft の雛形（`CLAUDE.md` は `/init` が導入先へ置く。プラグイン直下に置くと `validate --strict` が警告するため `templates/` に置いている） |
-| `tests/smoke.sh` | 自己検証 10 case（予算監査を含む。hook 5 / skill 3 / case 10 の数の予算も case 6 が見る。command は数だけ出す）。足すプラグインは `plugins/hirai-project-method/tests/smoke.sh` が別に見る |
+| `tests/smoke.sh` | 自己検証 10 case（予算監査を含む。hook 5 / skill 3 / case 10 の上限も case 6 が見る。command は数だけ出す）。足すプラグインは `plugins/hirai-project-method/tests/smoke.sh` が別に見る |
 | `CHANGELOG.md` | 版ごとの変更点。v0.6.0 以前の既知の不具合もここに記録 |
 | `CONTRIBUTING.md` | 開発の進め方。**3.0.0 から `main` 1 本で配る**（土台 `hirai-lite` と足すプラグイン `hirai-project-method`。退役した 2.x の `v2` は凍結） |
 

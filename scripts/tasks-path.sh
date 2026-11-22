@@ -14,9 +14,9 @@
 #
 # 進め方 / ルールは配置先が 2 通りある (プロジェクト側 = .claude/ と 全プロジェクト共通 = $HOME/.claude/)。
 # どちらに置いたかを決め打ちすると、片方に置いた利用者に対して黙って外れる。**在る側**を選ぶ。
-#   進め方   : HC_MODE (env) > <root>/.claude/mode.yml > $HOME/.claude/mode.yml > normal
-#   入れ替え : HC_AUTO_SYNC (env) > 同じ mode.yml の auto_sync > off (既定は入れ替えない)
-#   形       : HC_TASKS (env) > 同じ mode.yml の tasks (ledger / github-project) > ledger
+#   進め方   : HC_MODE (env) > <root>/.claude/mode.yml の mode > $HOME/.claude/mode.yml の mode > normal (項目ごとに引く)
+#   入れ替え : HC_AUTO_SYNC (env) > 項目ごとに プロジェクト > ホーム の auto_sync > off (既定は入れ替えない)
+#   形       : HC_TASKS (env) > 項目ごとに プロジェクト > ホーム の tasks (ledger / github-project) > ledger
 #   ルール   : HARNESS_RULES_DIR > <root>/.claude/rules > $HOME/.claude/rules > <root>/.claude/rules
 #
 # file-top に set -e / set -o pipefail を書かない。source 元の shell flags を汚染し、
@@ -105,16 +105,15 @@ harness_mode_write_file() {
 }
 
 # harness_mode [root] -> いまの進め方 (normal / loop / 未知の値) を stdout。常に rc 0。
-# env HC_MODE > 在る側の mode.yml > normal。読めない・空・壊れている場合も normal。
+# env HC_MODE > プロジェクトの mode.yml の mode: > ホームの mode.yml の mode: > normal。
+# 項目ごとに引く (プロジェクト側に mode: が無ければホーム側の値を使う)。読めない・空・壊れている場合も normal。
 harness_mode() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" f m=""
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" m=""
   if [ -n "${HC_MODE:-}" ]; then
     printf '%s' "$HC_MODE"
     return 0
   fi
-  if f="$(harness_mode_file "$root")"; then
-    m="$(sed -n 's/^[[:space:]]*mode:[[:space:]]*\([a-z]*\).*/\1/p' "$f" 2>/dev/null | head -1)"
-  fi
+  m="$(harness_yml_value "$root" mode)"
   [ -n "$m" ] || m="normal"
   printf '%s' "$m"
 }
@@ -128,14 +127,12 @@ harness_mode() {
 
 # harness_auto_sync [root] -> on / off (未知の値はそのまま) を stdout。常に rc 0。
 harness_auto_sync() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" f v=""
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" v=""
   if [ -n "${HC_AUTO_SYNC:-}" ]; then
     printf '%s' "$HC_AUTO_SYNC"
     return 0
   fi
-  if f="$(harness_mode_file "$root")"; then
-    v="$(sed -n 's/^[[:space:]]*auto_sync:[[:space:]]*\([A-Za-z]*\).*/\1/p' "$f" 2>/dev/null | head -1)"
-  fi
+  v="$(harness_yml_value "$root" auto_sync)"
   [ -n "$v" ] || v="off"
   printf '%s' "$v"
 }
@@ -145,14 +142,26 @@ harness_auto_sync() {
 # .claude/mode.yml の tasks: で**宣言する**。Project の有無・remote・gh の成否からは見分けない
 # (見分けに失敗して尋ねて止まる道を無くすため)。GraphQL を打つのは github-project のときだけ。
 
-# harness_yml_value <root> <キー> -> 在る側の mode.yml の <キー>: の値 (英字・ハイフンのみ) を stdout。
-# 無ければ空。常に rc 0。env の上書きは呼び出し側で扱う。
+# harness_yml_file_value <file> <キー> -> その file の <キー>: の値を stdout。無ければ空。常に rc 0。
+# 値の前後の空白と引用符 (" と ') と、行末のコメント (空白のあとの # から) を外す。
+harness_yml_file_value() {
+  local f="${1:-}" k="${2:-}"
+  [ -n "$k" ] && [ -f "$f" ] || return 0
+  sed -nE "s/^[[:space:]]*${k}:[[:space:]]*(.*)\$/\\1/p" "$f" 2>/dev/null | head -1 \
+    | sed -E 's/(^|[[:space:]]+)#.*$//; s/[[:space:]]+$//; s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/'
+}
+
+# harness_yml_value <root> <キー> -> <キー>: の値を stdout。無ければ空。常に rc 0。
+# 項目ごとに「プロジェクトの .claude/mode.yml → ホームの ~/.claude/mode.yml」の順で引く
+# (片方のファイルだけを読まない。env の上書きと既定は呼び出し側で扱う)。
 harness_yml_value() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" k="${2:-}" f v=""
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" k="${2:-}" v="" p
   [ -n "$k" ] || return 0
-  if f="$(harness_mode_file "$root")"; then
-    v="$(sed -n "s/^[[:space:]]*${k}:[[:space:]]*\\([A-Za-z-]*\\).*/\\1/p" "$f" 2>/dev/null | head -1)"
-  fi
+  for p in "$root/.claude/mode.yml" "${HOME:+$HOME/.claude/mode.yml}"; do
+    [ -n "$p" ] || continue
+    v="$(harness_yml_file_value "$p" "$k")"
+    [ -z "$v" ] || break
+  done
   printf '%s' "$v"
 }
 
@@ -170,27 +179,63 @@ harness_tasks_form() {
   return 0
 }
 
-# harness_tasks_migrate [root] -> mode.yml に tasks: が無いときだけ、1 度だけ書き込む (/hirai-lite:update の手順 4b)。
+# harness_tasks_migrate [root] -> プロジェクトの .claude/mode.yml に tasks: が無いときだけ、1 度だけ書き込む
+# (/hirai-lite:update の手順 2b)。tasks: はプロジェクト側にだけ書く (ホームには書かない。ホームの値は他のリポにも効くため)。
 # 2.x (hirai-lite-v2) の GitHub Project の控え (~/.claude/plugins/data/hirai-lite-v2-hirai-lite/
 # tasks-<owner>-<repo>.json の form が ghp) があれば github-project、それ以外は ledger。
-# 書いたら "tasks: <値> ..." の 1 行を stdout に出す。すでに tasks: があれば何もしない (無出力・rc 0)。
+# 控えの名前は 2.x と同じ作り方 (github.com の後ろの owner/repo から末尾の .git と / を外し、/ を - にする)。
+# 書いたら "tasks: <値> ..." の 1 行を stdout に出す。プロジェクト側にすでに tasks: があれば何もしない (無出力・rc 0)。
 # 書けなかったら rc 1。以後は自動で見分けない (この関数は呼ばれた回だけ動く)。
 harness_tasks_migrate() {
   local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" cur f url slug cache val why
-  cur="$(harness_yml_value "$root" tasks)"
+  f="$root/.claude/mode.yml"
+  cur="$(harness_yml_file_value "$f" tasks)"
   [ -z "$cur" ] || return 0
   val="ledger"; why="2.x の Project の控えが無いため"
   url="$(git -C "$root" remote get-url origin 2>/dev/null || true)"
-  slug="$(printf '%s' "$url" | sed -E 's#\.git$##; s#^.*[:/]([^/:]+)/([^/]+)$#\1-\2#' 2>/dev/null)"
-  if [ -n "$url" ] && [ -n "$slug" ]; then
+  slug=""
+  case "$url" in
+    *github.com*) slug="$(printf '%s' "$url" | sed -E 's#^.*github\.com[:/]##; s#\.git$##; s#/+$##; s#/#-#g' 2>/dev/null)" ;;
+  esac
+  if [ -n "$slug" ]; then
     cache="$HOME/.claude/plugins/data/hirai-lite-v2-hirai-lite/tasks-${slug}.json"
     if [ -f "$cache" ] && grep -Eq '"form"[[:space:]]*:[[:space:]]*"ghp"' "$cache" 2>/dev/null; then
       val="github-project"; why="2.x の Project の控え ($cache) が ghp のため"
     fi
   fi
-  f="$(harness_mode_write_file "$root")"
   harness_yml_set "$f" tasks "$val" || return 1
   printf 'tasks: %s を %s に書きました (%s)\n' "$val" "$f" "$why"
+}
+
+# harness_pm_task_bin -> 足すプラグイン hirai-project-method の hirai-task の絶対 path を stdout。無ければ空 + rc 1。
+# hook と画面下では、プラグインの bin/ は PATH に入らない (Bash ツールだけに入る)。PATH に頼らず、
+# installed_plugins.json の hirai-project-method@hirai-lite の行のうち版が最大の installPath/bin/hirai-task
+# → ~/.claude/plugins/cache/hirai-lite/hirai-project-method/ の最大版 → PATH の hirai-task、の順で探す。
+harness_pm_task_bin() {
+  local f="${HOME:-}/.claude/plugins/installed_plugins.json" p="" c
+  if [ -f "$f" ] && command -v python3 >/dev/null 2>&1; then
+    p="$(python3 -c 'import json,re,sys
+d = json.load(open(sys.argv[1]))
+rows = [x for k, v in d.get("plugins", {}).items() if k.split("@", 1)[0] == sys.argv[2] for x in v if x.get("installPath")]
+rows.sort(key=lambda x: [int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version", "0")))])
+print(rows[-1]["installPath"] if rows else "")' "$f" hirai-project-method 2>/dev/null)"
+    if [ -n "$p" ] && [ -x "$p/bin/hirai-task" ]; then
+      printf '%s' "$p/bin/hirai-task"
+      return 0
+    fi
+  fi
+  c="$(ls -d "${HOME:-}"/.claude/plugins/cache/hirai-lite/hirai-project-method/*/ 2>/dev/null | sort -V | tail -1)"
+  c="${c%/}"
+  if [ -n "$c" ] && [ -x "$c/bin/hirai-task" ]; then
+    printf '%s' "$c/bin/hirai-task"
+    return 0
+  fi
+  c="$(command -v hirai-task 2>/dev/null || true)"
+  if [ -n "$c" ]; then
+    printf '%s' "$c"
+    return 0
+  fi
+  return 1
 }
 
 # harness_yml_set <file> <キー> <値> -> その 1 行だけを書き換える (他の行は 1 バイトも触らない)。

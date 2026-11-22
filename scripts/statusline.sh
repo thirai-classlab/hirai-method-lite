@@ -113,8 +113,16 @@ if command -v harness_tasks_form >/dev/null 2>&1; then
 fi
 if [ "$tasks_form" = "github-project" ]; then
   todo_label="あなたの番"
-  if command -v hirai-task >/dev/null 2>&1; then
-    todo_ghp="$(hirai-task line 2>/dev/null || true)"
+  # 画面下の PATH にプラグインの bin/ は入らない。harness_pm_task_bin で絶対 path を引く
+  # (古い tasks-path.sh の複製には無いので、その場合だけ PATH の hirai-task に頼る)。
+  pm_task=""
+  if command -v harness_pm_task_bin >/dev/null 2>&1; then
+    pm_task="$(harness_pm_task_bin 2>/dev/null || true)"
+  elif command -v hirai-task >/dev/null 2>&1; then
+    pm_task="$(command -v hirai-task)"
+  fi
+  if [ -n "$pm_task" ]; then
+    todo_ghp="$("$pm_task" line 2>/dev/null || true)"
     [ -n "$todo_ghp" ] && todo="$todo_ghp"
   else
     todo="hirai-project-method が未導入"

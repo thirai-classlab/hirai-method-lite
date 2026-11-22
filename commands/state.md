@@ -117,7 +117,7 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 2. `git rev-parse --abbrev-ref HEAD` を実行し、state に書かれた branch と突き合わせる。不一致なら state の branch 名を提示し「切替えますか?」と聞く。承認されたら `git switch <state の branch>` を実行する。承認が無ければ現 branch のまま 3 へ進む。
 3. `git log --oneline -1` を実行し、HEAD を突き合わせる。state の HEAD と一致しなければ、`git log --oneline <state の hash>..HEAD` で state 保存後に積まれた commit を列挙し、チャットに提示する。
 
-4. 形は `.claude/mode.yml` の `tasks:` が決める（`. "$P/scripts/tasks-path.sh"; harness_tasks_form "$PWD"` が `ledger` か `github-project` を返す。`$P` の探し方は `start-task` の「形の見分け」と同じ）。`github-project` のとき、`hirai-task show <n>` で state の issue の Status と開閉を確かめる。進行中でない・閉じているなら「state より GitHub 側が新しい」と報告し、GitHub 側を正とする。`command -v hirai-task` が無ければ「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と報告して 5 へ進む。`ledger` のとき、台帳を Read し、state の「進行中タスク」の id が今も `進行中` かを確認する。`完了` になっていれば「state より台帳が新しい」と報告し、台帳側を正とする。
+4. 形は `.claude/mode.yml` の `tasks:` が決める（`. "$P/scripts/tasks-path.sh"; harness_tasks_form "$PWD"` が `ledger` か `github-project` を返す。`$P` の探し方は `start-task` の「形の見分け」と同じ）。`github-project` のとき、`HT="$(harness_pm_task_bin)"`（足すプラグインの `hirai-task` の絶対 path。PATH に頼らない）を引いて `"$HT" show <n>` で state の issue の Status と開閉を確かめる。進行中でない・閉じているなら「state より GitHub 側が新しい」と報告し、GitHub 側を正とする。`harness_pm_task_bin` が空なら「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と報告して 5 へ進む。`ledger` のとき、台帳を Read し、state の「進行中タスク」の id が今も `進行中` かを確認する。`完了` になっていれば「state より台帳が新しい」と報告し、台帳側を正とする。
 5. 4 で読んだ issue の本文（台帳の形では完了条件の列）から、まだ満たしていない完了条件を 1 つ選ぶ。
 6. 再開サマリを次の書式で 1 回だけ出す。
 
@@ -135,7 +135,7 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 `/state resume loop` で呼ばれた場合、6 のサマリ出力後に mode（進め方）を `loop`（自動で進む）へ書き換え（書き込み先は決め打ちせず `tasks-path.sh` の `harness_mode_write_file "$PWD"` が返す**すでに在る側**。`/hirai-lite:config` と同じ経路）、形に合わせて連続で着手する。
 
 - `ledger`: 台帳の `進行中` → `未着手` の順に着手する。着手できるのは対応 draft の `approved_at:` が埋まっているタスクのみ。空のタスクに到達したら、その id を報告して停止する。GitHub は呼ばない
-- `github-project`: `hirai-task ready` の結果を上から順に着手する。`command -v hirai-task` が無ければ「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と報告して終了する。一覧が空になったら、その旨を報告して停止する。続けるのを仕組みに任せたいときは、組み込みの `/goal hirai-task ready が空で、着手した task はすべて PR を出した` を打つよう 1 行で案内する（`/goal` は Claude からは呼べない）
+- `github-project`: `hirai-task ready`（`harness_pm_task_bin` の絶対 path で呼ぶ）の結果を上から順に着手する。`harness_pm_task_bin` が空なら「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と報告して終了する。一覧が空になったら、その旨を報告して停止する。続けるのを仕組みに任せたいときは、組み込みの `/goal hirai-task ready が空で、着手した task はすべて PR を出した` を打つよう 1 行で案内する（`/goal` は Claude からは呼べない）
 
 loop 実行を止める条件は 3 つ。
 - user が停止を指示した。

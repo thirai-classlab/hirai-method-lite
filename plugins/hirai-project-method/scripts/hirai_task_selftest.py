@@ -57,6 +57,10 @@ def _base_plugin_root() -> str:
     try:
         with open(os.path.expanduser('~/.claude/plugins/installed_plugins.json'), encoding='utf-8') as f:
             entries = json.load(f).get('plugins', {}).get('hirai-lite@hirai-lite', [])
+        # 版が最大の行を先にする（古い 1.x の行が先に並んでいても、その approval-template.md を読まない）。
+        entries = sorted(entries, key=lambda e: [int(n) if n.isdigit() else 0
+                                                 for n in re.split(r'[.]', str(e.get('version', '0')))],
+                         reverse=True)
         candidates += [e.get('installPath', '') for e in entries]
     except (OSError, ValueError, AttributeError):
         pass

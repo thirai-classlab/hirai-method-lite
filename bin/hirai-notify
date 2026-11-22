@@ -20,6 +20,7 @@
 #       done|stopped → --type status --subject 完了|停止 --to <宛先>
 #
 # `.claude/mode.yml` の `notify: off`（既定）なら何もせず exit 0。env HC_NOTIFY が優先。
+# <file> は絶対 path に直して送る（無ければ exit 2）。--to と --dispatch-id の両方が引数にあれば --dispatch-id。引数は環境変数より先。
 # 送れなかったときは理由を stderr に出して exit 1（黙って捨てない）。
 # 送る操作は、検査の結果を見てから別の呼び出しで打つ（`;` `&&` `||` の分岐の後ろに繋げない）。
 set -uo pipefail
@@ -30,22 +31,38 @@ kind="${1:-}"; file="${2:-}"; summary="${3:-}"
 case "$kind" in question|done|stopped) ;; *) usage; exit 2 ;; esac
 [ -n "$file" ] && [ -n "$summary" ] || { usage; exit 2; }
 shift 3
-to="${HIRAI_COORDINATOR:-}"
-dispatch="${HIRAI_DISPATCH_ID:-}"
+arg_to=""
+arg_dispatch=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --to) to="${2:-}"; shift 2 ;;
-    --dispatch-id) dispatch="${2:-}"; shift 2 ;;
+    --to|--dispatch-id)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "hirai-notify: $1 に値が無い" >&2; usage; exit 2; }
+      if [ "$1" = "--to" ]; then arg_to="$2"; else arg_dispatch="$2"; fi
+      shift 2 ;;
     *) usage; exit 2 ;;
   esac
 done
+# 引数が環境変数より先。引数どうしでは --dispatch-id を採る
+to=""; dispatch=""
+if [ -n "$arg_dispatch" ]; then
+  dispatch="$arg_dispatch"
+elif [ -n "$arg_to" ]; then
+  to="$arg_to"
+elif [ -n "${HIRAI_DISPATCH_ID:-}" ]; then
+  dispatch="$HIRAI_DISPATCH_ID"
+else
+  to="${HIRAI_COORDINATOR:-}"
+fi
 
 # notify の値: env HC_NOTIFY > プロジェクトの mode.yml > ホームの mode.yml > off
+# プロジェクトの root は cwd の git のトップ（サブ dir から打っても同じ。Bash ツールに CLAUDE_PROJECT_DIR は無い）
 notify="${HC_NOTIFY:-}"
 if [ -z "$notify" ]; then
+  root="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" || root=""
+  [ -n "$root" ] || root="$PWD"
   lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/scripts/tasks-path.sh"
   if [ -f "$lib" ]; then
-    notify="$( . "$lib" 2>/dev/null && harness_yml_value "${CLAUDE_PROJECT_DIR:-$PWD}" notify )" || notify=""
+    notify="$( . "$lib" 2>/dev/null && harness_yml_value "$root" notify )" || notify=""
   fi
 fi
 [ "$notify" = "orca" ] || exit 0
@@ -55,19 +72,26 @@ if ! command -v orca >/dev/null 2>&1; then
   exit 1
 fi
 
+# <file> は絶対 path にして渡す（コーディネーターは別の dir から読む）。無ければ引数の取り違えとして止める
+if [ ! -f "$file" ]; then
+  echo "hirai-notify: <file> が無い: ${file}（引数は <file> <要約> の順）" >&2
+  exit 2
+fi
+file="$(cd "$(dirname "$file")" && pwd -P)/$(basename "$file")"
+
 args=()
 if [ -n "$dispatch" ]; then
   case "$kind" in
-    question) args=(--type question --subject "$summary" --body "$file｜$summary") ;;
+    question) args=(--type question --subject "$summary" --body "${file}｜${summary}") ;;
     done)     args=(--type worker_done --outcome succeeded --report-path "$file" --subject "$summary") ;;
     stopped)  args=(--type worker_done --outcome failed --report-path "$file" --subject "$summary") ;;
   esac
   args+=(--dispatch-id "$dispatch")
 elif [ -n "$to" ]; then
   case "$kind" in
-    question) args=(--type question --subject "$summary" --body "$file｜$summary") ;;
-    done)     args=(--type status --subject "完了: $summary" --body "$file｜$summary") ;;
-    stopped)  args=(--type status --subject "停止: $summary" --body "$file｜$summary") ;;
+    question) args=(--type question --subject "$summary" --body "${file}｜${summary}") ;;
+    done)     args=(--type status --subject "完了: ${summary}" --body "${file}｜${summary}") ;;
+    stopped)  args=(--type status --subject "停止: ${summary}" --body "${file}｜${summary}") ;;
   esac
   args+=(--to "$to")
 else

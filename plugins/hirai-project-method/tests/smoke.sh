@@ -64,6 +64,17 @@ case_3() {
   out="$(HIRAI_LITE_ROOT="$BASE" "$ROOT/bin/hirai-task" --selftest 2>&1)"; rc=$?
   [ "$rc" -eq 0 ] || { fail 3 "hirai-task --selftest が exit 0" "rc=$rc $(printf '%s' "$out" | grep -m3 '^ *FAIL\|Error' )"; return; }
   printf '%s' "$out" | grep -q 'line は控えの 1 行を出し' || { fail 3 "line の自己検査が走っている" "出力に無い"; return; }
+  # 土台探し (MIG-6): installed_plugins.json の hirai-lite の行は**版が最大**を採る。プラグインを土台の 2 つ下以外へ写して
+  # から呼ぶ (リポ内の配置の候補が先に当たると、並びの誤りを見逃す)。古い 1.16.0 の行を先に並べる。
+  local cp h old new got
+  cp="$(mk)"; h="$(mk)"; old="$(mk)"; new="$(mk)"
+  cp -R "$ROOT/bin" "$ROOT/scripts" "$cp/"
+  mkdir -p "$old/docs/rules-reference" "$new/docs/rules-reference" "$h/.claude/plugins"
+  : > "$old/docs/rules-reference/approval-template.md"; : > "$new/docs/rules-reference/approval-template.md"
+  printf '{"plugins":{"hirai-lite@hirai-lite":[{"version":"1.16.0","installPath":"%s"},{"version":"3.0.0","installPath":"%s"}]}}\n' "$old" "$new" \
+    > "$h/.claude/plugins/installed_plugins.json"
+  got="$(env -u HIRAI_LITE_ROOT HOME="$h" PYTHONDONTWRITEBYTECODE=1 python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import hirai_task_selftest as m; print(m._base_plugin_root())" "$cp/scripts" 2>&1 | tail -1)"
+  [ "$got" = "$new" ] || { fail 3 "土台探しは installed_plugins.json の版が最大の行を採る" "got=$got (期待 $new)"; return; }
   pass 3 "hirai-task --selftest が exit 0 ($(printf '%s' "$out" | grep -c 'PASS') 件)"
 }
 

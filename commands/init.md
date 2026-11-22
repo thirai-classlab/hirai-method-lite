@@ -137,11 +137,13 @@ bash "$D/statusline.sh" </dev/null
 P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 SCOPE=; if [ "$SCOPE" = user ]; then echo "skip 台帳 / 設計メモ / 記録帳 (全プロジェクト共通には作らない)"; elif ls -d .claude/tasks .claude/draft .claude/rules-reference 2>/dev/null | grep -q .; then echo "skip 旧レイアウト — .claude/ の書類を /hirai-lite:update で docs/ へ移してから作る"
 else BASE=docs; mkdir -p "$BASE/tasks" "$BASE/draft" "$BASE/rules-reference"; : > "$BASE/draft/.gitkeep"
+. "$P/scripts/tasks-path.sh"  # 台帳の 2 ファイルは tasks: が ledger のときだけ作る (github-project のリポには作らない)
+if [ "$(harness_tasks_form "$PWD")" = ledger ]; then
 [ -e "$BASE/tasks/list.md" ] || printf '# タスク台帳\n\nstatus は 未着手 / 進行中 / 完了 の 3 種。\n\n| # | status | タスク | 概要 | 依存先 | 詳細 |\n|---|--------|-------|------|-------|------|\n' > "$BASE/tasks/list.md"
-[ -e "$BASE/tasks/parking-lot.md" ] || printf '# 保留タスク\n\n| # | 状態 | タスク | 保留理由 | 再開条件 | 元の設計 |\n|---|------|-------|---------|---------|---------|\n' > "$BASE/tasks/parking-lot.md"
+[ -e "$BASE/tasks/parking-lot.md" ] || printf '# 保留タスク\n\n| # | 状態 | タスク | 保留理由 | 再開条件 | 元の設計 |\n|---|------|-------|---------|---------|---------|\n' > "$BASE/tasks/parking-lot.md"; fi
 [ -e "$BASE/rules-reference/incidents.md" ] || printf '# 事故記録\n\n1 回目はここに 1 行。2 回目で /hirai-lite:add-rule に回す。\n\n| 日付 | 事象 | 影響 | 直し方 | 再発回数 |\n|-----|------|------|-------|--------|\n' > "$BASE/rules-reference/incidents.md"
 [ -e "$BASE/rules-reference/approval-template.md" ] || cp "$P/docs/rules-reference/approval-template.md" "$BASE/rules-reference/approval-template.md"
-ls "$BASE/tasks/list.md" "$BASE/tasks/parking-lot.md" "$BASE/rules-reference/incidents.md" "$BASE/rules-reference/approval-template.md" && ls -d "$BASE/draft"
+ls "$BASE/rules-reference/incidents.md" "$BASE/rules-reference/approval-template.md" && ls -d "$BASE/draft"
 fi
 ```
 

@@ -1,16 +1,26 @@
 #!/usr/bin/env bash
 # 会話の開始時に出す Orca 関連の行を標準出力に出す（hooks/session-start.sh が 1 行で呼ぶ）。
 #   worktree: warn|block で Orca の worktree でないとき … 警告 1 行
-#   notify: orca のとき … 知らせ方の 3 行
+#   notify: orca のとき … 知らせ方 1 行（開始時の表示を 5 行以内に収めるため 1 行にまとめる）
 # どちらも off（既定）なら 1 バイトも出さない。常に exit 0（fail-open）。
+# worktree: block でも jq と python3 が無いと guard は入力を読めず止まらない。そのときは「止まりません」と言う（条 9）。
 set -uo pipefail
 
 root="${CLAUDE_PROJECT_DIR:-$PWD}"
 
+# yml_val <file> <キー> -> 値（引用符と行末のコメントを外す）。無ければ空。
+yml_val() {
+  [ -f "$1" ] || return 0
+  sed -n "s/^[[:space:]]*${2}:[[:space:]]*//p" "$1" 2>/dev/null | head -1 \
+    | sed -e 's/[[:space:]]*#.*$//' -e "s/^[\"']//" -e "s/[\"'][[:space:]]*\$//" -e 's/[[:space:]]*$//'
+}
+
+# yml_get <キー> -> 項目ごとに プロジェクト > ホーム の順
 yml_get() {
-  local lib; lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/tasks-path.sh"
-  [ -f "$lib" ] || return 0
-  ( . "$lib" 2>/dev/null && harness_yml_value "$root" "$1" ) 2>/dev/null || true
+  local v
+  v="$(yml_val "$root/.claude/mode.yml" "$1")"
+  [ -n "$v" ] || v="$(yml_val "${HOME:-/nonexistent}/.claude/mode.yml" "$1")"
+  printf '%s' "$v"
 }
 
 wt="${HC_WORKTREE:-$(yml_get worktree)}"
@@ -26,7 +36,11 @@ case "$wt" in
     fi
     if [ "$in_orca_wt" -eq 0 ]; then
       if [ "$wt" = "block" ]; then
-        echo "[harness] worktree: block — Orca の worktree ではないため、git に入るファイルの編集と git commit は止まります。orca worktree create --name <名前> で worktree を作って作業してください"
+        if command -v jq >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1; then
+          echo "[harness] worktree: block — Orca の worktree ではないため、git に入るファイルの編集と git commit は止まります。orca worktree create --name <名前> で worktree を作って作業してください"
+        else
+          echo "[harness] worktree: block ですが、jq も python3 も無いので止まりません。Orca の worktree ではないため、並行の会話と作業ツリーが重なる恐れがあります（jq か python3 を入れると止まります）"
+        fi
       else
         echo "[harness] worktree: warn — Orca の worktree ではありません。並行の会話と作業ツリーが重なる恐れがあります（orca worktree create --name <名前>）"
       fi
@@ -35,8 +49,6 @@ case "$wt" in
 esac
 
 if [ "$notify" = "orca" ]; then
-  echo "[harness] notify: orca — 決めてもらうことができたら、問いを .tmp/ に単独で読める形で書き、hirai-notify question <file> <要約> を送ってその手番を終えます"
-  echo "[harness] 終わったら hirai-notify done <報告> <要約>、続けられないエラーで止まったら hirai-notify stopped <報告> <要約> を送ります（Orca に立ち上げられた担当は、最初の前置きの文にある Dispatch の id を --dispatch-id で渡します）"
-  echo "[harness] 送る操作は、検査の結果を見てから別の呼び出しで打ちます。答えはコーディネーターがこの会話の端末へ中継します"
+  echo "[harness] notify: orca — 決めてもらうことができたら問いを .tmp/ に単独で読める形で書き、hirai-notify question <絶対 path> <要約> を送ってその手番を終える。終わったら done <報告の絶対 path> <要約>、続けられないエラーは stopped <報告の絶対 path> <要約>（Orca に立ち上げられた担当は、前置きの Dispatch の id を --dispatch-id で渡す）。送る操作は検査の結果を見てから別の呼び出しで打つ"
 fi
 exit 0
