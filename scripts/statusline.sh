@@ -49,10 +49,11 @@ pct() {  # 使用率を整数 % + 色に。非数は "—"。0-100 に clamp。
   printf '%s%s%%%s' "$col" "$v" "$R"
 }
 
-# 共通ライブラリ (同じディレクトリ) を先に読み、root を git の toplevel に解く (サブディレクトリで開いても
-# mode.yml・台帳・更新の鍵が本体と同じ値になる)。解くのはここ 1 回だけ (毎回動くので git を二重に打たない)。
+# 共通ライブラリ (同じディレクトリ) を先に読み、root を harness_root に解く (自分の .claude を持たないサブディレクトリで開いても
+# mode.yml・台帳・更新の鍵が toplevel と同じ値になり、自分の .claude を持つパッケージではそこを読む)。解くのはここ 1 回だけ (毎回動くので git を二重に打たない)。
 # tasks-path.sh と statusline.sh はどちらもプラグイン所有で、/init と /update が対で入れ替える。
 [ -f "$here/tasks-path.sh" ] && . "$here/tasks-path.sh" 2>/dev/null || true
+opened="$root"   # 開いた dir (台帳は「開いた dir → root」の順で引く)
 if command -v harness_root >/dev/null 2>&1; then
   root="$(harness_root "$root")"
 fi
@@ -134,7 +135,7 @@ if [ "$tasks_form" = "github-project" ]; then
     todo="hirai-project-method が未導入"
   fi
 elif command -v harness_tasks_file >/dev/null 2>&1; then
-  list="$(harness_tasks_file "$root" 2>/dev/null || true)"
+  list="$(harness_tasks_file "$opened" 2>/dev/null || true)"
   if [ -n "$list" ] && [ -f "$list" ]; then todo="$(harness_open_tasks "$list")"; fi
 fi
 

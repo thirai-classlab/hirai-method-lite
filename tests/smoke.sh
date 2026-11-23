@@ -40,6 +40,8 @@ APPROVAL_SITES='init.md update.md add-rule.md state.md config.md new-draft.md st
 
 # smoke 自体は外部通信しない。更新検知を要する case 7/8 だけが個別に on を渡す。
 export HARNESS_UPDATE_CHECK=off
+# 親の会話の環境（coordinator・Orca の端末）が smoke の中の hook・bin に漏れて宛先や判定を変えないよう、頭で外す。個々の確かめは必要な変数を自分で渡す
+unset HIRAI_COORDINATOR HIRAI_DISPATCH_ID ORCA_WORKTREE_ID ORCA_TERMINAL_HANDLE
 
 pass() { echo "PASS  case $1: $2"; }
 fail() { echo "FAIL  case $1: $2 -- $3"; FAILED=1; }
@@ -91,8 +93,8 @@ sl_shape() {
 # r6_scratch <dir> [<相対 path> <sed 式>] -> hooks・scripts・bin の複製 (VERSION は 0.1.0)。壊す式が効かなければ rc 1
 r6_scratch() {
   local d="$1" rel="${2:-}" ex="${3:-}"
-  mkdir -p "$d/hooks" "$d/scripts" "$d/bin"
-  cp -R "$ROOT/hooks/." "$d/hooks/"; cp -R "$ROOT/scripts/." "$d/scripts/"; cp -R "$ROOT/bin/." "$d/bin/"
+  mkdir -p "$d/hooks" "$d/scripts" "$d/bin" "$d/commands"
+  cp -R "$ROOT/hooks/." "$d/hooks/"; cp -R "$ROOT/scripts/." "$d/scripts/"; cp -R "$ROOT/bin/." "$d/bin/"; cp -R "$ROOT/commands/." "$d/commands/"
   printf '0.1.0\n' > "$d/VERSION"
   [ -n "$rel" ] || return 0
   cp "$d/$rel" "$d/$rel.orig" && sed -i.bak "$ex" "$d/$rel" && rm -f "$d/$rel.bak"
@@ -172,6 +174,42 @@ r6_update_checks() {
   o="$(cd "$M/apps/api" && env -i HOME="$h" PATH=/usr/bin:/bin TMPDIR="$td" CLAUDE_PLUGIN_ROOT="$s" CLAUDE_PROJECT_DIR="$M/apps/api" HARNESS_UPDATE_CHECK=off \
         bash "$s/hooks/session-start.sh" 2>&1 </dev/null | head -1)"
   case "$o" in *'tasks: github-project'*'worktree: block'*) : ;; *) echo "FAIL E-subdir-tasks-line1 サブディレクトリで開いた開始時の 1 行目に tasks:・worktree: が出ない: [$o]" ;; esac
+  # E2 root の解き方 (fix8): 自分の .claude を持つパッケージはそこ・持たないサブディレクトリは toplevel・HOME が git のときは dir のまま
+  #     worktree: は toplevel の mode.yml だけ・台帳と state もそこの root を見る
+  mkdir -p "$M/packages/app/.claude/rules" "$M/packages/app/.claude/state" "$M/packages/app/src" "$M/apps/api/src"
+  printf 'mode: loop\nworktree: off\n' > "$M/packages/app/.claude/mode.yml"; printf 'x\n' > "$M/packages/app/.claude/state/latest.md"
+  printf 'mode: normal\nworktree: block\n' > "$M/.claude/mode.yml"
+  rr() { ( cd "$1" && env -u HC_MODE -u HC_WORKTREE -u CLAUDE_PROJECT_DIR HOME="${3:-$h}" bash -c ". \"$s/scripts/tasks-path.sh\"; $2" 2>/dev/null ); }
+  o="$(rr "$M/packages/app/src" 'harness_root "$PWD"')"
+  [ "$o" = "$M/packages/app" ] || echo "FAIL E-subdir-first 自分の .claude を持つパッケージの下で root がそのパッケージにならない: [$o]"
+  o="$(rr "$M/packages/app/src" 'harness_mode "$PWD"')"
+  [ "$o" = loop ] || echo "FAIL E-subdir-first-mode パッケージの mode.yml を読まない: [$o]"
+  o="$(rr "$M/packages/app/src" 'harness_state_dir "$PWD"')"
+  [ "$o" = "$M/packages/app/.claude/state" ] || echo "FAIL E-subdir-state-pkg パッケージの下の state が root の .claude/state にならない: [$o]"
+  mkdir -p "$M/apps/api/.claude/state"; printf 'x\n' > "$M/apps/api/.claude/state/latest.md"   # marker でない state だけを持つサブディレクトリ
+  o="$(rr "$M/apps/api" 'harness_state_dir "$PWD"')"
+  [ "$o" = "$M/apps/api/.claude/state" ] || echo "FAIL E-subdir-state 渡された dir に在る .claude/state を先に採らない: [$o]"
+  o="$(rr "$M/apps/api/src" 'harness_root "$PWD"; echo; harness_state_dir "$PWD"')"
+  [ "$o" = "$M"$'\n'"$M/.claude/state" ] || echo "FAIL E-subdir-nomarker .claude の無いサブディレクトリが toplevel の root・state にならない: [$o]"
+  mkdir -p "$X/apps/api/src"   # toplevel にも自分の .claude が無いリポ: root は toplevel のまま
+  o="$(rr "$X/apps/api/src" 'harness_root "$PWD"; echo; harness_state_dir "$PWD"')"
+  [ "$o" = "$X"$'\n'"$X/.claude/state" ] || echo "FAIL E-subdir-nomarker .claude がどこにも無いリポのサブディレクトリが toplevel の root・state にならない: [$o]"
+  o="$(rr "$M/packages/app/src" 'harness_yml_value "$PWD" worktree')"
+  [ "$o" = block ] || echo "FAIL E-top-worktree worktree: がパッケージの mode.yml (off) を読んだ。toplevel の block のはず: [$o]"
+  local h2; mkdir -p "$s/h2/proj/sub"; h2="$(cd "$s/h2" && pwd -P)"; git init -q "$h2" 2>/dev/null   # HOME 自身が git（手順 0 の判定行は pwd -P の toplevel と比べるので実体の path）
+  o="$(rr "$h2/proj/sub" 'harness_root "$PWD"; echo; harness_top "$PWD"' "$h2")"
+  [ "$o" = "$h2/proj/sub"$'\n'"$h2/proj/sub" ] || echo "FAIL E-home-git HOME が git のとき root・top が dir のままでない: [$o]"
+  # 手順 0 の判定行 (commands/init.md・update.md): サブディレクトリでだけ「ここはリポのサブディレクトリ」と出る
+  local cmdf st0 where hh
+  for cmdf in init update; do
+    st0="$(grep -m1 '^T="$(git rev-parse --show-toplevel' "$s/commands/$cmdf.md" | sed 's/\(echo "ここはリポのサブディレクトリ[^"]*"\).*$/\1/')"
+    [ -n "$st0" ] || { echo "FAIL E-step0-line $cmdf.md に手順 0 の判定行が無い"; continue; }
+    for where in "$M/apps/api/src:出る" "$M/packages/app:出ない" "$M:出ない" "$h2/proj/sub:出ない"; do
+      hh="$h"; case "$where" in "$h2"/*) hh="$h2" ;; esac
+      o="$(cd "${where%%:*}" && env HOME="$hh" bash -c "$st0" 2>/dev/null)"
+      case "${where##*:}:$o" in 出る:*サブディレクトリ*|出ない:) : ;; *) echo "FAIL E-step0-line $cmdf.md の判定行が ${where%%:*} で ${where##*:} のはずが [$o]" ;; esac
+    done
+  done
   # F 版の接尾 (-<commit>) を落としてから比べる: 3.0.2-8713c5b11005 は 3.0.1 より新しい・3.0.0-52ce73979469 は 3.0.1 より古い
   printf '{"plugins":{"hirai-lite@hirai-lite":[{"version":"3.0.1","installPath":"/a"},{"version":"3.0.2-8713c5b11005","installPath":"/b"},{"version":"3.0.0-52ce73979469","installPath":"/c"}]}}\n' > "$h/.claude/plugins/installed_plugins.json"
   o="$(HOME="$h" bash -c ". \"$s/scripts/update-check.sh\"; harness_plugin_root_from_installed hirai-lite" 2>/dev/null)"
@@ -200,6 +238,11 @@ r6_update_checks() {
   rm -f "$M/.claude/settings.local.json"
   o="$(HOME="$h" bash -c ". \"$s/scripts/tasks-path.sh\"; harness_pm_install_dir \"$M\"" 2>/dev/null)"
   [ -z "$o" ] || echo "FAIL H-disabled-project settings.json で false の足すプラグインを「ある」とみなした: [$o]"
+  # worktree (W1) からも、本体の checkout の settings.local.json の false が効く (Claude Code は本体のを使う)
+  rm -f "$M/.claude/settings.json"; printf '{"enabledPlugins":{"hirai-project-method@hirai-lite":false}}\n' > "$M/.claude/settings.local.json"
+  o="$(HOME="$h" bash -c ". \"$s/scripts/tasks-path.sh\"; harness_pm_install_dir \"$W1\"" 2>/dev/null)"
+  [ -z "$o" ] || echo "FAIL H-disabled-main-local worktree から見て本体の settings.local.json の false を無視した: [$o]"
+  rm -f "$M/.claude/settings.local.json"
   rm -rf "$s"
 }
 
@@ -290,6 +333,28 @@ ed "$T/P/.tmp/clone/src/a.txt" | chk ALLOW tmp-clone-edit X=1
 bs "$T/P" "git -C $T/P/.tmp/clone commit -am x" | chk ALLOW tmp-clone-commit X=1
 ed "$T/P/nested-clone/src/a.txt" | chk DENY nested-clone-edit X=1
 bs "$T/P" "git -C $T/P/nested-clone commit -am x" | chk DENY nested-clone-commit X=1
+# 算術の読み飛ばし: 閉じない "((" は括弧として読み直す・for (( も文頭の算術として読む・算術の中の引用符と $( ) は読む
+bs "$T/P" '((git add -A && git commit -m x) 2>&1 | tail -3)' | chk DENY arith-paren-subshell X=1
+bs "$T/P" 'for ((i=1;i<100;i<<=1)); do
+git commit -m x
+done' | chk DENY for-arith-commit X=1
+bs "$T/P" 'echo $((1<<2)); echo commit' | chk ALLOW arith-shift-word-commit X=1
+bs "$T/P" 'for ((i=0;i<2;i++)); do echo commit; done' | chk ALLOW for-arith-word-commit X=1
+bs "$T/P" 'git commit --dry-run -m x' | chk ALLOW commit-dry-run X=1
+# 400 個の $( ) をつないでも 1 秒以内（commit の字が無い $( ) は調べない）
+big="$(python3 -c 'print("; ".join("a%d=\"$(echo b%d)\"" % (i, i) for i in range(400)) + "; git commit -m x")')"
+t0=$(python3 -c 'import time;print(time.time())')
+bs "$T/P" "$big" | chk DENY many-subst-deny X=1
+t1=$(python3 -c 'import time;print(time.time())')
+python3 -c 'import sys; sys.exit(0 if float(sys.argv[2]) - float(sys.argv[1]) < 1.0 else 1)' "$t0" "$t1" || { echo "FAIL guard-many-subst-slow 400 個の \$( ) で 1 秒を超えた ($t0 → $t1)"; fail=1; }
+# 外側のリポは .tmp/ と .claude/state/ の下だけ止めない（外側の .gitignore に当たる場所でも、block のリポは止める）
+printf '.claude/worktrees/\n' > "$T/P/.gitignore"
+ed "$T/P/.claude/worktrees/agent-1/sub/f.txt" | chk DENY outer-gitignored-edit X=1
+bs "$T/P/.claude/worktrees/agent-1" 'git commit -am x' | chk DENY outer-gitignored-commit X=1
+git init -q "$T/OUT"; printf '*\n' > "$T/OUT/.gitignore"
+git init -q "$T/OUT/blk"; mkdir -p "$T/OUT/blk/.claude" "$T/OUT/blk/src"; printf 'worktree: block\n' > "$T/OUT/blk/.claude/mode.yml"; echo a > "$T/OUT/blk/src/a.txt"
+ed "$T/OUT/blk/src/a.txt" | chk DENY outer-ignores-all-edit X=1
+bs "$T/OUT" "git -C $T/OUT/blk commit -am x" | chk DENY outer-ignores-all-commit X=1
 for l in en_US.UTF-8 ja_JP.UTF-8; do
   bs "$T/P" 'git commit -m "$(cat <<'"'EOF'"'
 fix: 引用符の外の << を heredoc と読む
@@ -390,7 +455,15 @@ rest() { : > "$T/log"; ( cd "$1" && env HC_NOTIFY=orca PATH="$T/bin:$PATH" FAKE_
 rest "$T/C" | grep -q 'worktree の残り: なし' || echo "FAIL notify-rest-none clean で push 済みなのに「worktree の残り: なし」が出ない"
 echo x > "$T/C/new.txt"
 rest "$T/C" | grep -q 'worktree の残り: 未コミット 1 件・未 push 0 件' || echo "FAIL notify-rest-dirty 未コミット 1 件が出ない"
-rest "$T/R" | grep -q 'worktree の残り: 未コミット [1-9][0-9]* 件・未 push upstream なし' || echo "FAIL notify-rest-no-upstream upstream が無いのに「なし」と出たか行が無い"
+# 未 push は origin のどの branch にも無い commit の数（upstream の有無によらない）
+git clone -q "$T/O.git" "$T/N1" 2>/dev/null; git -C "$T/N1" config user.email a@b; git -C "$T/N1" config user.name a
+git -C "$T/N1" checkout -q -b feat; git -C "$T/N1" commit -q --allow-empty -m f
+rest "$T/N1" | grep -q 'worktree の残り: 未コミット 0 件・未 push 1 件' || echo "FAIL notify-rest-no-upstream upstream が無い branch の未 push 1 件が出ない: $(rest "$T/N1")"
+git clone -q "$T/O.git" "$T/N2" 2>/dev/null; git -C "$T/N2" config user.email a@b; git -C "$T/N2" config user.name a
+git -C "$T/N2" commit -q --allow-empty -m g; git -C "$T/N2" push -q origin HEAD:refs/heads/other 2>/dev/null
+rest "$T/N2" | grep -q 'worktree の残り: なし' || echo "FAIL notify-rest-pushed-elsewhere 別名で push 済み（upstream は origin/main のまま）なのに未 push と出た: $(rest "$T/N2")"
+echo n > "$T/N2/new.txt"; git -C "$T/N2" config status.showUntrackedFiles no
+rest "$T/N2" | grep -q 'worktree の残り: 未コミット 1 件・未 push 0 件' || echo "FAIL notify-rest-untracked-normal showUntrackedFiles=no でも未追跡を数えるはず: $(rest "$T/N2")"
 exit 0
 R6NOTIFY
   ( cd "$s" && bash notify-test.sh "$s/hooks/notify-attention.sh" "$s/bin/hirai-notify" 2>&1 | grep '^FAIL' )
@@ -427,17 +500,22 @@ ORX
   $g "$M" config user.email a@b; $g "$M" config user.name a
   $g "$M" checkout -q -b main 2>/dev/null; echo a > "$M/a"; $g "$M" add -A; $g "$M" commit -qm i; $g "$M" push -q -u origin main 2>/dev/null
   $g "$M" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
-  printf '.tmp\nnode_modules\n' >> "$M/.git/info/exclude"
-  for b in ok dirty unpushed unmerged term termid locked fresh prw prx outer proc; do $g "$M" worktree add -q "$s/$b" -b "b-$b" 2>/dev/null; done
+  printf '.tmp\nnode_modules\nメモ/\n*.local\n' >> "$M/.git/info/exclude"
+  for b in ok dirty unpushed unmerged term termid locked fresh prw prx outer proc jp outb unt own; do $g "$M" worktree add -q "$s/$b" -b "b-$b" 2>/dev/null; done
   $g "$M" worktree add -q --detach "$s/det" 2>/dev/null
+  $g "$M" worktree add -q "$s/track" -b b-track origin/main 2>/dev/null   # 追う形の作りたて（upstream = origin/main）
   $g "$M" worktree add -q "$s/outert" -b b-outert 2>/dev/null
   mkdir -p "$s/outer/.tmp" "$s/outert/.tmp"
   $g "$M" worktree add -q "$s/outer/.tmp/inner" -b b-inner 2>/dev/null
   $g "$M" worktree add -q "$s/outert/.tmp/inner2" -b b-inner2 2>/dev/null
-  for b in ok dirty unpushed unmerged term termid outer outert proc; do $g "$s/$b" push -q -u origin "b-$b" 2>/dev/null; done
+  for b in ok dirty unpushed unmerged term termid outer outert proc jp outb unt own; do $g "$s/$b" push -q -u origin "b-$b" 2>/dev/null; done
   $g "$s/outer/.tmp/inner" push -q -u origin b-inner 2>/dev/null; $g "$s/outert/.tmp/inner2" push -q -u origin b-inner2 2>/dev/null
   mkdir -p "$s/ok/.tmp" "$s/ok/node_modules"; echo 1 > "$s/ok/.tmp/a"; echo 2 > "$s/ok/.tmp/b"; echo 3 > "$s/ok/node_modules/x"
   echo d > "$s/dirty/new.txt"
+  # jp: 日本語・空白の名前の無視ファイル・outb: .tmp/out と .tmp/x/build（歩くときに out・build を除かない）・unt: showUntrackedFiles=no の未追跡
+  mkdir -p "$s/jp/メモ"; echo a > "$s/jp/メモ/a.md"; echo a > "$s/jp/env copy.local"
+  mkdir -p "$s/outb/.tmp/out" "$s/outb/.tmp/x/build" "$s/outb/.tmp/node_modules/z"; echo a > "$s/outb/.tmp/out/report.md"; echo p > "$s/outb/.tmp/x/build/plan.md"; echo q > "$s/outb/.tmp/node_modules/z/q"
+  echo n > "$s/unt/new-work.txt"
   # unpushed: 中身は既定の branch に入っている（同じ変更を main に cherry-pick）が、upstream より進んでいる
   echo u > "$s/unpushed/u"; $g "$s/unpushed" add -A; $g "$s/unpushed" commit -qm u
   # unmerged: push 済みだが既定の branch に入っていない
@@ -450,6 +528,7 @@ ORX
   $g "$M" worktree lock "$s/locked" 2>/dev/null
   printf '{"result":{"terminals":[{"worktreePath":"%s/term"},{"worktreePath":"","worktreeId":"repo::%s/termid"},{"worktreePath":"%s/outert"}]}}' "$s" "$s" "$s" > "$s/orca.json"
   ( cd "$s/proc" && exec sleep 120 ) >/dev/null 2>&1 & procpid=$!
+  $g "$M" config status.showUntrackedFiles no
   sleep 1
   o="$(cd "$M" && env PATH="$pth" FAKE_ORCA="$s/orca.json" FAKE_PRS="$s/prs" python3 "$s/bin/hirai-worktrees" list --json 2>&1)"; rc=$?
   [ "$rc" -eq 0 ] || echo "FAIL wt-exit list が exit $rc: $o"
@@ -461,7 +540,8 @@ except Exception as e:
     print("FAIL wt-json JSON を読めない: %s" % e); sys.exit()
 ok, keep = "消してよい", "残す"
 want = {"main": keep, "ok": ok, "dirty": keep, "unpushed": keep, "unmerged": keep, "term": keep, "termid": keep, "locked": keep,
-        "fresh": keep, "prw": ok, "prx": keep, "det": keep, "outer": keep, "inner": ok, "outert": keep, "inner2": keep, "proc": keep}
+        "fresh": keep, "prw": ok, "prx": keep, "det": keep, "outer": keep, "inner": ok, "outert": keep, "inner2": keep, "proc": keep,
+        "track": keep, "jp": ok, "outb": ok, "unt": keep, "own": ok}
 got = {os.path.basename(r["path"]): r for r in rows}
 for k, v in want.items():
     if k not in got or got[k]["verdict"] != v:
@@ -469,13 +549,27 @@ for k, v in want.items():
 ev = got.get("ok", {}).get("evacuate")
 if ev != [{"dir": ".tmp", "count": 2}]:
     print("FAIL wt-evac ok の退避は .tmp 2 件だけ（node_modules は作り直せる）のはずが %s" % ev)
+jp = sorted((str(e.get("dir")).rstrip("/"), e.get("count")) for e in (got.get("jp", {}).get("evacuate") or []))
+if jp != [("env copy.local", 1), ("メモ", 1)]:
+    print("FAIL wt-jp 日本語・空白の名前の退避は「env copy.local 1 件」「メモ 1 件」のはずが %s" % jp)
+if got.get("outb", {}).get("evacuate") != [{"dir": ".tmp", "count": 2}]:
+    print("FAIL wt-outb .tmp/out と .tmp/x/build の 2 件を退避に数えるはず（node_modules は数えない）が %s" % got.get("outb", {}).get("evacuate"))
 if any(got.get(k, {}).get("evacuate") for k in ("inner", "prw")):
     print("FAIL wt-evac-empty 無視ファイルが無い worktree に退避が出た")
 def has(k, word):
     return any(word in x for x in got.get(k, {}).get("reasons", []))
-for k, word in (("fresh", "upstream が無い"), ("outer", "入れ子の worktree がある"), ("inner2", "外側の worktree が使用中"), ("det", "detached"), ("proc", "プロセス")):
+for k, word in (("fresh", "upstream が無い"), ("track", "upstream が無い"), ("unt", "作業がある"), ("outer", "入れ子の worktree がある"), ("inner2", "外側の worktree が使用中"), ("det", "detached"), ("proc", "プロセス")):
     if not has(k, word):
         print("FAIL wt-reason-%s 「残す」の理由に「%s」が無い: %s" % (k, word, got.get(k, {}).get("reasons")))
+' 2>&1
+  # 打った会話自身の worktree（親のプロセスの cwd がある worktree）は、別の dir から打っても「今いる worktree」で対象外
+  o="$(cd "$s/own" && env PATH="$pth" FAKE_ORCA="$s/orca.json" FAKE_PRS="$s/prs" bash -c "cd '$M' && python3 '$s/bin/hirai-worktrees' list --json; :" 2>&1)"
+  printf '%s' "$o" | python3 -c '
+import json, sys, os
+rows = {os.path.basename(r["path"]): r for r in json.load(sys.stdin)}
+r = rows.get("own", {})
+if r.get("verdict") == "消してよい" or "今いる worktree" not in str(r):
+    print("FAIL wt-own 親のプロセスの cwd がある worktree を「今いる worktree」で対象外にしない: %s" % r)
 ' 2>&1
   # 文言（README と一致）: 持ち主の会話・退避・末尾の消し方
   o="$(cd "$M" && env PATH="$pth" FAKE_ORCA="$s/orca.json" FAKE_PRS="$s/prs" python3 "$s/bin/hirai-worktrees" list 2>&1)"
@@ -505,10 +599,24 @@ if rows.get("prw") != "残す" or rows.get("ok") != "消してよい":
   ( cd / && PATH="$pth" python3 "$s/bin/hirai-worktrees" list >/dev/null 2>&1 ); [ $? -eq 2 ] || echo "FAIL wt-not-git git の外で exit 2 にならない"
   [ "$(grep -v '^ *#' "$s/bin/hirai-worktrees" | grep -c '"remove"')" = 0 ] || echo "FAIL wt-no-remove 消す操作 (git worktree remove) を持っている"
   kill "$procpid" 2>/dev/null; wait "$procpid" 2>/dev/null
-  # 終わりの知らせ (hirai-notify done) に、消してよい worktree の数と退避が要る数が添えられる。worktree の残りは今いる worktree で数える
+  # 終わりの知らせ (hirai-notify done) に、消してよい worktree の数と退避が要る数が添えられる。worktree の残りは今いる worktree で数える。
+  # 1 行は gh も使う（環境に HIRAI_WORKTREES_NO_GH=1 があっても外す）: gh ありの数が gh 無しの数より多い構成で、send の数が gh ありに一致する
+  local ngh nno
+  ngh="$(cd "$M" && env PATH="$pth" FAKE_ORCA="$s/orca.json" FAKE_PRS="$s/prs" python3 "$s/bin/hirai-worktrees" list --json 2>/dev/null | python3 -c 'import json,sys; print(sum(1 for r in json.load(sys.stdin) if r.get("verdict") == "消してよい"))')"
+  nno="$(cd "$M" && env PATH="$pth" FAKE_ORCA="$s/orca.json" FAKE_PRS="$s/prs" HIRAI_WORKTREES_NO_GH=1 python3 "$s/bin/hirai-worktrees" list --json 2>/dev/null | python3 -c 'import json,sys; print(sum(1 for r in json.load(sys.stdin) if r.get("verdict") == "消してよい"))')"
+  [ "${ngh:-0}" -gt "${nno:-0}" ] 2>/dev/null || echo "FAIL wt-notify-setup gh ありの数 ($ngh) が gh 無し ($nno) より多い構成になっていない"
   ( cd "$M" && mkdir -p .claude && printf 'notify: orca\n' > .claude/mode.yml && echo r > "$s/rep.md" \
-    && env PATH="$pth" FAKE_ORCA="$s/orca.json" HIRAI_COORDINATOR=run:x bash "$s/bin/hirai-notify" done "$s/rep.md" "終わり" ) >/dev/null 2>&1
-  grep -Eq '消してよい worktree: [1-9][0-9]* 本（うち退避が要る [1-9][0-9]* 本' "$s/send.log" 2>/dev/null || echo "FAIL wt-notify-note hirai-notify done に「消してよい worktree: N 本（うち退避が要る M 本」が出ない: $(tr '\n' ' ' < "$s/send.log" 2>/dev/null)"
+    && env PATH="$pth" FAKE_ORCA="$s/orca.json" FAKE_PRS="$s/prs" HIRAI_WORKTREES_NO_GH=1 HIRAI_COORDINATOR=run:x bash "$s/bin/hirai-notify" done "$s/rep.md" "終わり" ) >/dev/null 2>&1
+  grep -Eq "消してよい worktree: ${ngh} 本（うち退避が要る [1-9][0-9]* 本" "$s/send.log" 2>/dev/null || echo "FAIL wt-notify-note hirai-notify done に gh も使った「消してよい worktree: ${ngh} 本（うち退避が要る M 本」が出ない: $(tr '\n' ' ' < "$s/send.log" 2>/dev/null)"
+  # 全体で 15 秒の上限（超えたら 1 行を出さず、送信は止めない）。上限の値は文字で確かめ、止まり方は 2 秒に縮めた複製で測る
+  grep -q '^NOTE_LIMIT_SEC=15$' "$s/bin/hirai-notify" || echo "FAIL wt-notify-limit-15 NOTE_LIMIT_SEC が 15 秒でない"
+  if [ -z "${1:-}" ] || [ "$1" = bin/hirai-notify ]; then
+    mkdir -p "$s/bin2"; sed 's/^NOTE_LIMIT_SEC=15$/NOTE_LIMIT_SEC=2/' "$s/bin/hirai-notify" > "$s/bin2/hirai-notify"
+    printf 'import time\ntime.sleep(8)\n' > "$s/bin2/hirai-worktrees"; rm -f "$s/send.log"
+    local t0=$SECONDS
+    ( cd "$M" && env PATH="$pth" FAKE_ORCA="$s/orca.json" HIRAI_COORDINATOR=run:x bash "$s/bin2/hirai-notify" done "$s/rep.md" "終わり" ) >/dev/null 2>&1; rc=$?
+    { [ $((SECONDS - t0)) -lt 6 ] && [ "$rc" -eq 0 ] && [ -s "$s/send.log" ] && ! grep -q '消してよい worktree' "$s/send.log"; } || echo "FAIL wt-notify-limit 上限を超えても止まらない・1 行が残る・送信が止まった (${rc}・$((SECONDS - t0)) 秒): $(tr '\n' ' ' < "$s/send.log" 2>/dev/null)"
+  fi
   r6_watch_checks "$s"
   rm -rf "$s"
 }
@@ -568,7 +676,17 @@ C-one-line|hooks/session-start.sh|/awk .NF{ if (n++)/d
 C-coordinator-not-resume|hooks/session-start.sh|s/ | grep -v .^coordinator.//
 D-statusline-root|scripts/statusline.sh|s/HIRAI_TASK_ROOT="\$root" //
 C-joined|scripts/update-check.sh|s/^  harness_update_pm_notice "\$root" "\${2:-}"$/  :/
-E-subdir-tasks|scripts/tasks-path.sh|s/if \[ -e "\$d\/.git" \]; then/if true; then/
+E-subdir-tasks|scripts/tasks-path.sh|s/if \[ -e "\$cur\/.git" \]; then _HR_TOP/if false; then _HR_TOP/
+E-subdir-first|scripts/tasks-path.sh|s/if \[ -z "\$_HR_FIRST" \] \&\& {/if false \&\& {/
+E-subdir-first-mode|scripts/tasks-path.sh|s/^  if \[ -n "\$_HR_FIRST" \]; then printf/  if false; then printf/
+E-subdir-state|scripts/tasks-path.sh|s/for p in "\$d\/.claude\/state" "\$r\/.claude\/state"; do/for p in "$r\/.claude\/state"; do/
+E-subdir-nomarker|scripts/tasks-path.sh|s/elif \[ -n "\$_HR_TOP" \]; then printf/elif false; then printf/
+E-subdir-state-pkg|scripts/tasks-path.sh|s/^  r="\$(harness_root "\$d")"$/  r="$d"/
+E-top-worktree|scripts/tasks-path.sh|s/worktree|notify|nightly_ci) root=/zzz) root=/
+E-home-git|scripts/tasks-path.sh|s/^      _HR_TOP=""$/      :/
+E-step0-line|commands/init.md|s/ \&\& \[ ! -d "\$PWD\/.claude" \]//
+E-step0-line|commands/update.md|s/ \&\& \[ ! -d "\$PWD\/.claude" \]//
+H-disabled-main-local|scripts/tasks-path.sh|s/ if main else \[\]) +/ if False else []) +/
 F-suffix-update-check|scripts/update-check.sh|s/\.split("-", 1)\[0\]//
 F-suffix-tasks-path|scripts/tasks-path.sh|s/\.split("-", 1)\[0\]//
 G-auto-sync-two-repos|scripts/update-check.sh|s/harness_update_flag_key "\${2:-\${CLAUDE_PROJECT_DIR:-\$PWD}}"/harness_update_flag_key ""/
@@ -580,13 +698,17 @@ X
 guard-nested-under|hooks/worktree-guard.sh|/\*\/\.claude\/worktrees\/\*) return 0/d
 guard-multiline-quote-then-heredoc|hooks/worktree-guard.sh|s/\(substr(buf, p + 1, 1) == "<"\)/\1 \&\& 0/
 guard-case-differing-id|hooks/worktree-guard.sh|s/\[ "\$top" -ef "\$idpath" \]/[ "$top" = "$idpath" ]/
-guard-arith-shift-nl|hooks/worktree-guard.sh|s/^        p++; skip_arith()$/        p++/
-guard-arith-in-dq|hooks/worktree-guard.sh|s/{ skip_arith(); lastsub = ""; return }/{ }/
-guard-arith-command|hooks/worktree-guard.sh|s/{ skip_arith(); end_seg() }/{ end_seg() }/
+guard-arith-shift-nl|hooks/worktree-guard.sh|s/if (skip_arith()) { word = word "0"; inword = 1 }/{ word = word "0"; inword = 1 }/
+guard-arith-in-dq|hooks/worktree-guard.sh|s/if (skip_arith()) { lastsub = ""; return }/if (1) { }/
+guard-arith-command|hooks/worktree-guard.sh|s/{ st = p; if (!skip_arith()) p = st; end_seg() }/{ end_seg() }/
 guard-commit-in-dq-subst|hooks/worktree-guard.sh|s/skip_subst(); emit_sub(lastsub) }/skip_subst() }/
 guard-comment-apostrophe|hooks/worktree-guard.sh|/if (c == "#") {$/,/^      }$/d
 guard-ansi-quote-escape|hooks/worktree-guard.sh|s/if (d == "\\\\") { p++; continue }/ /
 guard-dash-C-base|hooks/worktree-guard.sh|s/\[ -n "\$cdl" \] \&\& \[ "\$dirset" -eq 0 \] \&\& dir="\$base"/:/
+guard-arith-paren-subshell|hooks/worktree-guard.sh|/function skip_arith/,/^  }/s/^        else break$/        else { p++; return 1 }/
+guard-for-arith|hooks/worktree-guard.sh|s/|until|for|then|do/|until|then|do/
+guard-many-subst-slow|hooks/worktree-guard.sh|s/case "\$a" in \*commit\*) ;; \*) continue ;; esac//
+guard-outer-gitignored|hooks/worktree-guard.sh|s/^  return 1$/  git -C "$otop" check-ignore -q -- "$rel" 2>\/dev\/null/
 guard-tmp-clone-commit|hooks/worktree-guard.sh|s/outer_ignored "\$top" \&\& return 0/:/
 guard-tmp-clone-edit|hooks/worktree-guard.sh|s/outer_ignored "\$top" "\$rel" \&\& exit 0/:/
 ctx-subdir-shows-block|scripts/orca-context.sh|s/rev-parse --show-toplevel/rev-parse --show-cdup/
@@ -600,7 +722,9 @@ notify-nested-coordinator|bin/hirai-notify|s/for cdir in "\$PWD" "\${CLAUDE_PROJ
 notify-nested-done-removes|bin/hirai-notify|/rm -f "\$coordinator_file"/d
 notify-dashdash-summary|bin/hirai-notify|s/case "\$summary" in --\*) usage; exit 2 ;; esac/:/
 notify-rest-none|bin/hirai-notify|s/worktree の残り: なし/worktree の残り: X/
-notify-rest-no-upstream|bin/hirai-notify|s/未 push upstream なし/未 push ${ahead} 件/
+notify-rest-no-upstream|bin/hirai-notify|s/rev-list --count HEAD --not --remotes=origin/rev-list --count @{u}..HEAD/
+notify-rest-pushed-elsewhere|bin/hirai-notify|s/rev-list --count HEAD --not --remotes=origin/rev-list --count @{u}..HEAD/
+notify-rest-untracked-normal|bin/hirai-notify|s/status --porcelain --untracked-files=normal/status --porcelain/
 notify-assign|hooks/notify-attention.sh|s/if (!safe_value(v)) exit/if (0) exit/
 X
       ;;
@@ -619,6 +743,14 @@ wt-prx|bin/hirai-worktrees|s/(p.get("head") or {}).get("sha") == head/True/
 wt-evac|bin/hirai-worktrees|s/if base in REGENERABLE_DIRS or is_regenerable_file(base):/if False:/
 wt-text-owner|bin/hirai-worktrees|s/^OWNER_NOTE = .*/OWNER_NOTE = "X"/
 wt-notify-note|bin/hirai-notify|s/消してよい worktree:/X:/
+wt-notify-note|bin/hirai-notify|s/env -u HIRAI_WORKTREES_NO_GH python3/env HIRAI_WORKTREES_NO_GH=1 python3/
+wt-notify-limit-15|bin/hirai-notify|s/^NOTE_LIMIT_SEC=15$/NOTE_LIMIT_SEC=600/
+wt-notify-limit|bin/hirai-notify|s/timeout=int(sys.argv\[2\])/timeout=None/
+wt-track|bin/hirai-worktrees|s/if has_up and default is not None and up.strip() == default:/if False:/
+wt-jp|bin/hirai-worktrees|s/"--ignored", "-z",/"--ignored",/
+wt-outb|bin/hirai-worktrees|s/if d not in WALK_SKIP_DIRS and/if d not in REGENERABLE_DIRS and/
+wt-unt|bin/hirai-worktrees|s/"-c", "status.showUntrackedFiles=normal", //;s/"--untracked-files=normal"//
+wt-own|bin/hirai-worktrees|s/ or real(wt) in own_wts:/:/
 watch-wait-exit|bin/hirai-watch|s/sys.exit(1 if stalled else 3 if waiting else 0)/sys.exit(1 if stalled else 0)/
 watch-stall-priority|bin/hirai-watch|s/sys.exit(1 if stalled else 3 if waiting else 0)/sys.exit(3 if waiting else 1 if stalled else 0)/
 watch-ask-command|bin/hirai-watch|s/orca\\s+orchestration\\s+send\\b.\*--type\\s+question|/NOPE|/

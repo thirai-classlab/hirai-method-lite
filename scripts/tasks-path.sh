@@ -17,23 +17,84 @@
 #   進め方   : HC_MODE (env) > <root>/.claude/mode.yml の mode > $HOME/.claude/mode.yml の mode > normal (項目ごとに引く)
 #   入れ替え : HC_AUTO_SYNC (env) > 項目ごとに プロジェクト > ホーム の auto_sync > off (既定は入れ替えない)
 #   形       : HC_TASKS (env) > 項目ごとに プロジェクト > ホーム の tasks (ledger / github-project) > ledger
-#   ルール   : HARNESS_RULES_DIR > <root>/.claude/rules > $HOME/.claude/rules > <root>/.claude/rules
+#   ルール   : HARNESS_RULES_DIR > <dir>/.claude/rules > <root>/.claude/rules > $HOME/.claude/rules > <root>/.claude/rules
 #
 # file-top に set -e / set -o pipefail を書かない。source 元の shell flags を汚染し、
 # パイプ先の早期終了で呼び出し元ごと落ちる事故を防ぐため (関数内で局所化する)。
 
-# harness_root [dir] -> dir を含む git の toplevel を stdout。git でなければ dir のまま。常に rc 0。
-# .claude/mode.yml を読む・書く関数は全部これを通す (サブディレクトリの .claude/mode.yml は読まない。
-# worktree-guard・hirai-notify・orca-context と同じ root)。dir 直下に .git があれば toplevel なので
-# git を打たない (解いた root を渡し直しても 2 回目は git を呼ばない)。
-harness_root() {
-  local d="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" t
-  if [ -e "$d/.git" ]; then
-    printf '%s' "${d%/}"
-    return 0
+# _harness_abs <dir> -> 絶対 path (. や .. を畳む。dir が無ければ $PWD を前に付けるだけ)。
+_harness_abs() {
+  local d="${1:-$PWD}" a
+  a="$(cd "$d" 2>/dev/null && pwd)" || { case "$d" in /*) a="$d" ;; *) a="$PWD/$d" ;; esac; }
+  [ "$a" = / ] || a="${a%/}"
+  printf '%s' "$a"
+}
+
+# _harness_resolve [dir] -> 上へ辿って 2 つを決め、_HR_TOP (git の toplevel。無ければ空) と
+# _HR_FIRST (dir から toplevel までで最初に .claude/mode.yml・.claude/settings.json・.claude/rules が在る dir。無ければ空) に入れる。
+# toplevel が HOME か HOME の祖先なら git でないものとして扱う (ホームの git を「リポ」と読まない)。
+# ファイルの有無だけで決め、git を打たない (毎回動く画面下と hook を遅くしない)。常に rc 0。
+_harness_resolve() {
+  local d cur h
+  d="$(_harness_abs "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  _HR_TOP=""; _HR_FIRST=""
+  cur="$d"
+  while :; do
+    if [ -z "$_HR_FIRST" ] && { [ -f "$cur/.claude/mode.yml" ] || [ -f "$cur/.claude/settings.json" ] || [ -d "$cur/.claude/rules" ]; }; then
+      _HR_FIRST="$cur"
+    fi
+    if [ -e "$cur/.git" ]; then _HR_TOP="$cur"; break; fi
+    [ "$cur" = / ] && break
+    cur="${cur%/*}"; [ -n "$cur" ] || cur=/
+  done
+  if [ -n "$_HR_TOP" ]; then
+    h="${HOME:-}"; [ "$h" = / ] || h="${h%/}"
+    if [ "$_HR_TOP" = / ] || { [ -n "$h" ] && { [ "$_HR_TOP" = "$h" ] || case "$h/" in "$_HR_TOP"/*) true ;; *) false ;; esac; }; }; then
+      _HR_TOP=""
+    fi
   fi
-  t="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null || true)"
-  if [ -n "$t" ]; then printf '%s' "$t"; else printf '%s' "$d"; fi
+  [ -n "$_HR_TOP" ] || _HR_FIRST=""
+  return 0
+}
+
+# harness_top [dir] -> dir を含む git の toplevel を stdout。git でない・toplevel が HOME か HOME の祖先なら dir のまま。常に rc 0。
+# worktree:・notify:・nightly_ci: の mode.yml はここだけから引く (worktree-guard・hirai-notify・orca-context と同じ root)。
+harness_top() {
+  local d
+  d="$(_harness_abs "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  _harness_resolve "$d"
+  if [ -n "$_HR_TOP" ]; then printf '%s' "$_HR_TOP"; else printf '%s' "$d"; fi
+  return 0
+}
+
+# harness_root [dir] -> ハーネスの設定 (.claude/mode.yml・settings.json・rules・state・台帳) の root を stdout。常に rc 0。
+# dir から git の toplevel まで上へ見て、最初に .claude/mode.yml か .claude/settings.json か .claude/rules が在る dir。
+# どこにも無ければ toplevel (自分の .claude を持たない apps/api は toplevel、自分の .claude を持つパッケージはそこ)。
+# git でない・toplevel が HOME か HOME の祖先なら dir のまま (HOME の .claude は「ホーム側」として別に引く)。
+harness_root() {
+  local d
+  d="$(_harness_abs "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  _harness_resolve "$d"
+  if [ -n "$_HR_FIRST" ]; then printf '%s' "$_HR_FIRST"
+  elif [ -n "$_HR_TOP" ]; then printf '%s' "$_HR_TOP"
+  else printf '%s' "$d"; fi
+  return 0
+}
+
+# harness_state_dir [dir] -> 作業の控え (.claude/state) の dir を stdout。常に rc 0。
+# 渡された dir → harness_root の順で、coordinator 以外のファイルが在る方。どちらにも無ければ新しく作る場所 (harness_root の下)。
+# /state save・resume と開始時の「前回の続き」が同じこの 1 本を通す。
+harness_state_dir() {
+  local d r p
+  d="$(_harness_abs "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  r="$(harness_root "$d")"
+  for p in "$d/.claude/state" "$r/.claude/state"; do
+    if [ -d "$p" ] && ls -A "$p" 2>/dev/null | grep -v '^coordinator' | grep -q .; then
+      printf '%s' "$p"
+      return 0
+    fi
+  done
+  printf '%s' "$r/.claude/state"
   return 0
 }
 
@@ -175,11 +236,15 @@ harness_yml_file_value() {
 
 # harness_yml_value <root> <キー> -> <キー>: の値を stdout。無ければ空。常に rc 0。
 # 項目ごとに「プロジェクトの .claude/mode.yml → ホームの ~/.claude/mode.yml」の順で引く
-# (片方のファイルだけを読まない。env の上書きと既定は呼び出し側で扱う)。
+# (片方のファイルだけを読まない。env の上書きと既定は呼び出し側で扱う)。プロジェクトは harness_root。
+# ただし worktree・notify・nightly_ci は harness_top (toplevel) の mode.yml から引く。
 harness_yml_value() {
   local root k="${2:-}" v="" p
   [ -n "$k" ] || return 0
-  root="$(harness_root "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  case "$k" in
+    worktree|notify|nightly_ci) root="$(harness_top "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")" ;;  # toplevel の mode.yml だけ (サブディレクトリのは読まない)
+    *) root="$(harness_root "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")" ;;
+  esac
   for p in "$root/.claude/mode.yml" "${HOME:+$HOME/.claude/mode.yml}"; do
     [ -n "$p" ] || continue
     v="$(harness_yml_file_value "$p" "$k")"
@@ -251,14 +316,14 @@ harness_tasks_migrate() {
 
 # harness_pm_install_dir [root] -> 足すプラグイン hirai-project-method の、このリポの行のうち版が最大の installPath を stdout。
 # 無ければ空 + rc 1 (python3 か installed_plugins.json が無いときも rc 1)。
-# このリポの enabledPlugins (settings.local.json → settings.json → ~/.claude/settings.json の順) で false なら「無い」とみなす。
+# このリポの enabledPlugins (settings.local.json [本体の checkout のものも見る] → settings.json → ~/.claude/settings.json の順) で false なら「無い」とみなす。
 # 「このリポの行」= scope が user・managed の行、または projectPath がこのリポと同じ git のリポの行。
 # 同じ git のリポかは `git rev-parse --git-common-dir` (両方) が同じかで見る。worktree W1 で project の範囲に入れた行は、
 # 本体の checkout・ほかの worktree からも同じリポとして当たる。projectPath が無い・git でないとき (消えた worktree など) だけ
 # root との前方一致に落とす。行の絞りはここ 1 か所 (hirai-task の path・更新の知らせ・/update の見分けが使う)。
 harness_pm_install_dir() {
   local root f="${HOME:-}/.claude/plugins/installed_plugins.json" p common
-  root="$(harness_root "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  root="$(harness_top "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
   [ -f "$f" ] && command -v python3 >/dev/null 2>&1 || return 1
   common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
   p="$(python3 -c 'import json,os,re,subprocess,sys
@@ -273,7 +338,10 @@ def gc(path):
         return ""
 def disabled():
     # enabledPlugins で false なら「無い」とみなす。優先は local -> project -> user (最初に載っている値が決める)。
-    for sp in (os.path.join(root, ".claude", "settings.local.json"), os.path.join(root, ".claude", "settings.json"), os.path.join(os.path.expanduser("~"), ".claude", "settings.json")):
+    # settings.local.json は git-common-dir の親 (本体の checkout) のものを先に見る (worktree でも Claude Code は本体のを使う)。
+    main = os.path.dirname(common) if common and os.path.basename(common) == ".git" else ""
+    cands = ([os.path.join(main, ".claude", "settings.local.json")] if main else []) + [os.path.join(root, ".claude", "settings.local.json"), os.path.join(root, ".claude", "settings.json"), os.path.join(os.path.expanduser("~"), ".claude", "settings.json")]
+    for sp in cands:
         try:
             ep = json.load(open(sp)).get("enabledPlugins") or {}
         except Exception:
@@ -353,17 +421,18 @@ harness_yml_set() (
 # /add-rule の予算計算と /rules-audit の棚卸しが見る置き場。プロジェクト側を決め打ちすると、
 # 全プロジェクト共通 (/init user) に置いた利用者に対して「既存ルール 0 件」と誤判定する。
 
-# harness_rules_dir [root] -> ルールの置き場を stdout (末尾スラッシュなし、常に rc 0)。
+# harness_rules_dir [dir] -> ルールの置き場 (渡された dir に在ればそれ → harness_root → ホームの順。どこにも無ければ harness_root の下)を stdout (末尾スラッシュなし、常に rc 0)。
 # 両方に在る場合はプロジェクト側を返すが、それは二重ロード状態なので
 # scripts/scope-check.sh の警告に従って先に片方を消す (予算は 2 か所の合計で効いている)。
 harness_rules_dir() {
-  local root p
-  root="$(harness_root "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  local d root p
+  d="$(_harness_abs "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  root="$(harness_root "$d")"
   if [ -n "${HARNESS_RULES_DIR:-}" ]; then
     printf '%s' "$HARNESS_RULES_DIR"
     return 0
   fi
-  for p in "$root/.claude/rules" "${HOME:+$HOME/.claude/rules}"; do
+  for p in "$d/.claude/rules" "$root/.claude/rules" "${HOME:+$HOME/.claude/rules}"; do
     [ -n "$p" ] || continue
     if [ -d "$p" ]; then
       printf '%s' "$p"

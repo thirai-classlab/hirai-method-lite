@@ -4,9 +4,11 @@
 #   hirai-worktrees list [--orca] [--json]
 #
 #   消してよい = 次の 1〜8 が全部そろった worktree だけ。1 つでも欠ける・読めないときは理由つきで「残す」。
-#     1 作業がない          : git status --porcelain が空（GIT_OPTIONAL_LOCKS=0 を全部の git に付け、index.lock を取らない）
+#     1 作業がない          : git status --porcelain が空（`--untracked-files=normal` を付け、status.showUntrackedFiles=no でも未追跡を数える。
+#                           GIT_OPTIONAL_LOCKS=0 を全部の git に付け、index.lock を取らない）
 #     2 動いているプロセスが無い: その worktree か下を cwd に持つプロセスが 0（lsof -w -d cwd -Fpn を 1 回だけ打つ。無ければ
-#                           /proc/*/cwd。どちらも読めなければ「プロセス 未確認」＝残す。自分とその親のプロセスは数えない）
+#                           /proc/*/cwd。どちらも読めなければ「プロセス 未確認」＝残す。自分とその親のプロセスは数えない）。
+#                           親のプロセスの cwd がある worktree は「今いる worktree」として対象外（打った会話自身の worktree を別の dir から打っても残る）
 #     3 動いている端末が無い  : orca terminal list --json にその worktree の端末が 0 本（worktreePath が空なら worktreeId の
 #                           `::` の後ろを使う。どちらも無い端末・truncated: true があれば「端末 未確認」＝残す）。
 #                           入れ子の worktree は、祖先の worktree に端末かプロセスがあれば「残す（外側の worktree が使用中）」
@@ -17,9 +19,13 @@
 #     8 中身が origin にある : upstream があり @{u}.. が 0 件、または HEAD の commit を head に持つ PR が MERGED
 #                           （gh api repos/{owner}/{repo}/commits/<HEAD>/pulls のうち merged_at があり head.sha が HEAD と同じもの。
 #                           Orca の branch 名は PR の head と違うので名前で引かない）。upstream が無く PR も確かめられないときは
-#                           「残す（upstream が無い）」。中身が既定の branch に入っているだけでは通さない
+#                           「残す（upstream が無い）」。中身が既定の branch に入っているだけでは通さない。
+#                           upstream が既定の branch（origin/HEAD の指す ref）そのもの（`git worktree add -b x ../x origin/main` の
+#                           作りたて）は、upstream が無いのと同じ扱い（PR が MERGED のときだけ通す）
 #   無視されるファイルのうち作り直せないもの（node_modules・dist・build・out・.next・.turbo・.cache・coverage・__pycache__・.venv・
-#   .pytest_cache・playwright-report・test-results・*.tsbuildinfo・.eslintcache・.DS_Store 以外）を先頭の dir ごとに数え、1 件以上なら
+#   .pytest_cache・playwright-report・test-results・*.tsbuildinfo・.eslintcache・.DS_Store 以外）を先頭の dir ごとに数え、
+#   （`git status --porcelain --ignored -z` の `!!` の行の末尾の名前にだけ作り直せる名前を当てる。dir の中を歩くときは node_modules・
+#   __pycache__・.venv だけ除くので、`.tmp/out/report.md` や `.tmp/x/build/plan.md` は数える）1 件以上なら
 #   「消してよい（退避が要る: .tmp 12 件・…）」と出す（verdict は「消してよい」のまま。JSON の evacuate の配列）。数は上限 1,000 で止め「1000 件以上」。
 #   「消してよい」の行には「持ち主の会話: 未確認（コーディネーターが確かめる）」を付ける。
 #   local-ci.sh の lci-* と Workflow の .claude/worktrees の agent-*・wf_* も一覧に出る。
@@ -49,6 +55,8 @@ EVACUATE_CAP = 1000
 REGENERABLE_DIRS = {"node_modules", "dist", "build", "out", ".next", ".turbo", ".cache", "coverage", "__pycache__",
                     ".venv", ".pytest_cache", "playwright-report", "test-results"}
 REGENERABLE_FILES = ("*.tsbuildinfo", ".eslintcache", ".DS_Store")
+# dir の中を歩くときに除く名前（!! の行の末尾の名前には REGENERABLE_DIRS 全部を当てる）
+WALK_SKIP_DIRS = {"node_modules", "__pycache__", ".venv"}
 
 
 def usage():
@@ -155,7 +163,7 @@ def ancestor_pids():
 
 
 def process_cwds():
-    """[(pid, cwd の realpath)]。lsof を 1 回だけ打ち、無ければ /proc/*/cwd。どちらも読めなければ None。"""
+    """([(pid, cwd の realpath)], [自分とその親の cwd の realpath])。lsof を 1 回だけ打ち、無ければ /proc/*/cwd。どちらも読めなければ None。"""
     skip = ancestor_pids()
     rows = None
     if shutil.which("lsof"):
@@ -191,7 +199,8 @@ def process_cwds():
             rows = got
     if rows is None:
         return None
-    return [(pid, real(c)) for pid, c in rows if pid not in skip]
+    own = [real(c) for pid, c in rows if pid in skip and pid != os.getpid()]
+    return [(pid, real(c)) for pid, c in rows if pid not in skip], own
 
 
 def orca_terminals():
@@ -253,7 +262,7 @@ def count_files(top, skip_roots, budget):
     if os.path.isfile(top) or os.path.islink(top):
         return 0 if is_regenerable_file(os.path.basename(top)) else 1
     for root, dirs, files in os.walk(top):
-        dirs[:] = [d for d in dirs if d not in REGENERABLE_DIRS and real(os.path.join(root, d)) not in skip_roots]
+        dirs[:] = [d for d in dirs if d not in WALK_SKIP_DIRS and real(os.path.join(root, d)) not in skip_roots]
         n += sum(1 for f in files if not is_regenerable_file(f))
         if n >= budget:
             return budget
@@ -288,19 +297,36 @@ def evac_text(evac):
     return "退避が要る: " + "・".join(parts)
 
 
+def status_entries(out):
+    """`git status --porcelain -z` の出力を 1 件 1 要素にする（R・C の行は元の path の要素を読み飛ばす）。"""
+    parts = out.split("\0")
+    entries, i = [], 0
+    while i < len(parts):
+        e = parts[i]
+        i += 1
+        if not e.strip():
+            continue
+        entries.append(e)
+        if e[0] in "RC" or (len(e) > 1 and e[1] in "RC"):
+            i += 1
+    return entries
+
+
 def judge(row, default, ctx, cache_gh):
     wt = row["path"]
     rwt = real(wt)
     conds, reasons = {}, []
 
-    code, out = git(["status", "--porcelain", "--ignored"], wt)
+    code, out = git(["-c", "status.showUntrackedFiles=normal", "status", "--porcelain", "--ignored", "-z",
+                     "--untracked-files=normal"], wt)
     ignored = []
     if code != 0:
         conds["clean"] = False
         reasons.append("作業の有無を読めない（git status が失敗）")
     else:
-        dirty = [l for l in out.splitlines() if l.strip() and not l.startswith("!! ")]
-        ignored = [l[3:] for l in out.splitlines() if l.startswith("!! ")]
+        entries = status_entries(out)
+        dirty = [e for e in entries if not e.startswith("!! ")]
+        ignored = [e[3:] for e in entries if e.startswith("!! ")]
         conds["clean"] = not dirty
         if dirty:
             reasons.append("作業がある（未コミット %d 件）" % len(dirty))
@@ -366,8 +392,10 @@ def judge(row, default, ctx, cache_gh):
     up_ok = False
     has_up = False
     if row["branch"]:
-        c, _ = git(["rev-parse", "--verify", "-q", "@{u}"], wt)
-        has_up = c == 0
+        c, up = git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], wt)
+        has_up = c == 0 and bool(up.strip())
+        if has_up and default is not None and up.strip() == default:
+            has_up = False  # 既定の branch を追うだけの作りたては、upstream が無いのと同じ
     if has_up:
         c2, out = git(["rev-list", "--count", "@{u}.."], wt)
         n = out.strip()
@@ -411,14 +439,23 @@ def main(argv):
         sys.stderr.write("hirai-worktrees: git worktree list に失敗\n")
         return 2
     default = default_ref(here)
-    ctx = {"terms": orca_terminals(), "procs": process_cwds(), "all_paths": [real(r["path"]) for r in rows]}
+    got = process_cwds()
+    procs, own_cwds = got if got is not None else (None, [])
+    all_paths = [real(r["path"]) for r in rows]
+    # 自分とその親のプロセスの cwd がある worktree（一番内側）は「今いる worktree」
+    own_wts = set()
+    for c in own_cwds:
+        inner = [a for a in all_paths if under(c, a)]
+        if inner:
+            own_wts.add(max(inner, key=len))
+    ctx = {"terms": orca_terminals(), "procs": procs, "all_paths": all_paths}
     results = []
     for i, row in enumerate(rows):
         wt = row["path"]
         skip = None
         if i == 0:
             skip = "本体の checkout"
-        elif os.path.exists(wt) and os.path.exists(here) and os.path.samefile(wt, here):
+        elif (os.path.exists(wt) and os.path.exists(here) and os.path.samefile(wt, here)) or real(wt) in own_wts:
             skip = "今いる worktree"
         elif row["locked"]:
             skip = "locked"

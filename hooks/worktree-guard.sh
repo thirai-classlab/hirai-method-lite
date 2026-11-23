@@ -9,7 +9,7 @@
 #                                 （cwd がリポでなければ CLAUDE_PROJECT_DIR）
 #   決めたリポの mode.yml（項目ごとに 環境変数 HC_WORKTREE > そのリポ > ホーム > off）が block のときだけ止める。
 # 止めないもの: 読み取り・リポの外（~/.claude の記憶の置き場など）・git に入らない場所（.gitignore 済み・
-#   .tmp/・.claude/state/）・git switch / git checkout・git commit --dry-run / --help。
+#   .tmp/・.claude/state/。外側のリポの下にあるときは外側の .tmp/・.claude/state/ の下だけ）・git switch / git checkout・git commit --dry-run / --help。
 #   `worktree: off`（既定）と `warn` では何もしない。
 # Orca の worktree の判定: 環境変数 ORCA_WORKTREE_ID があり、決めたリポの --git-dir と --git-common-dir が違い
 #   （= リンクされた worktree）、ORCA_WORKTREE_ID が path を含むなら、その path の --git-common-dir が決めたリポと同じで、
@@ -220,21 +220,33 @@ scan_commits() {
       if (t == hd || e == 0) { hd = ""; return }
     }
   }
-  # p が算術の開きの "(" を指すとき（$(( の最初の ( か (( の最初の (）、対応する ")" まで括弧を数えて読み飛ばす。
-  # 算術の中の << は heredoc でなくシフトなので読まない。p は最後の ")" へ進む
-  function skip_arith(   ar, d) {
-    ar = 1
+  # p が算術の開きの "(" を指すとき（$(( の最初の ( か (( の最初の (）、対応する "))" まで読み飛ばして 1 を返す（p は最後の ")" へ進む）。
+  # 算術の中の << は heredoc でなくシフトなので読まない。中の引用符・$'...'・$( ) は読む。式の外の ")" が "))" で閉じない
+  # （例: ((a; b) 2>&1 | c)）・入力の終わりまで閉じないときは算術でないので、p を元に戻して 0 を返す（呼ぶ側が "(" として読み直す）
+  function skip_arith(   st, d, c) {
+    st = p; d = 0; p++
     while (p < n) {
-      p++; d = substr(buf, p, 1)
-      if (d == "(") ar++
-      else if (d == ")") { ar--; if (ar == 0) return }
+      p++; c = substr(buf, p, 1)
+      if (c == "\\") { p++; continue }
+      if (c == "\047") { while (p < n) { p++; if (substr(buf, p, 1) == "\047") break } continue }
+      if (c == "\"") { skip_dq(); continue }
+      if (c == "$" && substr(buf, p + 1, 1) == "\047") { skip_ansi(); continue }
+      if (c == "$" && substr(buf, p + 1, 1) == "(") { p++; skip_subst(); continue }
+      if (c == "(") d++
+      else if (c == ")") {
+        if (d > 0) d--
+        else if (substr(buf, p + 1, 1) == ")") { p++; return 1 }
+        else break
+      }
     }
+    p = st
+    return 0
   }
   # p が "(" を指すとき（$( の直後）、対応する ")" まで読み飛ばす。中の引用符・入れ子の $( ・heredoc の本文を数える。p は ")" へ進む。
   # 読み飛ばした中身は lastsub に残す（呼ぶ側が SUB として調べる）
   function skip_subst(   depth, c, s0, pv) {
     depth = 1; s0 = p + 1
-    if (substr(buf, p + 1, 1) == "(") { skip_arith(); lastsub = ""; return }
+    if (substr(buf, p + 1, 1) == "(") { if (skip_arith()) { lastsub = ""; return } }
     while (p < n) {
       p++; c = substr(buf, p, 1)
       if (c == "\\") { p++; continue }
@@ -295,11 +307,12 @@ scan_commits() {
         if (d != "\n") { word = word d; inword = 1 }
       }
       else if (c == "$" && substr(buf, p + 1, 2) == "((") {
-        p++; skip_arith()
-        word = word "0"; inword = 1
+        st = p; p++
+        if (skip_arith()) { word = word "0"; inword = 1 }
+        else { p = st; word = word "$"; inword = 1 }
       }
       else if (c == "$" && substr(buf, p + 1, 1) == "\047") { skip_ansi(); word = word "x"; inword = 1 }
-      else if (c == "(" && !inword && substr(buf, p + 1, 1) == "(" && (nt == 0 || tok[nt] ~ /^(if|while|until|then|do|else|elif|!)$/)) { skip_arith(); end_seg() }
+      else if (c == "(" && !inword && substr(buf, p + 1, 1) == "(" && (nt == 0 || tok[nt] ~ /^(if|while|until|for|then|do|else|elif|!)$/)) { st = p; if (!skip_arith()) p = st; end_seg() }
       else if (c == "#" && !inword) { while (p < n && substr(buf, p + 1, 1) != "\n") p++ }
       else if (c == "<" && substr(buf, p + 1, 1) == "<") { flush_word(); try_heredoc() }
       else if (c == "\n") { end_seg(); if (hd != "") skip_body() }
@@ -311,8 +324,8 @@ scan_commits() {
   }'
 }
 
-# outer_ignored <リポの toplevel> [<toplevel からの相対 path>] -> rc 0 なら、そのリポを含む外側のリポが、その場所を
-# 無視している（.gitignore・.tmp/・.claude/state/）。.tmp/ に作った worktree・clone は外側の git に入らないので止めない
+# outer_ignored <リポの toplevel> [<toplevel からの相対 path>] -> rc 0 なら、そのリポは外側のリポの .tmp/ か .claude/state/ の下
+# にある（設計 §6。外側の .gitignore は見ない）。.tmp/ に作った worktree・clone は外側の git に入らないので止めない
 outer_ignored() {
   local top="$1" sub="${2:-}" parent otop oprefix rel
   parent="$(dirname "$top")"
@@ -324,7 +337,7 @@ outer_ignored() {
   case "$rel" in
     .tmp|.tmp/*|.claude/state|.claude/state/*) return 0 ;;
   esac
-  git -C "$otop" check-ignore -q -- "$rel" 2>/dev/null
+  return 1
 }
 
 # check_commit <-C の列> <git-dir> <work-tree> <基の dir> <既定の dir>
@@ -360,7 +373,7 @@ check_commit() {
 }
 
 check_command() {
-  local text="$1" depth="$2" kind a b c d line base dflt
+  local text="$1" depth="$2" kind a b c d line base dflt seen=""
   base="$cwd"
   dflt="$cwd"
   git -C "$cwd" rev-parse --show-toplevel >/dev/null 2>&1 || dflt="${CLAUDE_PROJECT_DIR:-$cwd}"
@@ -368,7 +381,11 @@ check_command() {
     case "$kind" in
       COMMIT) check_commit "$a" "$b" "$c" "$base" "$dflt" ;;
       SUB)
+        # SUB も commit の字を含むときだけ調べる（$( ) を何百個つないでも timeout に届かない）
         if [ "$depth" -lt 3 ]; then
+          case "$a" in *commit*) ;; *) continue ;; esac
+          case "$seen" in *$'\037'"$a"$'\037'*) continue ;; esac   # 同じ中身は 1 回だけ調べる
+          seen="${seen}"$'\037'"${a}"$'\037'
           line="$(printf '%s' "$a" | tr '\036' '\n')"
           check_command "$line" $((depth + 1))
         fi ;;
@@ -410,6 +427,8 @@ case "$tool" in
   Bash)
     cmd="$(jget tool_input.command)"
     [ -n "$cmd" ] || exit 0
+    # commit の字がコマンドに無ければ git commit ではない（mode.yml も走査も引かずに抜ける。off のリポの Bash に遅れを足さない）
+    case "$cmd" in *commit*) ;; *) exit 0 ;; esac
     check_command "$cmd" 0
     exit 0
     ;;

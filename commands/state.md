@@ -14,9 +14,9 @@ context 使用率 50% 到達時と、作業を中断する時に実行する。
 
 ## 手順
 
-1. `git rev-parse --abbrev-ref HEAD` / `git log --oneline -5` / `git status --porcelain` を実行し、現在の git 状態を実測する。
+1. `git rev-parse --abbrev-ref HEAD` / `git log --oneline -5` / `git status --porcelain` を実行し、現在の git 状態を実測する。控えの置き場 `$S` は `. "$P/scripts/tasks-path.sh"; S="$(harness_state_dir "$PWD")"` が返す dir（`$P` の探し方は `start-task` の「形の見分け」と同じ）。渡された dir → `harness_root` の順で控えが在る方で、無ければ `harness_root` の下に新しく作る（開始時の「前回の続き」も同じ関数を通す。`apps/api` で保存しても、toplevel で開き直して読める）。以降の `$S` はこの値。
 2. 進行中のタスクを 1 件控える。形は `.claude/mode.yml` の `tasks:` が決める（`. "$P/scripts/tasks-path.sh"; harness_tasks_form "$PWD"` が `ledger` か `github-project` を返す。`$P` の探し方は `start-task` の「形の見分け」と同じ）。`github-project` なら進行中の issue を控える（番号は user に聞くか、直近の commit 件名の `(#n)` から取る）。`ledger` なら台帳 (`$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > 旧レイアウトの `.claude/tasks/list.md`。`harness_tasks_file "$PWD"`) を Read し、status が `進行中` の行と `未着手` の行の id を取り出す。
-3. `.claude/state/latest.md` を以下の書式で**上書き**保存する。ディレクトリが無ければ `mkdir -p .claude/state` で作る。
+3. `$S/latest.md` を以下の書式で**上書き**保存する。ディレクトリが無ければ `mkdir -p "$S"` で作る。
 
 ```markdown
 # session state — YYYY-MM-DD HH:MM
@@ -44,7 +44,7 @@ context 使用率 50% 到達時と、作業を中断する時に実行する。
 
 4. 「次に実行するコマンド」は 1 つだけ書く。複数書かない。
 5. 「判明した事実」には実行結果で確認できたものだけ書く。推測は書かない。
-6. 保存後に `wc -l .claude/state/latest.md` を実行し、120 行を超えていたら「判明した事実」の古い行から削って 120 行以内にする。
+6. 保存後に `wc -l "$S/latest.md"` を実行し、120 行を超えていたら「判明した事実」の古い行から削って 120 行以内にする。
 
 ## 次回に効くものを置く
 
@@ -73,13 +73,13 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 
 ## 履歴を残す場合
 
-上書き前の内容を残すなら、保存の直前に `[ -f .claude/state/latest.md ] && cp .claude/state/latest.md ".claude/state/$(date +%Y%m%d-%H%M).md"` で退避する。
+上書き前の内容を残すなら、保存の直前に `[ -f "$S/latest.md" ] && cp "$S/latest.md" "$S/$(date +%Y%m%d-%H%M).md"` で退避する。
 
 ## 判定できる終了条件 (save)
 
-- `ls .claude/state/latest.md` が exit 0。
-- `head -1 .claude/state/latest.md` が `# session state` で始まる。
-- `wc -l .claude/state/latest.md` が 120 以下。
+- `ls "$S/latest.md"` が exit 0。
+- `head -1 "$S/latest.md"` が `# session state` で始まる。
+- `wc -l "$S/latest.md"` が 120 以下。
 - 「次回に効くもの」を仕分け済み。0 件ならその旨を 1 行出した。1 件以上なら T2 / `docs/` は追記済み、ルール案は承認を取ったものだけ `/hirai-lite:add-rule` に渡した。
 
 4 つ成立したら、次の「利用者へ出す案内」を応答本文に出す。
@@ -91,7 +91,7 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 `<保存先パス>` と `<進行中タスク>` は実測値に差し替える。
 
 ```
-保存しました → .claude/state/latest.md
+保存しました → $S/latest.md
 進行中: issue #12 レート制限の実装 — 次の完了条件: レスポンスヘッダに残数を返す
 
 新しいセッションで続きから始めるには:
@@ -113,7 +113,7 @@ state ファイルは**次のセッションの最初の 1 手**を渡すもの�
 
 ## 手順
 
-1. `.claude/state/latest.md` を Read する。ファイルが無ければ「保存された state が無い。/hirai-lite:state save で作る」と報告して終了する。
+1. `$S/latest.md`（`$S` は保存と同じ `S="$(harness_state_dir "$PWD")"`）を Read する。ファイルが無ければ「保存された state が無い。/hirai-lite:state save で作る」と報告して終了する。
 2. `git rev-parse --abbrev-ref HEAD` を実行し、state に書かれた branch と突き合わせる。不一致なら state の branch 名を提示し「切替えますか?」と聞く。承認されたら `git switch <state の branch>` を実行する。承認が無ければ現 branch のまま 3 へ進む。
 3. `git log --oneline -1` を実行し、HEAD を突き合わせる。state の HEAD と一致しなければ、`git log --oneline <state の hash>..HEAD` で state 保存後に積まれた commit を列挙し、チャットに提示する。
 

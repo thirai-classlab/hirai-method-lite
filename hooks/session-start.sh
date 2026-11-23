@@ -5,7 +5,8 @@
 #
 # パス解決は 2 段構え。
 #   plugin_root : $CLAUDE_PLUGIN_ROOT > このスクリプトの 1 つ上 ($BASH_SOURCE 起点)
-#   root        : $CLAUDE_PROJECT_DIR > $PWD を harness_root で git の toplevel に解いたもの (導入先リポジトリ = ユーザーの資産)
+#   root        : $CLAUDE_PROJECT_DIR > $PWD を harness_root で解いたもの (git の toplevel までで最初に .claude/mode.yml・settings.json・rules が在る dir。
+#                 無ければ toplevel。導入先リポジトリ = ユーザーの資産)。worktree・notify は harness_top (toplevel) の mode.yml から引く
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || here="."
@@ -24,8 +25,10 @@ if [ -f "$plugin_root/scripts/tasks-path.sh" ]; then
   . "$plugin_root/scripts/tasks-path.sh" 2>/dev/null || true
 fi
 
-# root は git の toplevel に解く (サブディレクトリで開いても、mode.yml・台帳・更新の鍵が本体と同じ値になる)。
+# root は harness_root に解く (自分の .claude を持たないサブディレクトリで開いても、mode.yml・台帳・更新の鍵が toplevel と同じ値になり、
+# 自分の .claude を持つパッケージで開いたときはそこを読む)。
 # 解くのはここ 1 回だけ。以降の関数は解いた root を受け取り、git を打ち直さない。
+opened="$root"   # 開いた dir (台帳・控えは「開いた dir → root」の順で引く)
 if command -v harness_root >/dev/null 2>&1; then
   root="$(harness_root "$root")"
 fi
@@ -79,7 +82,7 @@ if [ "$tasks_form" = "github-project" ]; then
 else
   list=""
   if command -v harness_tasks_file >/dev/null 2>&1; then
-    list="$(harness_tasks_file "$root" 2>/dev/null || true)"
+    list="$(harness_tasks_file "$opened" 2>/dev/null || true)"
   fi
   if [ -n "$list" ] && [ -f "$list" ]; then
     task_line="やること: $(harness_open_tasks "$list") 件 (${list#"$root"/})"
@@ -117,7 +120,10 @@ fi
 
 # --- 直近 state (導入先リポジトリ側) ---
 state=""
-for d in "$root/.claude/state" "$root/docs/state"; do
+# 控えの dir は /state save・resume と同じ harness_state_dir (渡された dir → harness_root の順で在る方)。docs/state は古い置き場。
+state_dirs=("$root/.claude/state" "$root/docs/state")
+command -v harness_state_dir >/dev/null 2>&1 && state_dirs=("$(harness_state_dir "$opened")" "$root/docs/state")
+for d in "${state_dirs[@]}"; do
   [ -d "$d" ] || continue
   # coordinator は Orca の担当の宛先の控え (再開用の state ではない)。続きの判定から外す。
   f="$(ls -t "$d" 2>/dev/null | grep -v '^coordinator' | head -1)"

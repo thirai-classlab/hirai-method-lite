@@ -14,7 +14,7 @@ disable-model-invocation: true
 
 ```bash
 P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
-cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; ls -d "$P/rules" "$P/templates/settings.json" >/dev/null && echo "素材 $P (版 $(cat "$P/VERSION" 2>/dev/null))"
+T="$(git rev-parse --show-toplevel 2>/dev/null)"; case "$(cd "$HOME" 2>/dev/null && pwd -P)/" in "$T"/*) T="" ;; esac; [ -n "$T" ] && [ "$(cd "$T" && pwd -P)" != "$(pwd -P)" ] && [ ! -d "$PWD/.claude" ] && echo "ここはリポのサブディレクトリ。$T で開き直してから打つ（この行が出たら止める）"; ls -d "$P/rules" "$P/templates/settings.json" >/dev/null && echo "素材 $P (版 $(cat "$P/VERSION" 2>/dev/null))"
 { [ -d .claude/tasks ] || [ -d .claude/draft ] || [ -d .claude/rules-reference ]; } && echo "旧レイアウトあり (.claude/ の書類を /hirai-lite:update で docs/ へ移す)"; echo "台帳・draft・事故記録の置き場 docs (無ければ作る)"
 for d in .claude "$HOME/.claude"; do for t in rules settings.json mode.yml statusline.sh; do [ -e "$d/$t" ] && echo "既存 $d/$t"; done; done; for c in CLAUDE.md "$HOME/.claude/CLAUDE.md"; do [ -e "$c" ] && echo "既存 $c"; done; echo "(出ていないものは未配置)"
 for a in AGENTS.md .claude/AGENTS.md; do [ -e "$a" ] && echo "既存 $a (CLAUDE.md を置くと読まれなくなるので、置くときは先頭で @$a を読み込む)"; done; python3 -c 'import json,sys;s=json.load(open(sys.argv[1])).get("statusLine");print("ユーザー設定に statusLine あり: "+str(s.get("command",""))[:80]) if isinstance(s,dict) else None' "$HOME/.claude/settings.json" 2>/dev/null
@@ -24,7 +24,7 @@ CM=; [ "$SD" = .claude ] && CM=CLAUDE.md; [ -n "$SD" ] && [ "$SD" != .claude ] &
 if [ -n "$CM" ] && [ -f "$CM" ] && [ "$(grep -c '<[^<>]*>' "$CM")" -gt 0 ]; then echo "第 2 段階 (ヒアリング) へ: $CM にプレースホルダ $(grep -c '<[^<>]*>' "$CM") 行"; else echo "第 1 段階 (セットアップ) へ"; fi
 ```
 
-`ls -d` が失敗したら素材が見つかっていない。そこで止め、`/plugin` で入れ直してもらう。**この手順では書き込まない。** 2 行目の `cd` でリポの root へ移る（サブディレクトリの `.claude` は読まれない）。**`第 2 段階 (ヒアリング) へ` と出たら、手順 1〜9 を飛ばして手順 10 へ進む。** 判定条件は 3 つとも真であること: (1) 配置先 (`.claude/` か `~/.claude/`) に `rules` / `settings.json` / `mode.yml` / `statusline.sh` の 4 つが揃っている (2) その配置先に対応する `CLAUDE.md` がある (3) その `CLAUDE.md` に `<...>` 形式のプレースホルダが 1 行以上残っている。**プレースホルダが 0 行なら第 2 段階に入らない** (もう伺い済み)。そのときは第 1 段階を走らせ、手順 1 の「すでに一式が入っています」で終わる。
+`ls -d` が失敗したら素材が見つかっていない。そこで止め、`/plugin` で入れ直してもらう。**この手順では書き込まない。** **2 行目が `ここはリポのサブディレクトリ。… で開き直してから打つ` と出したら、ここで止める**（その dir は toplevel でなく自分の `.claude/` も持たないので、以降の手順が `.claude/`・`docs/` を `$PWD` の下に作ってしまう。示された dir で Claude Code を開き直してから打ち直してもらう。自分の `.claude/` を持つパッケージで開いたときは出ず、そのパッケージが root になる）。**`第 2 段階 (ヒアリング) へ` と出たら、手順 1〜9 を飛ばして手順 10 へ進む。** 判定条件は 3 つとも真であること: (1) 配置先 (`.claude/` か `~/.claude/`) に `rules` / `settings.json` / `mode.yml` / `statusline.sh` の 4 つが揃っている (2) その配置先に対応する `CLAUDE.md` がある (3) その `CLAUDE.md` に `<...>` 形式のプレースホルダが 1 行以上残っている。**プレースホルダが 0 行なら第 2 段階に入らない** (もう伺い済み)。そのときは第 1 段階を走らせ、手順 1 の「すでに一式が入っています」で終わる。
 
 ## 1. 実行前に確認する（返事を待つ）
 
