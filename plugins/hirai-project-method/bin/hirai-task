@@ -4602,7 +4602,100 @@ def cmd_memos() -> int:
     return 0
 
 
+# ── 前夜の CI（today の 1 行。mode.yml の nightly_ci が空なら何も出さず gh も呼ばない） ────
+NIGHTLY_STALE_HOURS = 36
+_JST = datetime.timezone(datetime.timedelta(hours=9))
+_NIGHTLY_FILE_RE = re.compile(r'[A-Za-z0-9._-]+\Z')
+
+
+def _now_utc() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _yml_file_value(path: str, key: str) -> str:
+    """mode.yml 1 本から `<key>:` の最初の行の値を取る。値の前後の空白・引用符（" と '）・
+    行末のコメント（空白のあとの # から）を外す（土台の harness_yml_file_value と同じ読み方）。
+    ファイルが無ければ空文字。読めなければ RuntimeError。"""
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        return ''
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RuntimeError(f'{path} を読めない: {type(exc).__name__}') from exc
+    for line in lines:
+        match = re.match(rf'\s*{re.escape(key)}:\s*(.*)$', line)
+        if not match:
+            continue
+        value = re.sub(r'(^|\s+)#.*$', '', match.group(1)).rstrip()
+        quoted = re.fullmatch(r'"(.*)"|\'(.*)\'', value)
+        return (quoted.group(1) if quoted.group(1) is not None else quoted.group(2)) if quoted else value
+    return ''
+
+
+def nightly_ci_setting() -> str:
+    """mode.yml の nightly_ci を、プロジェクト（作業ツリー直下の .claude/）→ ホーム（~/.claude/）の順に
+    引く（土台の harness_yml_value と同じ順）。空文字は「設定なし」。読めないときは RuntimeError。
+    土台の scripts には依存しない（このプラグインは土台の関数を呼ばない約束）。"""
+    for path in (os.path.join(_root(), '.claude', 'mode.yml'), os.path.expanduser('~/.claude/mode.yml')):
+        value = _yml_file_value(path, 'nightly_ci')
+        if value:
+            return value
+    return ''
+
+
+def nightly_ci_line(workflow: str) -> str:
+    """直近の schedule の run 1 件を引いて 1 行にする。失敗（読めない）と 0 件は別の文にする。"""
+    head = f'前夜の CI（{workflow}'
+    if not _NIGHTLY_FILE_RE.match(workflow):
+        return f'{head}）: 取れない（nightly_ci の値が workflow のファイル名でない）'
+    if not REPO:
+        return f'{head}）: 取れない（リポを決められない）'
+    try:
+        code, out, err = run_gh([
+            'run', 'list', '-R', REPO, '--workflow', workflow, '--event', 'schedule',
+            '-L', '1', '--json', 'conclusion,status,createdAt,url',
+        ])
+    except Exception as exc:  # noqa: BLE001 - gh が無いなども「取れない」に畳む
+        return f'{head}）: 取れない（gh を起動できない: {type(exc).__name__}）'
+    if code != 0:
+        reason = (err.strip().splitlines() or [f'exit {code}'])[0][:80]
+        return f'{head}）: 取れない（{reason}）'
+    try:
+        runs = json.loads(out)
+        if not isinstance(runs, list):
+            raise ValueError('配列でない')
+        if not runs:
+            return f'{head}）: schedule の run がまだ無い'
+        run = runs[0]
+        created = datetime.datetime.fromisoformat(str(run['createdAt']).replace('Z', '+00:00'))
+        status, conclusion, url = run.get('status'), run.get('conclusion'), run.get('url') or ''
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        return f'{head}）: 取れない（gh の出力を読めない: {type(exc).__name__}）'
+    label = f'{head}・{created.astimezone(_JST).strftime("%m-%d %H:%M")}）: '
+    if status != 'completed':
+        label += '実行中'
+    elif conclusion == 'success':
+        label += '成功'
+    else:
+        label += f'失敗 {url} — 赤のまま放置しない'
+    if _now_utc() - created > datetime.timedelta(hours=NIGHTLY_STALE_HOURS):
+        label += f'（{NIGHTLY_STALE_HOURS} 時間より古い）'
+    return label
+
+
+def print_nightly_ci() -> None:
+    try:
+        workflow = nightly_ci_setting()
+    except RuntimeError as exc:
+        print(f'前夜の CI: nightly_ci を読めない（{exc}）', file=sys.stderr)
+        return
+    if workflow:
+        print(nightly_ci_line(workflow))
+
+
 def cmd_today() -> int:
+    print_nightly_ci()
     cmd_comments()
     project_number = discover_project_number()
     items = fetch_all_items(project_number)

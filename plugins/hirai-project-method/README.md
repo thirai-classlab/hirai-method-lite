@@ -16,6 +16,8 @@ tasks: github-project
 
 `tasks: github-project` で `hirai-task` が PATH に無いとき、土台は上の入れ方を示して止まる。
 
+夜間に回す CI の赤を見逃さないときは、同じ `.claude/mode.yml` に `nightly_ci: ci.yml`（workflow のファイル名）を足す。`hirai-task today` の先頭に、その workflow の直近の schedule の run の結果を 1 行出す（成功・失敗と url・実行中・run が無い・取れない。36 時間より古ければ注記）。空か無ければ何も出さず gh も呼ばない。
+
 ## 入っているもの
 
 | 部品 | 中身 |
@@ -25,6 +27,7 @@ tasks: github-project
 | `commands/project-setup.md` | `/hirai-project-method:project-setup` Project の作成・紐づけ・項目・ビューの立ち上げ（既定は計画だけ。`--apply` で書く） |
 | `skills/github-project/` | GitHub Project の形の規範（正本は Project・3 段・Status 8 値・書き込みはメイン専任・承認カード） |
 | `docs/rules-reference/project-setup.md`・`glossary.md` | 立ち上げの手順と、wave・feature・8 状態の用語 |
+| `hirai-task today` の `nightly_ci` の 1 行 | `.claude/mode.yml` の `nightly_ci: <workflow のファイル名>` があるときだけ、`gh run list --event schedule -L 1` の結果を先頭に 1 行出す |
 | `scripts/ghp-path.sh` | 件数の控え（`~/.claude/plugins/data/hirai-project-method-hirai-lite/`）を読み書きするシェル関数 |
 
 ## 土台との約束

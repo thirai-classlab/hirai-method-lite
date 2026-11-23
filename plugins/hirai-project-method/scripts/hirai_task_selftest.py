@@ -7854,6 +7854,134 @@ def main() -> int:
             _today_full_run_smoke,
         )
 
+        # ── 前夜の CI（today の 1 行。nightly_ci の設定が無いときは gh を呼ばない） ──
+        def _nightly(setting: str | None, gh_result, *, now: str = '2026-11-23T20:00:00+00:00',
+                     home_setting: str | None = None, via_today: bool = False) -> tuple[str, list]:
+            """偽の gh・偽の時計・使い捨ての project/home で today の 1 行を出し、(標準出力, gh の呼び出し) を返す。"""
+            project = tempfile.mkdtemp(dir=cache_tmp_dir)
+            home = tempfile.mkdtemp(dir=cache_tmp_dir)
+            for base, text in ((project, setting), (home, home_setting)):
+                if text is not None:
+                    os.makedirs(os.path.join(base, '.claude'))
+                    with open(os.path.join(base, '.claude', 'mode.yml'), 'w', encoding='utf-8') as f:
+                        f.write(f'mode: normal\n{text}\n')
+            calls: list[list[str]] = []
+            inner = make_command_gh([]) if via_today else None
+
+            def fake(args: list[str], input_text: str | None = None) -> tuple[int, str, str]:
+                if args[:2] == ['run', 'list']:
+                    calls.append(list(args))
+                    return gh_result
+                return inner(args, input_text)
+
+            env_keys = ('HIRAI_TASK_ROOT', 'HOME')
+            saved_env = {k: os.environ.get(k) for k in env_keys}
+            saved_gh, saved_now = gh_task.run_gh, gh_task._now_utc
+            os.environ.update({'HIRAI_TASK_ROOT': project, 'HOME': home})
+            gh_task.run_gh = fake
+            gh_task._now_utc = lambda: datetime.datetime.fromisoformat(now)
+            out = io.StringIO()
+            try:
+                with redirect_stdout(out):
+                    if via_today:
+                        orig_flag = gh_task.MIGRATION_ALIGN_WRITE_ENABLED
+                        gh_task.MIGRATION_ALIGN_WRITE_ENABLED = False
+                        try:
+                            assert gh_task.main(['today']) == 0
+                        finally:
+                            gh_task.MIGRATION_ALIGN_WRITE_ENABLED = orig_flag
+                    else:
+                        gh_task.print_nightly_ci()
+            finally:
+                gh_task.run_gh, gh_task._now_utc = saved_gh, saved_now
+                for k, v in saved_env.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+            return out.getvalue(), calls
+
+        def _runs(conclusion: str, status: str = 'completed', created: str = '2026-11-23T18:17:09Z') -> tuple[int, str, str]:
+            row = {'conclusion': conclusion, 'status': status, 'createdAt': created, 'url': 'https://github.com/o/r/actions/runs/1'}
+            return 0, json.dumps([row]), ''
+
+        def _nightly_success() -> None:
+            text, calls = _nightly('nightly_ci: ci.yml', _runs('success'))
+            assert text == '前夜の CI（ci.yml・11-24 03:17）: 成功\n', repr(text)
+            assert calls == [['run', 'list', '-R', 'example-org/example-repo', '--workflow', 'ci.yml', '--event',
+                              'schedule', '-L', '1', '--json', 'conclusion,status,createdAt,url']], calls
+
+        t('nightly_ci: 成功の run は「成功」を JST で 1 行に出す（gh の引数も固定）', _nightly_success)
+
+        def _nightly_failure() -> None:
+            for conclusion in ('failure', 'cancelled', 'timed_out'):
+                text, _ = _nightly('nightly_ci: "ci.yml"  # 夜の CI', _runs(conclusion))
+                assert text == ('前夜の CI（ci.yml・11-24 03:17）: 失敗 https://github.com/o/r/actions/runs/1'
+                                ' — 赤のまま放置しない\n'), (conclusion, text)
+
+        t('nightly_ci: failure・cancelled・timed_out は「失敗」と url を出す（引用符・行末コメントは外す）', _nightly_failure)
+
+        def _nightly_in_progress() -> None:
+            text, _ = _nightly('nightly_ci: ci.yml', _runs('', 'in_progress'))
+            assert text == '前夜の CI（ci.yml・11-24 03:17）: 実行中\n', repr(text)
+
+        t('nightly_ci: 実行中の run は「実行中」', _nightly_in_progress)
+
+        def _nightly_no_run() -> None:
+            text, calls = _nightly('nightly_ci: ci.yml', (0, '[]', ''))
+            assert text == '前夜の CI（ci.yml）: schedule の run がまだ無い\n', repr(text)
+            assert len(calls) == 1
+
+        t('nightly_ci: run が 0 件なら「まだ無い」（取れないとは別の文）', _nightly_no_run)
+
+        def _nightly_unreadable() -> None:
+            text, _ = _nightly('nightly_ci: ci.yml', (1, '', 'HTTP 403: rate limit\nsecond line'))
+            assert text == '前夜の CI（ci.yml）: 取れない（HTTP 403: rate limit）\n', repr(text)
+            text, _ = _nightly('nightly_ci: ci.yml', (0, 'not json', ''))
+            assert text.startswith('前夜の CI（ci.yml）: 取れない（gh の出力を読めない') and 'まだ無い' not in text, repr(text)
+            text, _ = _nightly('nightly_ci: ci.yml', (0, '[{"status": "completed"}]', ''))
+            assert text.startswith('前夜の CI（ci.yml）: 取れない（'), repr(text)
+
+        t('nightly_ci: gh の失敗・JSON の崩れ・欠けた項目は「取れない（理由）」で 0 件と分ける', _nightly_unreadable)
+
+        def _nightly_unset_calls_no_gh() -> None:
+            for setting in (None, 'tasks: github-project', 'nightly_ci:', 'nightly_ci: # 空'):
+                text, calls = _nightly(setting, _runs('success'))
+                assert text == '' and calls == [], (setting, text, calls)
+
+        t('nightly_ci: 設定が無い・空なら何も出さず gh を呼ばない', _nightly_unset_calls_no_gh)
+
+        def _nightly_home_fallback() -> None:
+            text, calls = _nightly(None, _runs('success'), home_setting='nightly_ci: ci.yml')
+            assert text == '前夜の CI（ci.yml・11-24 03:17）: 成功\n' and len(calls) == 1, (text, calls)
+            text, calls = _nightly('nightly_ci: own.yml', _runs('success'), home_setting='nightly_ci: ci.yml')
+            assert calls[0][calls[0].index('--workflow') + 1] == 'own.yml', calls
+
+        t('nightly_ci: プロジェクトの mode.yml が先・無ければホーム（土台の harness_yml_value と同じ）', _nightly_home_fallback)
+
+        def _nightly_stale() -> None:
+            text, _ = _nightly('nightly_ci: ci.yml', _runs('success'), now='2026-11-25T07:17:10+00:00')
+            assert text == '前夜の CI（ci.yml・11-24 03:17）: 成功（36 時間より古い）\n', repr(text)
+            text, _ = _nightly('nightly_ci: ci.yml', _runs('success'), now='2026-11-25T06:17:09+00:00')
+            assert '古い' not in text, repr(text)
+
+        t('nightly_ci: 36 時間より古い run には注記を足す（ちょうど 36 時間は足さない）', _nightly_stale)
+
+        def _nightly_bad_value() -> None:
+            text, calls = _nightly('nightly_ci: ../x y.yml', _runs('success'))
+            assert '取れない' in text and calls == [], (text, calls)
+
+        t('nightly_ci: workflow のファイル名でない値は gh に渡さない', _nightly_bad_value)
+
+        def _nightly_in_today() -> None:
+            text, calls = _nightly('nightly_ci: ci.yml', _runs('failure'), via_today=True)
+            assert text.startswith('前夜の CI（ci.yml・11-24 03:17）: 失敗 '), repr(text[:120])
+            assert len(calls) == 1
+            text, calls = _nightly(None, _runs('failure'), via_today=True)
+            assert '前夜の CI' not in text and calls == [], (text[:120], calls)
+
+        t('nightly_ci: today の出力の先頭に 1 行だけ入り、設定が無ければ today は変わらない', _nightly_in_today)
+
         def _after_merge_no_closing_refs() -> None:
             gh_task.run_gh = make_command_gh([], closing_refs={})
             out = io.StringIO()

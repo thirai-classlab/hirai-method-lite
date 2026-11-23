@@ -70,3 +70,11 @@ worktree: off
 # 一時的に : 環境変数 HC_NOTIFY=orca (このファイルより優先される)
 
 notify: off
+
+# nightly_ci（前夜の CI の結果を today に出す。足すプラグイン hirai-project-method のときだけ効く） — 値は workflow のファイル名。**既定は空。**
+#
+#   ci.yml : `hirai-task today` の先頭に、その workflow の直近の schedule の run の結果を 1 行出す。空なら何も出さず gh も呼ばない
+#
+# 一時的に : 無し (このファイルとホームの ~/.claude/mode.yml だけを読む)
+
+nightly_ci:
