@@ -108,7 +108,7 @@ python3 -m json.tool "$D/settings.json" >/dev/null && echo "settings.json は妥
 
 `MODE` は手順 1 の質問 3 の答え。「normal（確認あり）」(既定) なら `normal`、「loop（自動で進む）」なら `loop`。
 
-**進め方の書き込み先は `$D` で決め打ちせず、`/config` と同じ `harness_mode_write_file`（すでに在る側に書く）に通す。** `$D` 基準にすると、ホーム側だけに `mode.yml` を置いている人のプロジェクトへ `.claude/mode.yml` を新設し、ホーム側を黙って覆い隠す。`user` 指定のときだけはホーム側に入れると決まっているので、そちらを直に指す。
+**進め方の書き込み先は `$D` で決め打ちせず、`/config` と同じ `harness_mode_write_file`（すでに在る側に書く）に通す。** `$D` 基準にすると、ホーム側だけに `mode.yml` を置いている人のプロジェクトへ `.claude/mode.yml` を新設し、ホーム側を黙って覆い隠す。`user` 指定のときだけはホーム側に入れると決まっているので、そちらを直に指す。**`user` 指定のときは、雛形の `tasks:`・`worktree:`・`notify:`・`nightly_ci:` の 4 項目（雛形の `# tasks（やること管理の形）` の行から末尾まで）をホームに写さない**（ホームの値は全リポに効くため、この 4 項目はプロジェクトの `.claude/mode.yml` にだけ書く。`/hirai-lite:config` の項目 8 が書く）。
 
 ```bash
 SCOPE=; D=.claude; [ "$SCOPE" = user ] && D="$HOME/.claude"; MODE=normal
@@ -116,7 +116,7 @@ P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&
 . "$P/scripts/tasks-path.sh"
 if [ "$SCOPE" = user ]; then MF="$HOME/.claude/mode.yml"; else MF="$(harness_mode_write_file "$PWD")"; fi
 mkdir -p "$(dirname "$MF")"
-[ -e "$MF" ] && echo "kept   $MF" || { cp "$P/templates/mode.yml" "$MF" && sed -i.bak "s/^mode: .*/mode: $MODE/" "$MF" && rm -f "$MF.bak" && echo "placed $MF ($MODE)"; }
+[ -e "$MF" ] && echo "kept   $MF" || { cp "$P/templates/mode.yml" "$MF" && sed -i.bak "s/^mode: .*/mode: $MODE/" "$MF" && rm -f "$MF.bak" && { [ "$SCOPE" != user ] || { sed -i.bak '/^# tasks（やること管理の形）/,$d' "$MF" && rm -f "$MF.bak"; }; } && echo "placed $MF ($MODE)"; }
 grep -c '^mode: \(normal\|loop\)$' "$MF"
 C=CLAUDE.md; [ "$SCOPE" = user ] && C="$HOME/.claude/CLAUDE.md"; [ -e "$C" ] && echo "kept   $C" || { cp "$P/templates/CLAUDE.md" "$C" && echo "placed $C"; [ -n "$SCOPE" ] || for a in AGENTS.md .claude/AGENTS.md; do [ -e "$a" ] && { printf '@%s\n\n' "$a" | cat - "$C" > "$C.tmp" && mv "$C.tmp" "$C" && echo "imported $a"; }; done; }
 for s in statusline.sh tasks-path.sh context-usage.sh; do [ -e "$D/$s" ] && echo "kept   $D/$s" || { cp "$P/scripts/$s" "$D/$s" && chmod +x "$D/$s" && echo "placed $D/$s"; }; done

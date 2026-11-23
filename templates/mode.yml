@@ -54,7 +54,8 @@ tasks: ledger
 #
 #   off   : 何もしない
 #   warn  : Orca の worktree でない会話の開始時に警告を 1 行出す
-#   block : Orca の worktree でない会話からの、リポの中の git に入るファイルの編集と git commit を止める
+#   block : Orca の worktree でない会話からの、リポの中の git に入るファイルの Edit・Write・NotebookEdit と
+#           git commit を止める（読み取り・リポの外・git に入らない場所・branch の切り替え・MCP の書き込みの道具は止めない）
 #           (読み取り・リポの外 (~/.claude の記憶の置き場など)・git に入らない場所・git switch は止めない)
 #
 # 切り替え : /hirai-lite:config の項目 8

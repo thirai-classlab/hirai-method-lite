@@ -37,7 +37,7 @@ case "$wt" in
     if [ "$in_orca_wt" -eq 0 ]; then
       if [ "$wt" = "block" ]; then
         if command -v jq >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1; then
-          echo "[harness] worktree: block — Orca の worktree ではないため、git に入るファイルの編集と git commit は止まります。orca worktree create --name <名前> で worktree を作って作業してください"
+          echo "[harness] worktree: block — Orca の worktree ではないため、Edit・Write・NotebookEdit での git に入るファイルの編集と git commit は止まります（MCP の書き込みの道具は止めません）。orca worktree create --name <名前> で worktree を作って作業してください"
         else
           echo "[harness] worktree: block ですが、jq も python3 も無いので止まりません。Orca の worktree ではないため、並行の会話と作業ツリーが重なる恐れがあります（jq か python3 を入れると止まります）"
         fi
@@ -49,6 +49,6 @@ case "$wt" in
 esac
 
 if [ "$notify" = "orca" ]; then
-  echo "[harness] notify: orca — 決めてもらうことができたら問いを .tmp/ に単独で読める形で書き、hirai-notify question <絶対 path> <要約> を送ってその手番を終える。終わったら done <報告の絶対 path> <要約>、続けられないエラーは stopped <報告の絶対 path> <要約>（Orca に立ち上げられた担当は、前置きの Dispatch の id を --dispatch-id で渡す）。送る操作は検査の結果を見てから別の呼び出しで打つ。API エラーで手番が終わったときは StopFailure の hook が自動で知らせる"
+  echo "[harness] notify: orca — 決めてもらうことができたら問いを .tmp/ に単独で読める形で書き、hirai-notify question <絶対 path> <要約> を送ってその手番を終える。終わったら done <報告の絶対 path> <要約>、続けられないエラーは stopped <報告の絶対 path> <要約>（宛先は --dispatch-id（前置きの Dispatch の id）> --to > 環境変数。依頼文で宛先を渡されたら最初に .claude/state/coordinator へ 1 行 run:<id> で書く）。送る操作は検査の結果を見てから別の呼び出しで打つ。API エラーで手番が終わったときは StopFailure の hook が自動で知らせる"
 fi
 exit 0

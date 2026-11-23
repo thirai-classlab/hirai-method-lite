@@ -48,10 +48,10 @@ if command -v harness_tasks_form >/dev/null 2>&1; then
 fi
 if [ "$tasks_form" = "github-project" ]; then
   # hook の PATH にプラグインの bin/ は入らない (Bash ツールだけに入る)。PATH に頼らず
-  # harness_pm_task_bin (installed_plugins.json の最大版 → cache の最大版 → PATH) で絶対 path を引く。
+  # harness_pm_task_bin (installed_plugins.json の user かこのリポの行の最大版 → PATH。cache へは python3 が無いときだけ) で絶対 path を引く。
   pm_task=""
   if command -v harness_pm_task_bin >/dev/null 2>&1; then
-    pm_task="$(harness_pm_task_bin 2>/dev/null || true)"
+    pm_task="$(harness_pm_task_bin "$root" 2>/dev/null || true)"
   elif command -v hirai-task >/dev/null 2>&1; then
     pm_task="$(command -v hirai-task)"
   fi

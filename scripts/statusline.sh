@@ -117,7 +117,7 @@ if [ "$tasks_form" = "github-project" ]; then
   # (古い tasks-path.sh の複製には無いので、その場合だけ PATH の hirai-task に頼る)。
   pm_task=""
   if command -v harness_pm_task_bin >/dev/null 2>&1; then
-    pm_task="$(harness_pm_task_bin 2>/dev/null || true)"
+    pm_task="$(harness_pm_task_bin "$root" 2>/dev/null || true)"
   elif command -v hirai-task >/dev/null 2>&1; then
     pm_task="$(command -v hirai-task)"
   fi

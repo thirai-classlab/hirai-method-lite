@@ -13,6 +13,9 @@
 # パイプ先の早期終了で呼び出し元ごと落ちる事故を防ぐため (関数内で局所化する)。
 
 HARNESS_UPDATE_URL_DEFAULT="https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/main/VERSION"
+# 足すプラグイン hirai-project-method の最新版 (main の plugins/hirai-project-method/VERSION)。
+# HARNESS_UPDATE_URL だけを差し替えたとき (試験・社内ミラー) は取りに行かない。HARNESS_UPDATE_PM_URL で別に指す。
+HARNESS_UPDATE_PM_URL_DEFAULT="https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/main/plugins/hirai-project-method/VERSION"
 
 # このプラグインの配布の entry 名 (marketplace.json の entry 名と同じ値)。変えるときは、この 1 行と
 # commands/*.md の素材行の同じ文字列を合わせる (tests/smoke.sh が素材行と突き合わせる。
@@ -145,11 +148,22 @@ harness_update_fetch_async() (
   printf '%s' "$now" > "$dir/stamp" 2>/dev/null || return 0
   url="${HARNESS_UPDATE_URL:-$HARNESS_UPDATE_URL_DEFAULT}"
   {
-    body="$(curl -fsSL --max-time 2 "$url" 2>/dev/null)" || exit 0
+    body="$(curl -fsSL --max-time 2 "$url" 2>/dev/null)"
     v="$(harness_semver_norm "$body")"
-    [ -n "$v" ] || exit 0
-    printf '%s' "$v" > "$dir/latest.tmp" 2>/dev/null \
-      && mv -f "$dir/latest.tmp" "$dir/latest" 2>/dev/null
+    if [ -n "$v" ]; then
+      printf '%s' "$v" > "$dir/latest.tmp" 2>/dev/null \
+        && mv -f "$dir/latest.tmp" "$dir/latest" 2>/dev/null
+    fi
+    pm_url="${HARNESS_UPDATE_PM_URL:-}"
+    [ -n "$pm_url" ] || [ -n "${HARNESS_UPDATE_URL:-}" ] || pm_url="$HARNESS_UPDATE_PM_URL_DEFAULT"
+    if [ -n "$pm_url" ]; then
+      body="$(curl -fsSL --max-time 2 "$pm_url" 2>/dev/null)"
+      v="$(harness_semver_norm "$body")"
+      if [ -n "$v" ]; then
+        printf '%s' "$v" > "$dir/latest-pm.tmp" 2>/dev/null \
+          && mv -f "$dir/latest-pm.tmp" "$dir/latest-pm" 2>/dev/null
+      fi
+    fi
     exit 0
   } >/dev/null 2>&1 </dev/null &
   return 0
@@ -160,10 +174,27 @@ harness_update_notice() (
   set -uo pipefail
   harness_update_enabled || return 0
   local root="${1:-${CLAUDE_PLUGIN_ROOT:-$PWD}}" cur new
-  cur="$(harness_local_version "$root")" || return 0
-  new="$(harness_cached_version "$root")" || return 0
+  if cur="$(harness_local_version "$root")" && new="$(harness_cached_version "$root")" \
+     && harness_semver_gt "$new" "$cur"; then
+    printf '[harness] 更新あり v%s → v%s (/hirai-lite:update で適用)\n' "$cur" "$new"
+  fi
+  harness_update_pm_notice "$root"
+)
+
+# harness_update_pm_notice [root] -> 足すプラグイン hirai-project-method が入っていて、前回取得した main の版より古いときだけ 1 行。
+# 入っていなければ (installed_plugins.json に行が無い) 何も出さない。常に rc 0。
+harness_update_pm_notice() (
+  set -uo pipefail
+  harness_update_enabled || return 0
+  local root="${1:-${CLAUDE_PLUGIN_ROOT:-$PWD}}" dir ip cur new
+  ip="$(harness_plugin_root_from_installed hirai-project-method 2>/dev/null)" || return 0
+  [ -n "$ip" ] || return 0
+  cur="$(harness_semver_norm "$(head -1 "$ip/VERSION" 2>/dev/null)")"
+  dir="$(harness_update_cache_dir "$root")"
+  [ -f "$dir/latest-pm" ] || return 0
+  new="$(harness_semver_norm "$(head -1 "$dir/latest-pm" 2>/dev/null)")"
   harness_semver_gt "$new" "$cur" || return 0
-  printf '[harness] 更新あり v%s → v%s (/hirai-lite:update で適用)\n' "$cur" "$new"
+  printf '[harness] 足すプラグイン hirai-project-method の更新あり v%s → v%s (/hirai-lite:update で適用)\n' "$cur" "$new"
 )
 
 # --- 画面下部 (statusline) へ更新の有無を渡すフラグ -------------------------
@@ -237,8 +268,6 @@ harness_update_flag_sync() (
 # 切り替え)、そちらが起動後に背景で済ませる。hook から `claude plugin update` を叩くのは
 # 二重実装なうえ、セッション開始を通信で待たせることになるので行わない。
 
-HARNESS_OWNED_SCRIPTS_DEFAULT="statusline.sh tasks-path.sh context-usage.sh"
-
 # harness_sync_stamp_file [plugin_root] -> 前回入れ替えた版を控えるパスを stdout (作成はしない)
 harness_sync_stamp_file() (
   set -uo pipefail
@@ -287,7 +316,8 @@ harness_sync_owned_scripts() (
         [ "$force" = "force" ] && printf 'placed  %s\n' "$d/context-usage.sh"
       fi
     fi
-    for s in ${HARNESS_OWNED_SCRIPTS:-$HARNESS_OWNED_SCRIPTS_DEFAULT}; do
+    # 直書き (zsh は変数を単語に分けない。`for s in $VAR` は 1 語のままになり黙って空振りする)
+    for s in statusline.sh tasks-path.sh context-usage.sh; do
       src="$plug/scripts/$s"; dst="$d/$s"
       [ -f "$src" ] || continue
       [ -e "$dst" ] || continue          # 置いていない場所に新しく作らない

@@ -15,11 +15,9 @@ P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&
 HT="$(harness_pm_task_bin 2>/dev/null || true)"; echo "hirai-task: ${HT:-なし}"
 ```
 
-exit code が 2 (プラグイン本体が見つからない) なら、その場で報告して停止する (台帳の手順にもフォールバックしない)。1 行目の出力が `github-project` なら、下の「
+exit code が 2 (プラグイン本体が見つからない) なら、その場で報告して停止する (台帳の手順にもフォールバックしない)。1 行目の出力が `github-project` なら、下の「## GitHub Project の形の場合」だけを行い、以降の台帳の手順は行わない (台帳は作らず、書かない)。`ledger` なら、この節は無視して下の「## 台帳の解決」から続ける。
 
 **`hirai-task` は PATH に頼らず絶対 path で呼ぶ。** 上の 2 行目の `hirai-task: <絶対 path>` を `$HT` として、以降の `hirai-task <サブコマンド>` は `"$HT" <サブコマンド>` と読み替える（足すプラグインの `bin/` が PATH に入るのは Bash ツールだけで、hook と画面下には入らない。同じ関数でそろえてある）。`なし` なら、`github-project` の形では「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と 1 行で報告して終了する。
-
-## GitHub Project の形の場合」だけを行い、以降の台帳の手順は行わない (台帳は作らず、書かない)。`ledger` なら、この節は無視して下の「## 台帳の解決」から続ける。
 
 ## GitHub Project の形の場合
 

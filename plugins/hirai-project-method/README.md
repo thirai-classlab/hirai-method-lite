@@ -14,7 +14,7 @@
 tasks: github-project
 ```
 
-`tasks: github-project` で `hirai-task` が PATH に無いとき、土台は上の入れ方を示して止まる。
+`tasks: github-project` で `hirai-task` が見つからないとき（`installed_plugins.json` の足すプラグインの行から引いた絶対 path に無いとき）、土台は上の入れ方を示して止まる。
 
 夜間に回す CI の赤を見逃さないときは、同じ `.claude/mode.yml` に `nightly_ci: ci.yml`（workflow のファイル名）を足す。`hirai-task today` の先頭に、その workflow の直近の schedule の run の結果を 1 行出す（成功・失敗と url・実行中・run が無い・取れない。36 時間より古ければ注記）。空か無ければ何も出さず gh も呼ばない。
 
@@ -32,7 +32,7 @@ tasks: github-project
 
 ## 土台との約束
 
-- 土台は `hirai-task` を PATH で呼ぶだけで、`harness_ghp_*` を直接呼ばない。
+- 土台は `hirai-task` を、`installed_plugins.json` から引いた絶対 path で呼ぶだけで、`harness_ghp_*` を直接呼ばない。
 - 会話の開始時（`hirai-task line --refresh`）と画面下（`hirai-task line`）の 1 行は、`tasks: github-project` のときだけ呼ばれる。`line` は控えを読むだけで、GraphQL を打つのは `--refresh` の背景の取り直しと、書き込みの直後だけ。
 - 承認カードの型（`approval-template.md`）と draft の雛形は土台にある。`hirai-task --selftest` は土台の場所を `HIRAI_LITE_ROOT`・リポ内の配置・`installed_plugins.json` の順に探す。
 

@@ -18,7 +18,7 @@ entry 名は系列ごとに分けてあります）。
 
 相対 path の source（`./plugins/…`）は、カタログを github・git・file・directory で追加したときに使えます（url で追加
 したときは使えません。[marketplace reference](https://code.claude.com/docs/en/plugins/marketplace-reference)）。
-土台と足すプラグインの間の約束（`hirai-task` を PATH で呼ぶ・`mode.yml` の項目）を変えるときは、**1 本の PR で両方を直します**
+土台と足すプラグインの間の約束（`installed_plugins.json` から引いた絶対 path で `hirai-task` を呼ぶ・`mode.yml` の項目）を変えるときは、**1 本の PR で両方を直します**
 （同じリポジトリに置いている理由です）。
 
 タグは版ごとに付けます。土台は `hirai-lite--v<版>`、足すプラグインは `hirai-project-method--v<版>`（公式の依存の仕組みが、

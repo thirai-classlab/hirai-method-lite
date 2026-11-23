@@ -386,22 +386,37 @@ EOF6
   # hook と画面下では足すプラグインの bin/ は PATH に入らない。PATH に hirai-task が無くても、
   # installed_plugins.json の版が最大の行 (先頭でも末尾でもない並びで置く) から見つけること。
   # 値の引用符・行末コメント・ホームとプロジェクトの順・末尾 / の remote は /bin/bash (3.2) で見る。
-  local mw mhome mpm mrepo mout msl mbad="" mblk mu mo
+  local mw mhome mpm mrepo mout msl mbad="" mblk mu mo zsplit
   mw="$(mktemp -d)"; mhome="$mw/home"; mpm="$mw/pm/1.0.0"; mrepo="$mw/repo"
   mkdir -p "$mhome/.claude/plugins" "$mpm/bin" "$mrepo/.claude"; git -C "$mrepo" init -q 2>/dev/null
   printf '#!/usr/bin/env bash\n[ "$1" = line ] && echo "7（承認 3・裁定 1・取り込み 3）／進行中 2／待ち解け —"\nexit 0\n' > "$mpm/bin/hirai-task"
   chmod +x "$mpm/bin/hirai-task"
-  printf '{"plugins":{"hirai-project-method@hirai-lite":[{"version":"0.9.0","installPath":"%s/n1"},{"version":"1.0.0","installPath":"%s"},{"version":"0.1.0","installPath":"%s/n2"}]}}\n' \
-    "$mw" "$mw/pm/1.0.0" "$mw" > "$mhome/.claude/plugins/installed_plugins.json"
+  # M-5: 別のリポの project 行 (版が最大・projectPath が違う) は採らない。scope user の行だけ・このリポの project 行だけを見る
+  mkdir -p "$mw/other/bin"; printf '#!/usr/bin/env bash\n[ "$1" = line ] && echo "99（別のリポの行）"\nexit 0\n' > "$mw/other/bin/hirai-task"; chmod +x "$mw/other/bin/hirai-task"
+  printf '{"plugins":{"hirai-project-method@hirai-lite":[{"scope":"user","version":"0.9.0","installPath":"%s/n1"},{"scope":"user","version":"1.0.0","installPath":"%s"},{"scope":"project","projectPath":"/elsewhere/other","version":"9.0.0","installPath":"%s/other"},{"scope":"user","version":"0.1.0","installPath":"%s/n2"}]}}\n' \
+    "$mw" "$mw/pm/1.0.0" "$mw" "$mw" > "$mhome/.claude/plugins/installed_plugins.json"
   printf 'tasks: "github-project"  # c\nnotify: '"'orca'"'\nworktree: "block" # x\n' > "$mrepo/.claude/mode.yml"
   mout="$(env -i HOME="$mhome" PATH=/usr/bin:/bin CLAUDE_PLUGIN_ROOT="$ROOT" CLAUDE_PROJECT_DIR="$mrepo" /bin/bash "$HOOKS/session-start.sh" 2>&1 </dev/null)"
   printf '%s' "$mout" | grep -qF 'Project: あなたの番 7' || mbad="$mbad [PATH に hirai-task 無し] 開始時が足すプラグインを見つけない: $mout"
+  printf '%s' "$mout" | grep -qF '別のリポの行' && mbad="$mbad [M-5] 別のリポの projectPath の行 (版が最大) を採った: $mout"
   printf '%s' "$mout" | grep -qF 'tasks: github-project' || mbad="$mbad [引用符・行末コメント] tasks: が読めない: $mout"
   [ "$(printf '%s\n' "$mout" | grep -c . || true)" -le 5 ] || mbad="$mbad [notify: orca] 開始時が 5 行を超えた"
   printf '%s' "$mout" | grep -qF 'notify: orca' || mbad="$mbad [notify: 'orca'] 引用符つきの値が読めない"
   msl="$(printf '{"context_window":{"used_percentage":12}}' | env -i HOME="$mhome" PATH=/usr/bin:/bin TMPDIR="$mw" NO_COLOR=1 \
          CLAUDE_PROJECT_DIR="$mrepo" /bin/bash "$ROOT/scripts/statusline.sh" 2>&1)"
   printf '%s' "$msl" | grep -qF 'あなたの番 7' || mbad="$mbad [PATH に hirai-task 無し] 画面下が足すプラグインを見つけない: $msl"
+  # M-5: uninstall 後 (installed に行が無く cache だけ残る) は空・rc 1。cache への逃げ道は installed_plugins.json が無いときだけ
+  mkdir -p "$mhome/.claude/plugins/cache/hirai-lite/hirai-project-method/1.0.0/bin"
+  cp "$mpm/bin/hirai-task" "$mhome/.claude/plugins/cache/hirai-lite/hirai-project-method/1.0.0/bin/hirai-task"
+  printf '{"plugins":{"hirai-lite@hirai-lite":[{"scope":"user","version":"3.0.0","installPath":"/x"}]}}\n' > "$mhome/.claude/plugins/installed_plugins.json"
+  mu="$(cd "$mrepo" && HOME="$mhome" PATH=/usr/bin:/bin /bin/bash -c ". \"$ROOT/scripts/tasks-path.sh\"; harness_pm_task_bin \"\$PWD\"; echo \"rc=\$?\"")"
+  [ "$mu" = "rc=1" ] || mbad="$mbad [M-5] uninstall 後に cache の残りを採った (期待 空・rc=1): ${mu}"
+  printf '{"plugins":{"hirai-project-method@hirai-lite":[{"scope":"project","projectPath":"/elsewhere/other","version":"1.0.0","installPath":"%s"}]}}\n' "$mw/other" > "$mhome/.claude/plugins/installed_plugins.json"
+  mu="$(cd "$mrepo" && HOME="$mhome" PATH=/usr/bin:/bin /bin/bash -c ". \"$ROOT/scripts/tasks-path.sh\"; harness_pm_task_bin \"\$PWD\"; echo \"rc=\$?\"")"
+  [ "$mu" = "rc=1" ] || mbad="$mbad [M-5] 別のリポの project 行だけのとき採った: ${mu}"
+  printf '{"plugins":{"hirai-project-method@hirai-lite":[{"scope":"project","projectPath":"%s","version":"1.0.0","installPath":"%s"}]}}\n' "$mrepo" "$mw/pm/1.0.0" > "$mhome/.claude/plugins/installed_plugins.json"
+  mu="$(cd "$mrepo" && HOME="$mhome" PATH=/usr/bin:/bin /bin/bash -c ". \"$ROOT/scripts/tasks-path.sh\"; harness_pm_task_bin \"\$PWD\"")"
+  [ "$mu" = "$mw/pm/1.0.0/bin/hirai-task" ] || mbad="$mbad [M-5] このリポの project 行を採らない: ${mu}"
   # ホームとプロジェクトの順: 項目ごとにプロジェクト > ホーム。プロジェクトに無い項目はホームを読む
   printf 'tasks: github-project\nnotify: orca\n' > "$mhome/.claude/mode.yml"
   rm -f "$mrepo/.claude/mode.yml"
@@ -419,7 +434,7 @@ EOF6
     rm -rf "$mhome/.claude/mode.yml" "$mrepo/.claude/mode.yml"
     git -C "$mrepo" remote add origin https://github.com/acme/widgets/ 2>/dev/null
     mout="$(cd "$mrepo" && env HOME="$mhome" CLAUDE_PLUGIN_ROOT="$ROOT" /bin/bash -c "$mblk" 2>&1)"
-    printf '%s' "$mout" | grep -qF '2.x の痕跡なし' || mbad="$mbad [2b] 2.x の痕跡が無いのに推定で書いた/案内しない: $mout"
+    printf '%s' "$mout" | grep -qF 'tasks: 書きませんでした' || mbad="$mbad [2b] 2.x の控えが無いのに「tasks: 書きませんでした」を出さない: $mout"
     [ -e "$mrepo/.claude/mode.yml" ] && mbad="$mbad [2b] 2.x の痕跡が無いのに tasks: を書いた"
     mkdir -p "$mhome/.claude/plugins/data/hirai-lite-v2-hirai-lite"
     printf '{"form": "ghp"}\n' > "$mhome/.claude/plugins/data/hirai-lite-v2-hirai-lite/tasks-acme-widgets.json"
@@ -427,7 +442,33 @@ EOF6
     grep -qx 'tasks: github-project' "$mrepo/.claude/mode.yml" 2>/dev/null \
       || mbad="$mbad [2b] 末尾 / の remote で 2.x の控えを見つけて github-project を書かない: $mout"
     [ -e "$mhome/.claude/mode.yml" ] && mbad="$mbad [2b] ホームの mode.yml を作った"
+    # M-3: 控えが ledger 相当 (none) で mode.yml が無いときは書かない (新しい .claude/ を作って書き込み先を移さない)。mode.yml が在れば ledger を足す。
+    rm -f "$mrepo/.claude/mode.yml"
+    printf '{"form": "none"}\n' > "$mhome/.claude/plugins/data/hirai-lite-v2-hirai-lite/tasks-acme-widgets.json"
+    mout="$(cd "$mrepo" && env HOME="$mhome" CLAUDE_PLUGIN_ROOT="$ROOT" /bin/bash -c "$mblk" 2>&1)"
+    [ -e "$mrepo/.claude/mode.yml" ] && mbad="$mbad [2b] 控えが none で mode.yml が無いのに書いた: $mout"
+    printf '%s' "$mout" | grep -qF 'tasks: 書きませんでした' || mbad="$mbad [2b] 控えが none で mode.yml 無しのとき「書きませんでした」を出さない: $mout"
+    printf 'mode: loop\n' > "$mrepo/.claude/mode.yml"
+    mout="$(cd "$mrepo" && env HOME="$mhome" CLAUDE_PLUGIN_ROOT="$ROOT" /bin/bash -c "$mblk" 2>&1)"
+    grep -qx 'tasks: ledger' "$mrepo/.claude/mode.yml" 2>/dev/null || mbad="$mbad [2b] 控えが none で mode.yml が在るのに ledger を足さない: $mout"
+    # 別のリポの控えだけのとき (このリポの slug の控えが無い) は書かない
+    rm -f "$mrepo/.claude/mode.yml" "$mhome/.claude/plugins/data/hirai-lite-v2-hirai-lite/tasks-acme-widgets.json"
+    printf '{"form": "ghp"}\n' > "$mhome/.claude/plugins/data/hirai-lite-v2-hirai-lite/tasks-other-repo.json"
+    mout="$(cd "$mrepo" && env HOME="$mhome" CLAUDE_PLUGIN_ROOT="$ROOT" /bin/bash -c "$mblk" 2>&1)"
+    [ -e "$mrepo/.claude/mode.yml" ] && mbad="$mbad [2b] 別のリポの控えで書いた: $mout"
   fi
+  # H-2: /update 手順 4 の bash を zsh (Bash ツールの既定) で逐語に回し、3 本とも入れ替わる。block に変数の単語分割に頼る形 (for x in $VAR・set -- $a・V2=) が無い
+  mblk="$(awk '/^## 手順 4/ {s=1} s && /^```bash$/ {c=1; next} c && /^```$/ {exit} c' "$ROOT/commands/update.md")"
+  if [ -z "$mblk" ]; then mbad="$mbad [update 4] update.md から手順 4 の bash を取り出せない"
+  elif command -v zsh >/dev/null 2>&1; then
+    local zrepo="$mw/z" zf
+    mkdir -p "$zrepo/.claude"
+    for zf in statusline.sh tasks-path.sh context-usage.sh; do echo old > "$zrepo/.claude/$zf"; done
+    mout="$(cd "$zrepo" && env HOME="$mhome" CLAUDE_PLUGIN_ROOT="$ROOT" zsh -c "$mblk" 2>&1)"
+    [ "$(printf '%s\n' "$mout" | grep -c 'updated')" -ge 3 ] || mbad="$mbad [update 4] zsh で 3 本とも入れ替わらない: $mout"
+  fi
+  zsplit="$(grep -nE '(^|[;[:space:]])for [a-zA-Z_]+ in \$[A-Za-z_{]|set -- \$|^V2=' "$ROOT/commands/update.md" "$ROOT/scripts/update-check.sh" | grep -vE ':[0-9]+:[[:space:]]*#' | head -2)"
+  [ -z "$zsplit" ] || mbad="$mbad [update] 変数の単語分割に頼る形が残る: ${zsplit}"
   # /init 手順 7: tasks: github-project のリポには台帳 (list.md・parking-lot.md) を作らず、ledger (既定) では作る
   mblk="$(awk '/^## 7\. / {s=1} s && /^```bash$/ {c=1; next} c && /^```$/ {exit} c' "$ROOT/commands/init.md")"
   if [ -z "$mblk" ]; then mbad="$mbad [init 7] init.md から手順 7 の bash を取り出せない"; else
@@ -679,6 +720,15 @@ EOF_GUARD
   g2 "--help は通す" pass "$(g2b 'git commit --help' "$g2p")"
   g2 "heredoc の本文の git commit は通す" pass "$(g2b $'cat > .tmp/s.md <<\'EOF\'\ngit commit -m "feat: x"\nEOF' "$g2p")"
   g2 "heredoc の後ろの本物は止める" deny "$(g2b $'cat <<EOF >/dev/null\nhi\nEOF\ngit commit -m x' "$g2p")"
+  # GS-3: `$` を含む path (ルート定義の users.$id.tsx など) は字義どおり読んで止める / GS-5: 引用符・$((…))・<<< の中の << は heredoc の始まりではなく、次の行の git commit を止める
+  touch "$g2p/users.\$id.tsx" "$g2p/\$slug.tsx"; git -C "$g2p" add -A 2>/dev/null
+  g2 'GS-3: $ を含む既存の path の Edit' deny "$(g2e "$g2p/users.\$id.tsx" "$g2p")"
+  g2 'GS-3: $ で始まる新規の path の Write' deny "$(g2e "$g2p/\$slug.tsx" "$g2p")"
+  g2 'GS-5: 二重引用符の中の << の次の行の commit' deny "$(g2b $'grep -n "<<EOF" x.sh\ngit commit -m x' "$g2p")"
+  g2 "GS-5: 単一引用符の中の << の次の行の commit" deny "$(g2b $'echo \'<<EOF\'\ngit commit -m x' "$g2p")"
+  g2 'GS-5: $((1<<FOO)) の次の行の commit' deny "$(g2b $'echo $((1<<FOO))\ngit commit -m x' "$g2p")"
+  g2 'GS-5: <<< の次の行の commit' deny "$(g2b $'cat <<<hi\ngit commit -m x' "$g2p")"
+  g2 'GS-5: <<-"E" の本文の commit は通す' pass "$(g2b $'cat <<-"E"\n\tgit commit -m x\n\tE\n' "$g2p")"
   # commit の形 12 + 引用符つきの空白 path の -C + バックスラッシュ改行 + &&
   while IFS= read -r g2c; do
     [ -n "$g2c" ] || continue; g2i=$((g2i + 1))
@@ -1538,6 +1588,8 @@ if not ok: errs.append("足すプラグインの dependencies に hirai-lite >=3
 v = by.get("hirai-lite-v2", {})
 src = v.get("source") if isinstance(v.get("source"), dict) else {}
 if src.get("ref") != "v2": errs.append("hirai-lite-v2 の ref が v2 でない: %r" % (src,))
+if src.get("source") != "url" or not str(src.get("url", "")).startswith("https://") or not str(src.get("url", "")).endswith("hirai-method-lite.git"):
+    errs.append("hirai-lite-v2 の取得元が url 形 (source url・https・hirai-method-lite.git) でない: %r" % (src,))
 if v.get("version") != "2.9.0": errs.append("hirai-lite-v2 の版が 2.9.0 でない: %s" % v.get("version"))
 if "退役" not in (v.get("description") or ""): errs.append("hirai-lite-v2 の description に 退役 が無い")
 print("ERR " + " / ".join(errs) if errs else "OK\t%s\t%s" % (d.get("name", ""), pmv))
@@ -2080,6 +2132,18 @@ JSONEOF
   nrun question ../../.tmp-q.md 要約Q --subject X --to run:R1
   { [ "$nrc" -eq 2 ] && [ ! -s "$nlog" ]; } || nb="$nb [waiting 以外の --subject] exit=${nrc} (期待 2・送らない)"
 
+  # GS-1: HIRAI_* の無い担当の宛先。--dispatch-id > --to > 環境変数 > .claude/state/coordinator > ORCA_TERMINAL_HANDLE (--to を省く) > どれも無ければ exit 1
+  nrun done ../../.tmp-q.md 要約N
+  { [ "$nrc" -eq 1 ] && [ ! -s "$nlog" ]; } || nb="$nb [宛先がどこにも無い] exit=${nrc} (期待 1・送らない) 記録=[$(cat "$nlog")]"
+  mkdir -p "$nrepo/.claude/state"; printf 'run:FILE\n' > "$nrepo/.claude/state/coordinator"
+  nrun done ../../.tmp-q.md 要約N
+  { [ "$nrc" -eq 0 ] && grep -qF -- '--to run:FILE' "$nlog"; } || nb="$nb [state/coordinator の宛先を読まない] exit=${nrc} 記録=[$(cat "$nlog")]"
+  NENV="HIRAI_COORDINATOR=run:ENV" nrun done ../../.tmp-q.md 要約N
+  { [ "$nrc" -eq 0 ] && grep -qF -- '--to run:ENV' "$nlog" && ! grep -qF 'run:FILE' "$nlog"; } || nb="$nb [環境変数が state/coordinator に勝たない] exit=${nrc} 記録=[$(cat "$nlog")]"
+  rm -f "$nrepo/.claude/state/coordinator"
+  NENV="ORCA_TERMINAL_HANDLE=h1" nrun done ../../.tmp-q.md 要約N
+  { [ "$nrc" -eq 0 ] && [ -s "$nlog" ] && ! grep -qF -- '--to' "$nlog"; } || nb="$nb [ORCA_TERMINAL_HANDLE だけのとき --to を省いて送らない] exit=${nrc} 記録=[$(cat "$nlog")]"
+
   # (g-3) hooks/notify-attention.sh: 偽の orca・使い捨てのリポ・/bin/bash 3.2。判断を変えない (標準出力なし・exit 0)。
   local na_out na_err na_rc
   na_out="$nw/na.out"; na_err="$nw/na.err"
@@ -2091,7 +2155,8 @@ JSONEOF
     na_rc=$?
   }
   local long cmd70 j_perm j_deny
-  cmd70="$(printf 'a%.0s' $(seq 1 60))TOPSECRET-TAIL"
+  # GS-2: コマンドの本文は送らない。先頭のコマンド名だけ (VAR=値 は VAR=…)。reason は NAME=値 と 20 字以上の英数字の並びを伏せる
+  cmd70='API_TOKEN=\"abc def TOPSECRET-VAL\" PW=zzz /usr/bin/node scripts/x.js --key=TOPSECRET-ARG'
   j_perm="{\"hook_event_name\":\"Notification\",\"notification_type\":\"permission_prompt\",\"message\":\"Claude needs your permission to use Bash\",\"cwd\":\"$nrepo\",\"session_id\":\"s1\"}"
   na_run off "$j_perm"
   { [ "$na_rc" -eq 0 ] && [ ! -s "$nlog" ] && [ ! -s "$na_out" ]; } || nb="$nb [notify-attention: notify off] exit=${na_rc} 送った=[$(cat "$nlog")]"
@@ -2104,19 +2169,19 @@ JSONEOF
   { [ "$na_rc" -eq 0 ] && [ ! -s "$nlog" ] && [ ! -s "$na_out" ]; } || nb="$nb [notify-attention: 同じ会話の 1 分以内の 2 通目を送った] 記録=[$(cat "$nlog")]"
   na_run orca "{\"hook_event_name\":\"Notification\",\"notification_type\":\"idle_prompt\",\"message\":\"idle\",\"cwd\":\"$nrepo\",\"session_id\":\"s2\"}"
   { [ "$na_rc" -eq 0 ] && [ ! -s "$nlog" ]; } || nb="$nb [notify-attention: permission_prompt 以外の通知を送った] 記録=[$(cat "$nlog")]"
-  j_deny="{\"hook_event_name\":\"PermissionDenied\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"${cmd70}\",\"env\":{\"K\":\"TOPSECRET-ENV\"}},\"reason\":\"classifier blocked\",\"cwd\":\"$nrepo\",\"session_id\":\"s3\"}"
+  j_deny="{\"hook_event_name\":\"PermissionDenied\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"${cmd70}\",\"env\":{\"K\":\"TOPSECRET-ENV\"}},\"reason\":\"blocked TOKEN=TOPSECRET-R1 and ghp_aaaaaaaaaaaaaaaaaaaaaaaa1234\",\"cwd\":\"$nrepo\",\"session_id\":\"s3\"}"
   na_run orca "$j_deny"
   nline="$(cat "$nlog")"
   { [ "$na_rc" -eq 0 ] && [ ! -s "$na_out" ] && [ "$(grep -c . "$nlog")" -eq 1 ] && printf '%s' "$nline" | grep -qF -- '--type escalation' \
-      && printf '%s' "$nline" | grep -qF -- '分類器が止めました' && printf '%s' "$nline" | grep -qF -- 'classifier blocked' \
-      && printf '%s' "$nline" | grep -qF -- "$(printf 'a%.0s' $(seq 1 60))"; } \
+      && printf '%s' "$nline" | grep -qF -- '分類器が止めました' && printf '%s' "$nline" | grep -qF -- 'Bash API_TOKEN=… PW=… node｜blocked NAME=… and …'; } \
     || nb="$nb [notify-attention: PermissionDenied が 1 通] exit=${na_rc} 記録=[${nline}]"
-  printf '%s' "$nline" | grep -q 'TOPSECRET' && nb="$nb [notify-attention: tool_input の中身 (コマンドの 60 字より後ろか env) を送った] 記録=[${nline}]"
+  printf '%s' "$nline" | grep -qE 'TOPSECRET|ghp_|--key|scripts/x\.js|zzz' && nb="$nb [notify-attention: コマンドの本文・値・長い英数字の並びを送った] 記録=[${nline}]"
   na_run orca '{broken json'
   { [ "$na_rc" -eq 0 ] && [ ! -s "$nlog" ] && [ ! -s "$na_out" ]; } || nb="$nb [notify-attention: 壊れた入力] exit=${na_rc}"
   NA_TO= na_run orca "{\"hook_event_name\":\"PermissionDenied\",\"tool_name\":\"Edit\",\"reason\":\"r\",\"cwd\":\"$nrepo\",\"session_id\":\"s4\"}"
   { [ "$na_rc" -eq 0 ] && [ ! -s "$na_out" ] && [ "$(grep -c . "$na_err")" -eq 1 ]; } \
     || nb="$nb [notify-attention: 送れないときは stderr 1 行・出力なし・exit 0] exit=${na_rc} stderr 行=$(grep -c . "$na_err") 出力=$(wc -c < "$na_out")"
+  [ ! -e "$nw/data/notify-attention-s4.last" ] || nb="$nb [notify-attention: 送れなかったのに 1 分の控えを書いた]"
   # StopFailure (API エラーで手番が終わった): 件名「API エラーで止まりました（<error>）」・本文 <root>｜<本文の先頭 80 字> を 1 通・同じ会話の 1 分以内の 2 通目は送らない・notify off は送らない
   local j_sf
   j_sf="{\"hook_event_name\":\"StopFailure\",\"error\":\"server_error\",\"last_assistant_message\":\"Request timed out\",\"cwd\":\"$nrepo\",\"session_id\":\"sf1\"}"

@@ -6,7 +6,8 @@
 # 判断は変えない: 標準出力に何も出さず常に exit 0。送れなかったときは stderr に 1 行だけ。
 # 同じ会話から 1 分に 2 通以上送らない（最後に送った時刻を ${CLAUDE_PLUGIN_DATA} か <root>/.claude/state/ に置く）。
 # StopFailure は件名に error の種類、本文に last_assistant_message の先頭 80 字だけを送る。
-# tool_input の中身は送らない（秘密を含みうる）。Bash のコマンドは先頭 60 字まで。
+# tool_input の中身は送らない（秘密を含みうる）。Bash のコマンドは本文を送らず、tool_name と先頭のコマンド名だけ（`VAR=値` は `VAR=…`）。
+# reason は `NAME=値` と 20 字以上の英数字の並びを伏せてから 80 字で切る。時刻の控えは、送れたときだけ書く。
 # 入力を読む道具（jq か python3）が無いときは何もしない。
 set -uo pipefail
 
@@ -47,6 +48,28 @@ fi
 
 trunc() { printf '%s' "$1" | cut -c1-"$2"; }
 
+# 先頭のコマンド名だけ（先頭の VAR=値 は VAR=… にして読み進める）。値・引数は送らない
+cmd_head() {
+  printf '%s' "$1" | awk '{
+    out = ""
+    for (i = 1; i <= NF && i <= 6; i++) {
+      w = $i
+      if (w ~ /^[A-Za-z_][A-Za-z0-9_]*=/) {
+        v = w; sub(/^[^=]*=/, "", v); q = substr(v, 1, 1)
+        if ((q == "\"" || q == "\047") && (length(v) < 2 || substr(v, length(v), 1) != q)) { while (i < NF && substr($i, length($i), 1) != q) i++ }
+        sub(/=.*/, "=…", w); out = out (out == "" ? "" : " ") w; continue
+      }
+      sub(/.*\//, "", w); out = out (out == "" ? "" : " ") substr(w, 1, 40); break
+    }
+    printf "%s", out
+  }'
+}
+
+# 秘密らしい並びを伏せる
+redact() {
+  printf '%s' "$1" | sed -E -e 's/[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+/NAME=…/g' -e 's/[A-Za-z0-9_+\/-]{20,}/…/g'
+}
+
 case "$event" in
   Notification)
     [ -z "$ntype" ] || [ "$ntype" = "permission_prompt" ] || exit 0
@@ -55,8 +78,8 @@ case "$event" in
   PermissionDenied)
     subject="分類器が止めました"
     what="${tool:-不明のツール}"
-    [ -z "$cmd" ] || what="${what} $(trunc "$cmd" 60)"
-    summary="${what}｜$(trunc "${reason:-理由なし}" 200)" ;;
+    [ -z "$cmd" ] || what="${what} $(cmd_head "$cmd")"
+    summary="${what}｜$(trunc "$(redact "${reason:-理由なし}")" 80)" ;;
   StopFailure)
     subject="API エラーで止まりました（${apierr:-unknown}）"
     summary="$(trunc "${lastmsg:-本文なし}" 80)" ;;
@@ -73,11 +96,12 @@ if [ -f "$stamp" ]; then
   case "$last" in ''|*[!0-9]*) last=0 ;; esac
   [ $((now - last)) -ge 60 ] || exit 0
 fi
-mkdir -p "$state_dir" 2>/dev/null && printf '%s' "$now" > "$stamp" 2>/dev/null
 
 notifier="$plugin_root/bin/hirai-notify"
 [ -x "$notifier" ] || { echo "notify-attention: bin/hirai-notify が無い" >&2; exit 0; }
-if ! "$notifier" waiting "$summary" --subject "$subject" >/dev/null 2>"${TMPDIR:-/tmp}/notify-attention.$$.err"; then
+if "$notifier" waiting "$summary" --subject "$subject" >/dev/null 2>"${TMPDIR:-/tmp}/notify-attention.$$.err"; then
+  mkdir -p "$state_dir" 2>/dev/null && printf '%s' "$now" > "$stamp" 2>/dev/null
+else
   echo "notify-attention: 送れなかった: $(head -1 "${TMPDIR:-/tmp}/notify-attention.$$.err" 2>/dev/null)" >&2
 fi
 rm -f "${TMPDIR:-/tmp}/notify-attention.$$.err" 2>/dev/null

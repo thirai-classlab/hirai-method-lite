@@ -39,13 +39,15 @@ ls -d .claude/rules "$HOME/.claude/rules" 2>/dev/null; true   # 元が残って�
 ```
 /plugin marketplace update hirai-lite
 /plugin update hirai-lite@hirai-lite
+/plugin update hirai-project-method@hirai-lite
 ```
 
-- **2 行とも必要。** 1 行目は配布元の控えを取り直すだけで、これを飛ばすと 2 行目は古い控えを見て「最新です」と答える。
-- **2.x（`hirai-lite-v2`）から移るとき**は、更新ではなく入れ替え。**この順で進める**（`hirai-lite-v2` を先に uninstall すると、2.x の控え `~/.claude/plugins/data/hirai-lite-v2-hirai-lite/` が消え、手順 2b が GitHub Project の形を見つけられず `ledger` を書く）:
+- **3 行とも必要（3 行目は足すプラグインが入っているときだけ）。** 1 行目は配布元の控えを取り直すだけで、これを飛ばすと 2 行目以降は古い控えを見て「最新です」と答える。足すプラグインは土台と版が別なので、2 行目だけでは上がらない。足すプラグインが入っていなければ 3 行目は打たない（`claude plugin list` で見分ける）。
+- **2.x（`hirai-lite-v2`）から移るとき**は、更新ではなく入れ替え。**この順で進める**（`hirai-lite-v2` を先に uninstall すると、2.x の控え `~/.claude/plugins/data/hirai-lite-v2-hirai-lite/` が消え、手順 2b が GitHub Project の形を見つけられず `tasks:` を書かない。`tasks:` を commit して既定の branch に入れる前に uninstall すると、同じリポのほかの worktree・clone は `ledger` のまま戻れない）:
   1. `/plugin marketplace update hirai-lite` → `/plugin install hirai-lite@hirai-lite`（Project で回すリポは `hirai-project-method@hirai-lite` も）
-  2. Claude Code を開き直し、`/hirai-lite:update`（手順 2b が 2.x の控えから `tasks:` を書く）
-  3. **そのあとで** `/plugin uninstall hirai-lite-v2@hirai-lite`
+  2. `/plugin disable hirai-lite-v2@hirai-lite`（1 で入れた範囲と同じ範囲で。disable は 2.x の控えを消さない）→ Claude Code を開き直し、開始時の 1 行に `hirai-lite v3.0.0` が出ることを確かめる（出なければ 2.x のまま動いている。先へ進まない）
+  3. `/hirai-lite:update`（手順 2b が 2.x の控えから `tasks:` を `.claude/mode.yml` に書く）→ その 1 行を commit して既定の branch に入れる
+  4. **そのあとで** `/plugin uninstall hirai-lite-v2@hirai-lite`
   リポの `.claude/settings.json` の `enabledPlugins` に `hirai-lite-v2@hirai-lite` があれば、`hirai-lite@hirai-lite`（と `hirai-project-method@hirai-lite`）へ書き換える。
 - 入れ替えは**再起動で反映される**。Claude Code を開き直してから次へ進む。commands / hooks / agents / MCP サーバー定義はこの入れ替えで新しくなる。導入先の `.claude/` は手順 2〜4 で扱う。
 - ターミナルから `claude plugin update` を使う場合、**scope の既定は `user`**。入れた範囲が違うと `Plugin "hirai-lite" is not installed at scope user` で失敗するので `--scope local` / `--scope project` を付ける (どの範囲に入っているかは `claude plugin list` の `Scope:` 行)。画面の中から `/plugin` で実行する場合は指定不要。
@@ -65,8 +67,8 @@ ls -d .claude/rules "$HOME/.claude/rules" 2>/dev/null; true   # 元が残って�
 ### 2-1. 何があるかを調べる（読むだけ・書き込まない）
 
 ```bash
-for d in .claude/tasks .claude/draft .claude/rules-reference; do
-  [ -d "$d" ] || continue
+[ -n "${ZSH_VERSION:-}" ] && setopt null_glob   # zsh は一致しない glob でコマンドごと落ちる
+for d in .claude/tasks .claude/draft .claude/rules-reference; do [ -d "$d" ] || continue
   for f in "$d"/* "$d"/.[!.]*; do
     [ -f "$f" ] || continue
     [ "$(basename "$f")" = .gitkeep ] && continue
@@ -81,7 +83,7 @@ done
 
 ```bash
 P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
-moved=""; kept=""
+[ -n "${ZSH_VERSION:-}" ] && setopt null_glob; moved=""; kept=""   # zsh は一致しない glob でコマンドごと落ちる
 mv1() {  # mv1 <移動元> <移動先>: 移動先に在れば移さずに控える (上書きしない)
   [ -e "$1" ] || return 0
   if [ -e "$2" ]; then kept="$kept  $1 (移動先 $2 が既にある)\n"; return 0; fi
@@ -111,17 +113,15 @@ bash "$P/scripts/scope-check.sh" .claude "$HOME/.claude" .
 
 ## 手順 2b: タスク管理の形を mode.yml に 1 度だけ書く
 
-3.0.0 から、やること管理の形は**プロジェクトの** `.claude/mode.yml` の `tasks:`（`ledger` か `github-project`）が決め、自動では見分けない。`tasks:`・`worktree:`・`notify:` はプロジェクト側にだけ書く（ホームの `~/.claude/mode.yml` には書かない。ホームの値は他のリポにも効くため）。プロジェクト側に `tasks:` が無いときだけ、ここで 1 度だけ書く。2.x（`hirai-lite-v2`）の GitHub Project の控え（`~/.claude/plugins/data/hirai-lite-v2-hirai-lite/tasks-<owner>-<repo>.json` の `form` が `ghp`）があれば `github-project`、2.x の痕跡（控え・`installed_plugins.json` の `hirai-lite-v2` の行）があって控えが `ghp` でなければ `ledger`。**2.x の痕跡がどちらも無いときは推定で書かない**（`tasks:` が無ければ `ledger` として動く。GitHub Project で回すなら `/hirai-lite:config` の項目 8 で選ぶよう 1 行で案内する）。手順 3 の `/hirai-lite:init` が台帳（`list.md`・`parking-lot.md`）を作るかをこの値で決めるので、**手順 3 より前に回す**。
-
+3.0.0 から、やること管理の形は**プロジェクトの** `.claude/mode.yml` の `tasks:`（`ledger` か `github-project`）が決め、自動では見分けない。`tasks:`・`worktree:`・`notify:` はプロジェクト側にだけ書く（ホームの `~/.claude/mode.yml` には書かない。ホームの値は他のリポにも効くため）。プロジェクト側に `tasks:` が無いときだけ、ここで 1 度だけ書く。2.x（`hirai-lite-v2`）の痕跡は**このリポの slug の控え**（`~/.claude/plugins/data/hirai-lite-v2-hirai-lite/tasks-<owner>-<repo>.json`）だけで見る（機械全体では見ない。別のリポの控えや `installed_plugins.json` の行では書かない）。控えの `form` が `ghp` なら `github-project`。控えが在って `ghp` でないなら `ledger`（既定と同じ値なので、**プロジェクト側に `mode.yml` が無いときは書かない**。書くと新しい `.claude/` ができ、以後の mode の書き込み先がそこへ移る）。控えが無いときは書かない（`tasks:` が無ければ `ledger` として動く。GitHub Project で回すなら `/hirai-lite:config` の項目 8 で選ぶよう 1 行で案内する）。手順 3 の `/hirai-lite:init` が台帳（`list.md`・`parking-lot.md`）を作るかをこの値で決めるので、**手順 3 より前に回す**。
 ```bash
 P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 . "$P/scripts/tasks-path.sh"
-V2=0; ls "$HOME"/.claude/plugins/data/hirai-lite-v2-hirai-lite/tasks-*.json >/dev/null 2>&1 && V2=1; grep -q '"hirai-lite-v2@' "$HOME/.claude/plugins/installed_plugins.json" 2>/dev/null && V2=1
-if [ -n "$(harness_yml_file_value .claude/mode.yml tasks)" ]; then echo "tasks: 設定済み"; elif [ "$V2" = 1 ]; then harness_tasks_migrate "$PWD"
-else echo "2.x の痕跡なし: tasks: は書かない (ledger で動く。GitHub Project にするなら /hirai-lite:config の項目 8)"; fi; echo "tasks: $(harness_tasks_form "$PWD")"
+if [ -n "$(harness_yml_file_value .claude/mode.yml tasks)" ]; then echo "tasks: 設定済み"; else harness_tasks_migrate "$PWD"; fi; echo "tasks: $(harness_tasks_form "$PWD")"
 ```
 
-- 出た行（`tasks: <値> を <パス> に書きました (<理由>)`・`tasks: 設定済み`・`2.x の痕跡なし`）を、手順 6 の報告に 1 行そのまま入れる。`github-project` が書かれたのに `harness_pm_task_bin` が空なら `/plugin install hirai-project-method@hirai-lite` を 1 行案内する。`ledger` が書かれたが実は Project で回しているリポは、`/hirai-lite:config` の項目 8 で `github-project` に直す。
+- 出た行（`tasks: <値> を <パス> に書きました (<理由>)`・`tasks: 設定済み`・`tasks: 書きませんでした (<理由>)`）を、手順 6 の報告に 1 行そのまま入れる。**`書きました` が出たときは、続けて 1 行「`.claude/mode.yml` の `tasks:` を commit して既定の branch に入れてください（入れるまで、ほかの worktree・clone は `ledger` で動きます。2.x を uninstall するのもそのあとです）」を報告に入れる。** `github-project` が書かれたのに `harness_pm_task_bin` が空なら `/plugin install hirai-project-method@hirai-lite` を 1 行案内する。`ledger` が書かれたが実は Project で回しているリポは、`/hirai-lite:config` の項目 8 で `github-project` に直す。
+
 ## 手順 3: rules を再配置する
 
 **rules はプラグイン更新では導入先に配られない。** 更新後に必ず `/hirai-lite:init` の第 1 段階を実行する（全プロジェクト共通 `~/.claude/rules/` に入れている場合は `user` を付けたときの手順）。`/hirai-lite:init` は `disable-model-invocation: true` で Claude からは呼べないので、**`$P/commands/init.md` を Read し、その手順 1〜9 をこの場で実行する**（手順 0 の段階の判定は使わず、ヒアリングの手順 10 へは進まない。利用者に打ち直してもらわない）。どちらに入れたか分からないときは `ls ~/.claude/rules/*.md .claude/rules/*.md 2>/dev/null` で確かめる（両方に出たら二重ロードなので、`/init` の警告に従ってどちらか一方を消す）。 `/hirai-lite:init` は既存ファイルを 1 つも上書きしない。新しい rules を取り込むには、取り込みたいファイルを rules から先に削除してから `/hirai-lite:init` を実行する。**更新のたびに、導入先の rules が配布版と違うかを手順 4 の bash が `cmp -s` で比べ、`rules 配布版と違う: <path>` を 1 行ずつ出す。** 出た名前は手順 6 の報告に 1 行ずつ載せる（上書きしない。取り込むなら、そのファイルを消してから `/hirai-lite:init` を実行する）。手順 0 の控えと `diff -ru "$B/rules.project" .claude/rules`（ホーム側なら `diff -ru "$B/rules.home" "$HOME/.claude/rules"`）で突き合わせ、自分の変更が消えていないかを確認する。
@@ -129,12 +129,11 @@ else echo "2.x の痕跡なし: tasks: は書かない (ledger で動く。GitHu
 ## 手順 4: プラグイン所有の 3 ファイルを入れ替え、足りない参照資料を足す
 
 `statusline.sh` と `tasks-path.sh` と `context-usage.sh` はプラグインの `scripts/` の複製であり、利用者が編集する前提のファイルではない。`/init` は既存を残すため、この 3 本だけはここで入れ替える。`context-usage.sh` は v1.10.0 で足した context 使用率の共通ライブラリで、**`statusline.sh` と同じディレクトリに無いと画面下部と自動処理が別々の使用率を出す**（v1.9.0 の不具合）。v1.9.0 以前から使っている場合はまだ置かれていないので、`statusline.sh` が在る側にだけ新しく置く。**中身が配布版と違う場合は上書きせず、先に `.bak` へ控えを取る**（コピーなので、戻したいときは `.bak` から書き戻せる）。
-**置いていない場所に新しく作らない。** プロジェクト側とホーム側の両方を見て、**すでに在るものだけ**を入れ替える（片方に決め打ちすると、`/init user` で入れた人はホーム側が古いまま残り、使われないファイルがプロジェクト側に増える）。入れ替えそのものは共通ライブラリの `harness_sync_owned_scripts` 1 本に集約してある（セッション冒頭の自動入れ替えと**同じ関数**を通す。手順書と自動処理で作法が離れないようにするため）。`force` を渡すと、設定に関係なく必ず実行し、1 件ずつ作業ログを出す。
+**置いていない場所に新しく作らない。** プロジェクト側とホーム側の両方を見て、**すでに在るものだけ**を入れ替える（片方に決め打ちすると、`/init user` で入れた人はホーム側が古いまま残り、使われないファイルがプロジェクト側に増える）。入れ替えそのものは共通ライブラリの `harness_sync_owned_scripts` 1 本に集約してある（下の block は `bash -c` で包む。Bash ツールが zsh のとき、関数の中の変数の単語分割が bash と違って 3 本とも黙って飛ばされたため）（セッション冒頭の自動入れ替えと**同じ関数**を通す。手順書と自動処理で作法が離れないようにするため）。`force` を渡すと、設定に関係なく必ず実行し、1 件ずつ作業ログを出す。
 
 ```bash
 P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
-. "$P/scripts/update-check.sh"
-harness_sync_owned_scripts "$P" "$PWD" force
+bash -c '. "$1/scripts/update-check.sh"; harness_sync_owned_scripts "$1" "$2" force' _ "$P" "$PWD"   # zsh の Bash ツールでも同じに動かすため bash -c で包む
 for D in .claude/rules "$HOME/.claude/rules"; do for f in "$P"/rules/*.md; do b="${f##*/}"; [ -f "$D/$b" ] && ! cmp -s "$f" "$D/$b" && echo "rules 配布版と違う: $D/$b"; done; done
 for f in approval-template.md; do [ -d docs/rules-reference ] && [ ! -e "docs/rules-reference/$f" ] && cp "$P/docs/rules-reference/$f" docs/rules-reference/ && echo "placed docs/rules-reference/$f"; done; V="$(head -n 1 "$P/docs/rules-reference/approval-template.md")"; [ -e docs/rules-reference/approval-template.md ] && ! grep -qxF "$V" docs/rules-reference/approval-template.md && ! grep -q 'approval-template: keep' docs/rules-reference/approval-template.md && echo "outdated docs/rules-reference/approval-template.md"; true
 for D in .claude "$HOME/.claude"; do
@@ -175,6 +174,7 @@ bash の出力は作業ログであって報告ではない。**最後に必ず�
 ✅ statusLine（画面下部の情報表示）のスクリプトを最新版にしました
    変更されていたため、元の内容を .claude/statusline.sh.bak に保存しました
 ✅ タスク一覧の置き場所を調べるスクリプトと、context（会話の入れ物）の使用率を出すスクリプトを最新版にしました
+✅ タスク管理の形（tasks:）: <手順 2b の出力の 1 行>。書いたときは「.claude/mode.yml の tasks: を commit して既定の branch に入れてください」まで書く
 ✅ ルール・設定・mode（進め方）の設定・タスク一覧はそのままにしました（あなたが育てたものなので触りません）
 ✅ 自己チェック 10 項目すべて問題なしでした
 
@@ -184,7 +184,7 @@ bash の出力は作業ログであって報告ではない。**最後に必ず�
 
 - 移行が起きなかった場合（すでに `docs/` を使っている / `.claude/` に書類が無い）は、**書類の置き場の行を丸ごと省く**。移した件数とパスは手順 2 の実測値に差し替える（行数は 2-1 で控えた値）。
 - **移さなかったものがあれば必ず 1 行足す**（消していないこと・どちらを残すか決めてほしいことを伝える）。例: `⚠️ .claude/tasks/list.md は移していません。docs/tasks/list.md が既にあり、上書きすると中身が消えるためです。いまは両方残っています。読まれるのは docs/ 側です。中身を見比べて、残すほうを教えてください。`
-- 手順 4 で `placed docs/rules-reference/approval-template.md` と出たときだけ 1 行足す: `✅ 承認をお願いするときの型を置きました → docs/rules-reference/approval-template.md`。`placed docs/rules-reference/glossary.md` なら `✅ 進め方の用語集を置きました → docs/rules-reference/glossary.md`、型を置き換えたなら `✅ 承認の型を承認カードに替えました（元の写しは approval-template.md.bak）`。`scope-check.sh` が警告を出していたら、報告の末尾にその全文をそのまま貼る。途中で止まったら同じ調子で「何が起きたか」「どうすればよいか」「ここまでにやったこと」を書く。
+- 手順 3 で `placed .github/pull_request_template.md` と出たときだけ 1 行足す: `✅ PR の本文の雛形を置きました → .github/pull_request_template.md（以後このリポの PR すべてに効きます）`。手順 4 で `placed docs/rules-reference/approval-template.md` と出たときだけ 1 行足す: `✅ 承認をお願いするときの型を置きました → docs/rules-reference/approval-template.md`。型を置き換えたなら `✅ 承認の型を承認カードに替えました（元の写しは approval-template.md.bak）`。`scope-check.sh` が警告を出していたら、報告の末尾にその全文をそのまま貼る。途中で止まったら同じ調子で「何が起きたか」「どうすればよいか」「ここまでにやったこと」を書く。
 
 ## 手動でやらずに済ませたいとき（既定は無効）
 
@@ -215,6 +215,6 @@ cat "$P/VERSION"                                                                
 - `cat "$P/VERSION"` が更新前より新しい semver を返す（`$P` は素材行で解決した値。環境変数を直に書いた行は空振りする）。
 - 手順 0 の控えが `${TMPDIR:-/tmp}/claude-harness-lite/rules-backup-*/` にあり、**元の `rules/` も残っている**（コピーであって移動ではない）。
 - 手順 2 のあと、`ls .claude/tasks .claude/draft .claude/rules-reference 2>/dev/null` が**移さなかったもの以外は何も返さない**（移した分は `docs/` 側に在り、`git status --short` で `R` (rename) か 削除 + 追加 として見える）。移行が不要だった場合は最初から何も返さない。
-- 手順 2b のあと、プロジェクトの `.claude/mode.yml` の `tasks:` が `ledger` か `github-project` の 1 行になっている（2.x の痕跡が無くて書かなかったときを除く）。`harness_tasks_form "$PWD"` はどちらの場合も `ledger` か `github-project` を返す。
+- 手順 2b のあと、プロジェクトの `.claude/mode.yml` の `tasks:` が `ledger` か `github-project` の 1 行になっている（このリポの 2.x の控えが無い・`ledger` で `mode.yml` が無い、で書かなかったときを除く）。書いたときは、その 1 行を commit して既定の branch に入れるよう報告に書いてある。`harness_tasks_form "$PWD"` はどちらの場合も `ledger` か `github-project` を返す。
 - 手順 4 で `same` / `updated` と出た `$D`（プロジェクト側 / ホーム側のうち実際に置いてある方）について、`cmp -s "$P/scripts/statusline.sh" "$D/statusline.sh"` と `cmp -s "$P/scripts/tasks-path.sh" "$D/tasks-path.sh"` と `cmp -s "$P/scripts/context-usage.sh" "$D/context-usage.sh"` が 3 つとも exit 0。 `docs/rules-reference/` がある環境では `ls docs/rules-reference/approval-template.md` も exit 0（元から在ったものは、承認を得て置き換えた承認の型を除き、中身が変わっていない）。
 - `bash "$D/statusline.sh" </dev/null` が 2 行出力する（1 行目 = いまの状態 / 2 行目 = 設定リンク）。`bash "$P/tests/smoke.sh"` が exit 0 で、`git status --short` に `CLAUDE.md` `.claude/rules/` の変更と、`docs/` の変更（承認を得て置き換えた `approval-template.md` とその `.bak` を除く）が出ていない。

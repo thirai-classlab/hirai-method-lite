@@ -179,56 +179,89 @@ harness_tasks_form() {
   return 0
 }
 
+# harness_tasks_slug [root] -> origin の github.com の owner/repo から末尾の .git と / を外し、/ を - にした名前を stdout。
+# 2.x の控えの名前と同じ作り方。github.com 以外・remote 無しは空。常に rc 0。
+harness_tasks_slug() {
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" url
+  url="$(git -C "$root" remote get-url origin 2>/dev/null || true)"
+  case "$url" in
+    *github.com*) printf '%s' "$url" | sed -E 's#^.*github\.com[:/]##; s#\.git$##; s#/+$##; s#/#-#g' 2>/dev/null ;;
+  esac
+  return 0
+}
+
 # harness_tasks_migrate [root] -> プロジェクトの .claude/mode.yml に tasks: が無いときだけ、1 度だけ書き込む
 # (/hirai-lite:update の手順 2b)。tasks: はプロジェクト側にだけ書く (ホームには書かない。ホームの値は他のリポにも効くため)。
-# 2.x (hirai-lite-v2) の GitHub Project の控え (~/.claude/plugins/data/hirai-lite-v2-hirai-lite/
-# tasks-<owner>-<repo>.json の form が ghp) があれば github-project、それ以外は ledger。
-# 控えの名前は 2.x と同じ作り方 (github.com の後ろの owner/repo から末尾の .git と / を外し、/ を - にする)。
-# 書いたら "tasks: <値> ..." の 1 行を stdout に出す。プロジェクト側にすでに tasks: があれば何もしない (無出力・rc 0)。
-# 書けなかったら rc 1。以後は自動で見分けない (この関数は呼ばれた回だけ動く)。
+# 2.x (hirai-lite-v2) の痕跡は、このリポの slug の控え (~/.claude/plugins/data/hirai-lite-v2-hirai-lite/
+# tasks-<slug>.json) だけで見る (機械全体で見ない。別のリポの控えで書かない)。
+#   控えの form が ghp                 -> github-project を書く
+#   控えが在り form が ghp 以外        -> ledger を書く。ただしプロジェクト側に mode.yml が無いときは書かない
+#                                         (ledger は既定と同じ。新しい .claude/ を作ると mode の書き込み先がそこへ移る)
+#   控えが無い                          -> 書かない
+# 出力は 1 行 (書いたら "tasks: <値> を <パス> に書きました (<理由>)"、書かなければ "tasks: 書きませんでした (<理由>)")。
+# プロジェクト側にすでに tasks: があれば何もしない (無出力・rc 0)。書けなかったら rc 1。以後は自動で見分けない。
 harness_tasks_migrate() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" cur f url slug cache val why
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" cur f slug cache val why
   f="$root/.claude/mode.yml"
   cur="$(harness_yml_file_value "$f" tasks)"
   [ -z "$cur" ] || return 0
-  val="ledger"; why="2.x の Project の控えが無いため"
-  url="$(git -C "$root" remote get-url origin 2>/dev/null || true)"
-  slug=""
-  case "$url" in
-    *github.com*) slug="$(printf '%s' "$url" | sed -E 's#^.*github\.com[:/]##; s#\.git$##; s#/+$##; s#/#-#g' 2>/dev/null)" ;;
-  esac
-  if [ -n "$slug" ]; then
-    cache="$HOME/.claude/plugins/data/hirai-lite-v2-hirai-lite/tasks-${slug}.json"
-    if [ -f "$cache" ] && grep -Eq '"form"[[:space:]]*:[[:space:]]*"ghp"' "$cache" 2>/dev/null; then
-      val="github-project"; why="2.x の Project の控え ($cache) が ghp のため"
+  slug="$(harness_tasks_slug "$root")"
+  cache=""
+  [ -z "$slug" ] || cache="$HOME/.claude/plugins/data/hirai-lite-v2-hirai-lite/tasks-${slug}.json"
+  if [ -z "$cache" ] || [ ! -f "$cache" ]; then
+    printf 'tasks: 書きませんでした (2.x の Project の控えが無い。tasks: が無ければ ledger で動く。GitHub Project にするなら /hirai-lite:config の項目 8)\n'
+    return 0
+  fi
+  if grep -Eq '"form"[[:space:]]*:[[:space:]]*"ghp"' "$cache" 2>/dev/null; then
+    val="github-project"; why="2.x の Project の控え ($cache) が ghp のため"
+  else
+    val="ledger"; why="2.x の控え ($cache) が ghp ではないため"
+    if [ ! -f "$f" ]; then
+      printf 'tasks: 書きませんでした (ledger は既定と同じで、このリポに .claude/mode.yml が無い。新しく作らない)\n'
+      return 0
     fi
   fi
   harness_yml_set "$f" tasks "$val" || return 1
   printf 'tasks: %s を %s に書きました (%s)\n' "$val" "$f" "$why"
 }
 
-# harness_pm_task_bin -> 足すプラグイン hirai-project-method の hirai-task の絶対 path を stdout。無ければ空 + rc 1。
-# hook と画面下では、プラグインの bin/ は PATH に入らない (Bash ツールだけに入る)。PATH に頼らず、
-# installed_plugins.json の hirai-project-method@hirai-lite の行のうち版が最大の installPath/bin/hirai-task
-# → ~/.claude/plugins/cache/hirai-lite/hirai-project-method/ の最大版 → PATH の hirai-task、の順で探す。
+# harness_pm_task_bin [root] -> 足すプラグイン hirai-project-method の hirai-task の絶対 path を stdout。無ければ空 + rc 1。
+# hook と画面下では、プラグインの bin/ は PATH に入らない (Bash ツールだけに入る)。PATH に頼らず探す:
+#   1. installed_plugins.json の hirai-project-method@hirai-lite の行のうち、scope が user の行か、projectPath が
+#      このリポ (root。worktree ならその本体の checkout も) を含む行だけを見て、版が最大の installPath/bin/hirai-task
+#   2. python3 が無いとき・installed_plugins.json が無いときだけ ~/.claude/plugins/cache/hirai-lite/hirai-project-method/ の最大版
+#      (installed に行があるのに該当が無い = 外した・別のリポの install、のときは cache へ落ちない。入れ方を示して止まる側へ倒す)
+#   3. PATH の hirai-task
 harness_pm_task_bin() {
-  local f="${HOME:-}/.claude/plugins/installed_plugins.json" p="" c
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" f="${HOME:-}/.claude/plugins/installed_plugins.json" p="" c common="" roots
   if [ -f "$f" ] && command -v python3 >/dev/null 2>&1; then
+    common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    [ -z "$common" ] || common="${common%/.git}"
+    roots="$root"
+    [ -z "$common" ] || [ "$common" = "$root" ] || roots="$root
+$common"
     p="$(python3 -c 'import json,re,sys
 d = json.load(open(sys.argv[1]))
-rows = [x for k, v in d.get("plugins", {}).items() if k.split("@", 1)[0] == sys.argv[2] for x in v if x.get("installPath")]
+roots = [r.rstrip("/") for r in sys.argv[3].split("\n") if r]
+def mine(x):
+    if x.get("scope") == "user":
+        return True
+    pp = str(x.get("projectPath") or "").rstrip("/")
+    return bool(pp) and any(r == pp or r.startswith(pp + "/") for r in roots)
+rows = [x for k, v in d.get("plugins", {}).items() if k.split("@", 1)[0] == sys.argv[2] for x in v if x.get("installPath") and mine(x)]
 rows.sort(key=lambda x: [int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version", "0")))])
-print(rows[-1]["installPath"] if rows else "")' "$f" hirai-project-method 2>/dev/null)"
+print(rows[-1]["installPath"] if rows else "")' "$f" hirai-project-method "$roots" 2>/dev/null)"
     if [ -n "$p" ] && [ -x "$p/bin/hirai-task" ]; then
       printf '%s' "$p/bin/hirai-task"
       return 0
     fi
-  fi
-  c="$(ls -d "${HOME:-}"/.claude/plugins/cache/hirai-lite/hirai-project-method/*/ 2>/dev/null | sort -V | tail -1)"
-  c="${c%/}"
-  if [ -n "$c" ] && [ -x "$c/bin/hirai-task" ]; then
-    printf '%s' "$c/bin/hirai-task"
-    return 0
+  else
+    c="$(ls -d "${HOME:-}"/.claude/plugins/cache/hirai-lite/hirai-project-method/*/ 2>/dev/null | sort -V | tail -1)"
+    c="${c%/}"
+    if [ -n "$c" ] && [ -x "$c/bin/hirai-task" ]; then
+      printf '%s' "$c/bin/hirai-task"
+      return 0
+    fi
   fi
   c="$(command -v hirai-task 2>/dev/null || true)"
   if [ -n "$c" ]; then

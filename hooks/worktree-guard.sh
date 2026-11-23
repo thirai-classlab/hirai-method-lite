@@ -101,10 +101,14 @@ deny() {
   exit 0
 }
 
-# abs_path <path> <基の dir> -> 絶対 path（~ は HOME に、変数・コマンド置換を含むなら rc 1）
+# abs_path <path> <基の dir> [literal] -> 絶対 path（~ は HOME に）。
+# Bash の -C の値など、シェルが展開しうる path は変数・コマンド置換を含むなら rc 1。
+# literal を渡すと（Edit・Write の file_path は字義どおりの path）`$` や `` ` `` を含んでも読む（users.$id.tsx）。
 abs_path() {
   local p="$1" base="$2"
-  case "$p" in *'$'*|*'`'*) return 1 ;; esac
+  if [ "${3:-}" != "literal" ]; then
+    case "$p" in *'$'*|*'`'*) return 1 ;; esac
+  fi
   case "$p" in "~") p="${HOME:-/}" ;; "~/"*) p="${HOME:-}${p#"~"}" ;; esac
   case "$p" in /*) ;; *) p="$base/$p" ;; esac
   printf '%s' "$p"
@@ -173,6 +177,33 @@ scan_commits() {
       gsub(/\n/, RS_, rest); print "SUB" US rest
     }
   }
+  # 行の中で、引用符の外・$(( )) の外にある << の区切りの語を返す（先頭 - は <<- の印）。無ければ空
+  function heredoc_delim(line,   n, i, c, d, q, ar, j, w, dash, qc) {
+    n = length(line); q = 0; ar = 0
+    for (i = 1; i <= n; i++) {
+      c = substr(line, i, 1)
+      if (q == 1) { if (c == "\047") q = 0; continue }
+      if (q == 2) { if (c == "\\") i++; else if (c == "\"") q = 0; continue }
+      if (c == "\\") { i++; continue }
+      if (c == "\047") { q = 1; continue }
+      if (c == "\"") { q = 2; continue }
+      if (c == "$" && substr(line, i + 1, 2) == "((") { ar = 2; i += 2; continue }
+      if (ar > 0) { if (c == "(") ar++; else if (c == ")") ar--; continue }
+      if (c == "<" && substr(line, i + 1, 1) == "<") {
+        if (substr(line, i + 2, 1) == "<") { i += 2; continue }
+        j = i + 2; dash = ""
+        if (substr(line, j, 1) == "-") { dash = "-"; j++ }
+        while (substr(line, j, 1) == " " || substr(line, j, 1) == "\t") j++
+        qc = substr(line, j, 1)
+        if (qc == "\047" || qc == "\"") j++
+        w = ""
+        while (j <= n && substr(line, j, 1) ~ /[A-Za-z0-9_]/) { w = w substr(line, j, 1); j++ }
+        if (w ~ /^[A-Za-z_]/) return dash w
+        i++
+      }
+    }
+    return ""
+  }
   BEGIN { US = sprintf("%c", 31); GS = sprintf("%c", 29); RS_ = sprintf("%c", 30); hd = "" }
   {
     line = $0
@@ -183,12 +214,8 @@ scan_commits() {
       next
     }
     buf = buf line "\n"
-    if (match(line, /<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*["\047]?/) && substr(line, RSTART - 1, 1) != "<" && RSTART > 0) {
-      m = substr(line, RSTART, RLENGTH)
-      hdstrip = (substr(m, 3, 1) == "-")
-      gsub(/^<<-?[ \t]*["\047]?/, "", m); gsub(/["\047]$/, "", m)
-      hd = m
-    }
+    m = heredoc_delim(line)
+    if (m != "") { hdstrip = (m ~ /^-/); sub(/^-/, "", m); hd = m }
   }
   END {
     n = length(buf); q = 0; word = ""; inword = 0; nt = 0
@@ -270,7 +297,7 @@ case "$tool" in
   Edit|Write|NotebookEdit)
     f="$(jget tool_input.file_path tool_input.notebook_path)"
     [ -n "$f" ] || exit 0
-    abs="$(abs_path "$f" "$cwd")" || exit 0
+    abs="$(abs_path "$f" "$cwd" literal)" || exit 0
     abs="$(resolve_path "$abs")"
     fdir="$abs"
     while [ ! -d "$fdir" ]; do fdir="$(dirname "$fdir")"; done
