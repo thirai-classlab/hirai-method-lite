@@ -66,7 +66,7 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
   `GET .../projectsV2/{n}/fields` から取り、gh-fields-rest.json に控える
   （rest_field・rest_option_id）。add は入れた直後の行が検索に出ないことがあるので、
   POST の応答の id をそのまま PATCH に使う。start --approved・reopen は最初の副作用の
-  前に id を引く。align も同じ経路で書く。close-parents は項目の値を書かない
+  前に id を引く。align・today の完了書き込みも同じ経路で書く。close-parents は項目の値を書かない
   （issue の state を REST で閉じるだけ）。new 自身の項目の書き込みは GraphQL のまま
   （作った直後の行が REST の検索に載る速さは未確認のため）。
 
@@ -102,7 +102,7 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
     判断待ち・依存待ち・保留・着手可・空からは exit 2。start を案内。`[User]` の task には
     「道具では進行中にしない」と出す）。レビュー中・完了へ書く（set・review）のも、今の Status が
     進行中・レビュー中・完了のときだけ（それ以外は exit 2。レビュー中を踏み台に 2 手で進行中へ
-    回れないようにする。done と reopen はこの守りの外）。着手可・進行中へ書くとき、
+    回れないようにする。done・reopen・today の完了書き込みはこの守りの外）。着手可・進行中へ書くとき、
     閉じた issue は断る（reopen を案内）。
   - start（`--approved` なし）: 閉じた issue は断る。着手可の task は親を見ずに進行中へ進める
     （見るのは自分の未完了の blocked by だけ。2.1.0 のまま。ただし未完了の blocker がすべて同じ親 feature の
@@ -158,12 +158,21 @@ memos / today / after-merge）:
     動かした子があれば、その feature に AI_MARKER 付きで 1 行コメントを残す
     （API の書き込みは issue 自身の timeline に残らないため、代わりに feature へ書く）。
 
-  today: comments → close-parents → align → 一覧（memos・unblocked）と警告行
-    （orphans・stuck・wave-holds・merged-designs・user-actions）の順に呼ぶ。警告行は
+  today: comments → close-parents → 閉じたのに完了でない task へ Status=完了 を書く
+    → align → 一覧（memos・unblocked）と警告行（orphans・stuck・wave-holds・
+    merged-designs・no-issue の merge・user-actions）の順に呼ぶ。警告行は
     書き込まない（単独の一覧スクリプトにもしない）。
+    完了を書くのは closed かつ Status が 完了 でない task だけ（書くのは Status=完了 のみ。
+    done --not-planned が書く Status と同じ値）。align・close-parents と同じ書き込みの許可に従い、
+    書く前に対象を 1 行出し（「8 件のうち 5 件」の形）、item id と選択肢 id を先に引いてから issue の state を
+    読み直し、閉じていなければ飛ばして、読み直した直後に item_id を渡して書く。書いた番号を 1 行で出す。
+    この repo の行だけを書く。書けた件数の上限は 5、試す件数の上限は 15（失敗・飛ばしは書けた枠に数えない。
+    超えた分は次の today）。1 件書けなくても理由を出してほかを続けるが、403・429 なら残りを打ち切る。
+    書けない行は stuck に残り、別 repo の行は repo 名を添えて出す。journal が書けなくても警告 1 行で続ける。
+    `today | head` で出力先が閉じても（BrokenPipeError）stdout を捨てて続ける。
       ・orphans: OPEN の行だけを見る。Project に居ない issue（repo の open issue 一覧
-        との突き合わせ）・種別が空の行・種別が task・feature で親が無い行（wave・
-        設計メモは親なしを数えない）
+        との突き合わせ）・種別が空の行（直すコマンドを 1 行添える）・種別が task・feature で
+        親が無い行（wave・設計メモは親なしを数えない）
       ・stuck: ready_warnings と同じ 3 種 + 「着手可なのに親の feature が承認待ち」
       ・wave-holds: OPEN の wave だけを見る。子孫が 1 件以上あり、子の条件は満たしたが、
         本文に「出る条件のコマンド」の行が無い wave（子孫 0 件の新しい wave は
@@ -171,6 +180,9 @@ memos / today / after-merge）:
       ・merged-designs: 既定の branch（`GET repos/{REPO}` の default_branch）へ merge された、本文に DESIGN_PR_MARKER の印がある PR のうち、
         gh-merged-designs-since.json の since 以降のもの（簡易版。「起票済みか」までは
         判定しない。診断のための一覧であり、判断は人が行う）
+      ・no-issue の merge: 直近 7 日に `no-issue` ラベルで merge された PR を「N 件: #a・#b」の
+        1 行で出す（0 件なら出さない。merged-designs と同じ closed の PR 100 件の読みを使う。
+        100 件で 7 日に届かないときは「100 件まで」と添える。届かず 0 件のときも「0 件」と出す）
       ・user-actions: open の `[User]` の task を番号で出す（ready・align から
         外した分の見え先）
 
@@ -178,11 +190,13 @@ memos / today / after-merge）:
     close-parents を親→祖父→…と閉じられる分だけ辿ってから（1 回の today で複数段
     連鎖して閉じる）、unblocked を呼ぶ。
 
-  書き込みの許可: align と close-parents は、MIGRATION_ALIGN_WRITE_ENABLED が True
+  set・start は、相手の種別が空なら stderr に警告 1 行（止めない。種別自身の set は警告しない）。
+
+  書き込みの許可: align・close-parents・today の完了書き込みは、MIGRATION_ALIGN_WRITE_ENABLED が True
     かつ、open の issue の本文のどれにも「- today は書かない: はい」が無いときだけ
     書く。目印の照合は題名を絞らない。それ以外は一覧だけを出す。
-    **`--json` は常に書かない**（dry-run 専用。この JSON を読む一括処理があるとき、
-    書き込みが起きると事故になる）。実際に書くときは 1 件ずつ gh-task-journal.jsonl
+    **`--json`（align・close-parents だけにある）は常に書かない**（dry-run 専用。この JSON を読む一括処理が
+    あるとき、書き込みが起きると事故になる）。today に --json・--dry-run は無く、付けると exit 2。実際に書くときは 1 件ずつ gh-task-journal.jsonl
     （checkout ごと。1 行に repo・project も残す）に残し、8.5 秒
     （_WRITE_INTERVAL_SECONDS）おきに書く。
 
@@ -241,6 +255,7 @@ sys.dont_write_bytecode = True
 import tempfile
 import time
 import urllib.parse
+from typing import NamedTuple
 
 
 def _repo_from_git_remote() -> str:
@@ -308,7 +323,7 @@ _EXIT_LINE_RE = re.compile(r'^- 出る条件のコマンド: exit 0', re.MULTILI
 _HUMAN_JUDGMENT_LINE_RE = re.compile(r'^- 出る条件のコマンド: なし（人の判断）', re.MULTILINE)
 DESIGN_PR_MARKER = 'pr-template-design-v1'  # 設計 PR の本文の印（PR の雛形に置く）。
 
-# False にすると align・close-parents は
+# False にすると align・close-parents・today の完了書き込みは
 # 一覧だけを出す（selftest が「書かない側」を見るために切り替える）。
 MIGRATION_ALIGN_WRITE_ENABLED = True
 
@@ -996,7 +1011,7 @@ def write_single_select_rest(
     project_number: int, number: int, field_name: str, option_name: str, *, item_id=None,
 ) -> None:
     """既存の行の single select を REST で書く。approve・set・start・
-    review・done・reopen・add（入れ直したあとの値）・align が使う。new は変えていない
+    review・done・reopen・add（入れ直したあとの値）・align・today の完了書き込みが使う。new は変えていない
     （モジュールの docstring を参照）。item_id を渡せば ?q= を引かない（add が POST の
     応答の id で書く・start/reopen が副作用の前に引いた id を使う）。"""
     if item_id is None:
@@ -1217,6 +1232,15 @@ def ready_block_reason(
     return ''
 
 
+def is_closed_not_done(item: dict) -> bool:
+    """閉じているのに Status が 完了 でない行（today が 完了 を書く相手。stuck の警告も同じ判定）。"""
+    return item.get('state') == 'CLOSED' and item.get('status') != DONE_STATUS
+
+
+def closed_not_done_rows(items: list[dict]) -> list[dict]:
+    return [i for i in task_items(items) if is_closed_not_done(i)]
+
+
 def ready_warnings(items: list[dict], extras: dict[int, dict] | None = None) -> list[str]:
     extras = extras or {}
     warnings: list[str] = []
@@ -1233,9 +1257,10 @@ def ready_warnings(items: list[dict], extras: dict[int, dict] | None = None) -> 
                 warnings.append(
                     f"  blocked by を数え切れていない（30 件超）: #{number} {i['title'][:60]}"
                 )
-        if i.get('state') == 'CLOSED' and i.get('status') != DONE_STATUS:
+        if is_closed_not_done(i):
+            where = '' if _same_repo(i, REPO) else f"・{_repo_of(i)}"  # 別 repo の行は repo 名を添える（番号だけでは書けなかった行と見分けがつかない）
             warnings.append(
-                f"  閉じたのに完了でない: #{number} {i['title'][:60]}（Status={i.get('status') or '空'}）"
+                f"  閉じたのに完了でない: #{number} {i['title'][:60]}（Status={i.get('status') or '空'}{where}）"
             )
     for i in tasks:
         if i.get('status') == REVIEW_STATUS:
@@ -1607,6 +1632,20 @@ def _guard_status_write(
         die(f'#{number} は着手可にしない: {reason}', 2)
 
 
+def kind_fix_command(number: int) -> str:
+    """種別が空の行を直すコマンド（orphans の「直す:」と set・start の警告が同じ文を使う）。"""
+    return f"hirai-task set {number} {KIND_FIELD} {TASK_KIND}（feature・wave・設計メモならその値）"
+
+
+def warn_if_kind_empty(item: dict, number: int) -> None:
+    """相手の種別が空なら stderr に警告 1 行（止めない。exit code は変えない。orphans の「種別なし」と同じ直し方）。"""
+    if not item['fields'].get(KIND_FIELD, ''):
+        print(
+            f'警告: #{number} は{KIND_FIELD}が空。直すには {kind_fix_command(number)}',
+            file=sys.stderr,
+        )
+
+
 def cmd_set(number: int, field: str, value: str) -> int:
     if field not in WRITABLE_FIELDS:
         die(
@@ -1617,6 +1656,8 @@ def cmd_set(number: int, field: str, value: str) -> int:
     item = _require_item(project_number, number)
     if field == 'Status':
         _guard_status_write(project_number, item, number, value)
+    if field != KIND_FIELD:
+        warn_if_kind_empty(item, number)
     write_single_select_rest(project_number, number, field, value)
     print(f'#{number} {field}={value}')
     return 0
@@ -1687,6 +1728,7 @@ def cmd_start(number: int, approved: str | None, reread: bool = False) -> int:
     item = _require_item(project_number, number)
     _reject_wave_feature(item, number, 'start')
     _reject_closed(item, number, 'start')
+    warn_if_kind_empty(item, number)
     waived = []
     if item['blocked_by_open']:
         blocking, waived = split_start_blockers(project_number, item)
@@ -4220,7 +4262,7 @@ def _open_issue_numbers(items: list[dict]) -> list[int]:
 
 def no_today_marker_open(items: list[dict]) -> bool:
     """open の issue の本文のどれかに「- today は書かない: はい」があるあいだ、
-    align・close-parents は一覧だけにする。題名で絞らず
+    align・close-parents・today の完了書き込みは一覧だけにする。題名で絞らず
     open の issue 全体を見る。"""
     numbers = _open_issue_numbers(items)
     if not numbers:
@@ -4290,6 +4332,128 @@ def _apply_close_parents_plan(plan: dict, project_number: int) -> None:
         sleep_fn(_WRITE_INTERVAL_SECONDS)
 
 
+CLOSED_DONE_WRITE_LIMIT = 5  # 1 回の today で 完了 を書けた件数の上限（失敗・飛ばしは数えない）。
+CLOSED_DONE_TRY_LIMIT = 15  # 1 回の today で試す件数の上限。today への上乗せを約 45 秒に抑える（書けた 5 件 × 8.5 秒 ＋ 失敗の分）。
+_REASON_LIMIT = 200
+_RATE_LIMIT_RE = re.compile(r'\b(?:403|429)\b|secondary rate limit', re.IGNORECASE)
+
+
+def _say(text: str) -> None:
+    """flush つきで 1 行出す。`today | head` で読み手が先に閉じても（BrokenPipeError）、stdout を捨てて続ける
+    （完了を書いたあとの align・holds が必ず走るように）。"""
+    try:
+        print(text, flush=True)
+    except BrokenPipeError:
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except (OSError, ValueError, AttributeError):
+            sys.stdout = open(os.devnull, 'w', encoding='utf-8')
+
+
+def _short_reason(exc: Exception) -> str:
+    """書けなかった理由を 1 行にする。GhError の頭の path（「gh api … が失敗した: 」）は落として
+    肝心の理由（gh の 2 行目の案内も）を残す。"""
+    text = str(exc)
+    marker = ' が失敗した: '
+    if marker in text:
+        text = text.split(marker, 1)[1]
+    return ' / '.join(ln.strip() for ln in text.splitlines() if ln.strip())[:_REASON_LIMIT] or '不明'
+
+
+class ClosedDoneResult(NamedTuple):
+    fixed: list[int]  # 書けた番号
+    failed: list[tuple[int, str]]  # (書けなかった番号, 理由 1 行)
+    skipped: list[tuple[int, str]]  # (飛ばした番号, 理由 1 行)
+    untried: list[dict]  # 上限・打ち切りで試さなかった行（次の today の対象）
+    rate_limited: bool  # 403・429 で残りを打ち切った
+
+
+def _apply_closed_done(project_number: int, rows: list[dict]) -> ClosedDoneResult:
+    """閉じたのに完了でない行へ Status=完了 だけを書く（done と同じ値。閉じた理由が not planned でも
+    done --not-planned が書く Status は 完了）。item id と選択肢 id を先に引き、そのあとで issue の今の state を
+    REST で読み直して、閉じていなければ（板を読んだあとに reopen された）飛ばす。読み直しと書き込みの間に
+    検索を挟まない（item_id= を渡す）。1 件落ちても理由を残してほかを続けるが、403・429 なら残りを打ち切る。
+    書けた件数が CLOSED_DONE_WRITE_LIMIT、試した件数が CLOSED_DONE_TRY_LIMIT に達したら止める。"""
+    fixed: list[int] = []
+    failed: list[tuple[int, str]] = []
+    skipped: list[tuple[int, str]] = []
+    rate_limited = False
+    tried = 0
+    for row in rows:
+        if len(fixed) >= CLOSED_DONE_WRITE_LIMIT or tried >= CLOSED_DONE_TRY_LIMIT or rate_limited:
+            break
+        tried += 1
+        number = row['number']
+        try:
+            item_id = rest_item_id(project_number, number)
+            rest_option_id(project_number, 'Status', DONE_STATUS)
+            current = rest('GET', f'repos/{REPO}/issues/{number}')
+            if not isinstance(current, dict):
+                failed.append((number, f'issue の応答が想定外の形だった: {str(current)[:80]}'))
+                continue
+            state = current.get('state')
+            if state != 'closed':
+                reason = '今は open のため（reopen された）' if state == 'open' else f"今は {state or '不明'} のため"
+                skipped.append((number, reason))
+                continue
+            write_single_select_rest(project_number, number, 'Status', DONE_STATUS, item_id=item_id)
+        except GhError as exc:
+            failed.append((number, _short_reason(exc)))
+            rate_limited = bool(_RATE_LIMIT_RE.search(str(exc)))
+            continue
+        try:
+            _append_journal({
+                'op': 'close-sync', 'number': number, 'to': DONE_STATUS, 'from': row.get('status') or '',
+                'repo': REPO, 'project': project_number,
+            })
+        except OSError as exc:
+            print(f'警告: #{number} の journal を書けなかった（{exc}）。完了は書いた', file=sys.stderr)
+        fixed.append(number)
+        sleep_fn(_WRITE_INTERVAL_SECONDS)
+    return ClosedDoneResult(fixed, failed, skipped, rows[tried:], rate_limited)
+
+
+def with_done_status(items: list[dict], numbers: list[int]) -> list[dict]:
+    """numbers の行（この repo の、state が CLOSED のもの）の Status を 完了 にした写し
+    （元の items は変えない。書いたあとの板を取り直さずに見るため。開き直された行・別 repo の
+    同じ番号の行は変えない）。"""
+    done = set(numbers)
+    return [
+        {**i, 'status': DONE_STATUS}
+        if i.get('number') in done and i.get('state') == 'CLOSED' and _same_repo(i, REPO) else i
+        for i in items
+    ]
+
+
+def sync_closed_done(project_number: int, items: list[dict], *, write_allowed: bool) -> list[int]:
+    """today の見回り: 閉じたのに完了でない task に Status=完了 を書き、書いた番号を 1 行で出す。
+    書き込みの許可が無いときは何もしない（行は stuck に出る）。対象はこの repo の行だけ
+    （別 repo の同じ番号を書かない）。書けた件数は CLOSED_DONE_WRITE_LIMIT、試す件数は
+    CLOSED_DONE_TRY_LIMIT まで（失敗・飛ばしは書けた枠に数えない）。
+    戻り値は書けた番号（呼び出し側が with_done_status で items に反映する。書けなかった行は
+    stuck に残る）。"""
+    rows = [i for i in closed_not_done_rows(items) if _same_repo(i, REPO)]
+    if not rows or not write_allowed:
+        return []
+    # 書く前に対象を出して flush する（時間切れで止められても、何を書いていたかが残る）。
+    head = rows[:CLOSED_DONE_WRITE_LIMIT]
+    names = '・'.join('#%d' % r['number'] for r in head)
+    of_total = f'{len(rows)} 件のうち {len(head)} 件' if len(rows) > len(head) else f'{len(rows)} 件'
+    _say(f'閉じたのに完了でない {of_total}を{DONE_STATUS}にする: {names}')
+    result = _apply_closed_done(project_number, rows)
+    if result.fixed:
+        _say(f"閉じたのに完了でない {len(result.fixed)} 件を{DONE_STATUS}にした: {'・'.join(f'#{n}' for n in result.fixed)}")
+    for number, reason in result.failed:
+        _say(f'  {DONE_STATUS}にできなかった: #{number}（{reason}）')
+    for number, reason in result.skipped:
+        _say(f'  飛ばした: #{number}（{reason}）')
+    if result.rate_limited:
+        _say(f'  403・429（rate limit）のため残り {len(result.untried)} 件は打ち切った。時間をおいて today をやり直すこと')
+    elif result.untried:
+        _say(f'  残り {len(result.untried)} 件は次の today で{DONE_STATUS}にする')
+    return result.fixed
+
+
 # ── today の警告行（書き込まない・単独の一覧スクリプトにしない） ────
 def orphan_rows(items: list[dict]) -> list[dict]:
     """orphans: OPEN の行だけを見る。種別が空の行・種別が task・feature
@@ -4301,7 +4465,10 @@ def orphan_rows(items: list[dict]) -> list[dict]:
             continue
         kind = i.get('kind') or ''
         if not kind:
-            rows.append({'number': i['number'], 'title': i.get('title', ''), 'why': '種別なし'})
+            row = {'number': i['number'], 'title': i.get('title', ''), 'why': '種別なし'}
+            if _same_repo(i, REPO):  # 別 repo の行へ、この repo の番号で直すコマンドを出さない
+                row['fix'] = kind_fix_command(i['number'])
+            rows.append(row)
             continue
         if kind in ('task', FEATURE_KIND) and i.get('parent_number') is None:
             rows.append({'number': i['number'], 'title': i.get('title', ''), 'why': '親なし'})
@@ -4392,15 +4559,14 @@ def _save_since_cache(path: str, namespace: str, value: str) -> None:
     _save_namespaced(path, namespace, {'since': value})
 
 
-def merged_design_rows(since: str | None) -> tuple[list[dict], str]:
-    """merged-designs: 既定の branch へ merge された、本文に DESIGN_PR_MARKER の印が
-    ある PR のうち since 以降のもの。簡易版（直近の closed PR 100 件までを見る。
-    「起票済みか」までは判定しない。診断のための一覧で、判断は人が行う）。"""
-    now = datetime.datetime.now(datetime.timezone.utc)
-    query_since = since or (
-        now - datetime.timedelta(days=_MERGED_DESIGNS_LOOKBACK_DAYS)
-    ).strftime('%Y-%m-%dT%H:%M:%SZ')
-    rows = []
+CLOSED_PRS_PAGE_SIZE = 100
+NO_ISSUE_LABEL = 'no-issue'  # issue なしで merge した PR に付けるラベル（定数 1 か所）。
+NO_ISSUE_LOOKBACK_DAYS = 7
+
+
+def fetch_closed_prs() -> list[dict]:
+    """既定の branch へ向けた直近の closed PR を CLOSED_PRS_PAGE_SIZE 件（更新の新しい順）。
+    today の merged-designs と no-issue の merge が、この 1 回の読みを共有する（API を増やさない）。"""
     # 既定の branch を 1 回だけ引いて base に使う。引けなければ base を付けずに引く。
     repo_info = rest('GET', f'repos/{REPO}', ok_fail=True)
     default_branch = repo_info.get('default_branch') if isinstance(repo_info, dict) else None
@@ -4409,14 +4575,53 @@ def merged_design_rows(since: str | None) -> tuple[list[dict], str]:
     else:
         base_query = ''
         print('merged-designs: 既定の branch を引けなかったので、base を絞らずに引いた')
-    prs = rest('GET', f'repos/{REPO}/pulls?state=closed{base_query}&sort=updated&direction=desc&per_page=100')
-    for pr in (prs if isinstance(prs, list) else []):
+    prs = rest(
+        'GET',
+        f'repos/{REPO}/pulls?state=closed{base_query}&sort=updated&direction=desc&per_page={CLOSED_PRS_PAGE_SIZE}',
+    )
+    return prs if isinstance(prs, list) else []
+
+
+def merged_design_rows(
+    since: str | None, prs: list[dict] | None = None,
+) -> tuple[list[dict], str]:
+    """merged-designs: 既定の branch へ merge された、本文に DESIGN_PR_MARKER の印が
+    ある PR のうち since 以降のもの。簡易版（直近の closed PR 100 件までを見る。
+    「起票済みか」までは判定しない。診断のための一覧で、判断は人が行う）。
+    prs を渡せば読み済みの一覧を使い、渡さなければここで 1 回読む。"""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    query_since = since or (
+        now - datetime.timedelta(days=_MERGED_DESIGNS_LOOKBACK_DAYS)
+    ).strftime('%Y-%m-%dT%H:%M:%SZ')
+    rows = []
+    for pr in (fetch_closed_prs() if prs is None else prs):
         merged_at = pr.get('merged_at')
         if not merged_at or merged_at < query_since:
             continue
         if DESIGN_PR_MARKER in (pr.get('body') or ''):
             rows.append({'number': pr['number'], 'title': pr.get('title', '')})
     return rows, now.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def no_issue_merge_line(prs: list[dict]) -> str:
+    """直近 NO_ISSUE_LOOKBACK_DAYS 日に NO_ISSUE_LABEL で merge された PR を 1 行にする（0 件なら空文字。ただし 100 件で見切れているときは 0 件でも出す）。
+    PR は更新の新しい順に 100 件まで。最後の PR の更新がまだ期間の中なら、その先に期間内の PR が
+    残りうる（merge した PR の更新は merge 以降）ので「100 件まで」と添える。"""
+    cutoff = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=NO_ISSUE_LOOKBACK_DAYS)
+    ).strftime('%Y-%m-%dT%H:%M:%SZ')
+    numbers = sorted(
+        pr['number'] for pr in prs
+        if (pr.get('merged_at') or '') >= cutoff
+        and any(label.get('name') == NO_ISSUE_LABEL for label in (pr.get('labels') or []))
+    )
+    cut_off = len(prs) >= CLOSED_PRS_PAGE_SIZE and (prs[-1].get('updated_at') or cutoff) >= cutoff
+    if not numbers and not cut_off:
+        return ''
+    scope = f'{NO_ISSUE_LOOKBACK_DAYS} 日' + (f'・直近の closed PR {CLOSED_PRS_PAGE_SIZE} 件まで' if cut_off else '')
+    if not numbers:  # 0 件でも見切れているときは「7 日で 0 件」と読まれないよう出す
+        return f'{NO_ISSUE_LABEL} の merge（{scope}）0 件'
+    return f"{NO_ISSUE_LABEL} の merge（{scope}）{len(numbers)} 件: {'・'.join(f'#{n}' for n in numbers)}"
 
 
 # ── comments（REST の since と AI_MARKER で、あなたのコメントだけを拾う） ──
@@ -4704,11 +4909,16 @@ def cmd_today() -> int:
     # close-parents が実際に書いたかもしれない（1 回の today で親が閉じることがある）
     # ときだけ取り直す。全件の頁送りは約 14 秒かかるので、書けない間（
     # 目印つき open issue があるあいだ）は 1 回で済ませる。
-    if align_write_allowed(items):
+    write_allowed = align_write_allowed(items)
+    if write_allowed:
         items = fetch_all_items(project_number)
+    # 閉じたのに完了でない行を 完了 にする（書くのは Status=完了 だけ。あとの段は書いたあとの items を見る）。
+    synced = sync_closed_done(project_number, items, write_allowed=write_allowed)
+    items = with_done_status(items, synced)
     cmd_align(items=items)
     if align_write_allowed(items):
-        items = fetch_all_items(project_number)
+        # 取り直した板に 完了 の書き込みがまだ映らなくても、書いた行は 完了 として見る。
+        items = with_done_status(fetch_all_items(project_number), synced)
     _print_memos(items)
     cmd_unblocked(items=items)
 
@@ -4733,14 +4943,18 @@ def cmd_today() -> int:
     stuck = stuck_rows(items, extras)
     holds = wave_hold_rows(items, bodies)
     since = _load_since_cache(MERGED_DESIGNS_SINCE_CACHE, REPO)
-    merged, new_since = merged_design_rows(since)
+    closed_prs = fetch_closed_prs()
+    merged, new_since = merged_design_rows(since, closed_prs)
     _save_since_cache(MERGED_DESIGNS_SINCE_CACHE, REPO, new_since)
+    no_issue_line = no_issue_merge_line(closed_prs)
     user_actions = user_action_rows(items)
 
     if orphans or orphans_missing:
         print(f'orphans {len(orphans) + len(orphans_missing)} 件')
         for o in orphans:
             print(f"  #{o['number']:<4} {o['title'][:50]}（{o['why']}）")
+            if o.get('fix'):
+                print(f"    直す: {o['fix']}")
         for n in orphans_missing:
             print(f"  #{n:<4}（Project に居ない）")
     if stuck:
@@ -4755,6 +4969,8 @@ def cmd_today() -> int:
         print(f'merged-designs {len(merged)} 件')
         for m in merged:
             print(f"  PR #{m['number']:<4} {m['title'][:60]}")
+    if no_issue_line:
+        print(no_issue_line)
     if user_actions:
         print(f'[User] {len(user_actions)} 件（ready・align の対象外。あなたの操作）')
         for u in user_actions:
@@ -4897,6 +5113,12 @@ def _check_board_combination(opts: dict) -> None:
 
 def _board_key() -> str:
     return f'{REPO}#{PROJECT_NUMBER_OVERRIDE or "auto"}'
+
+
+def _repo_of(item: dict) -> str:
+    """行の URL から owner/repo を取る（読めなければ空文字）。"""
+    match = _ISSUE_URL_RE.match(item.get('url') or '')
+    return match.group(1) if match else ''
 
 
 def _same_repo(item: dict, repo: str) -> bool:
@@ -5526,6 +5748,8 @@ def main(argv: list[str]) -> int:
     if sub == 'memos':
         return cmd_memos()
     if sub == 'today':
+        if tail:
+            die('使い方: hirai-task today（引数は無い。--json・--dry-run の空打ちは無く、見回りは書く）', 2)
         return cmd_today()
     if sub == 'card':
         return cmd_card(tail)

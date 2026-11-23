@@ -9,11 +9,13 @@ description: GitHub Project でやること（wave・feature・task の issue �
 
 - **正本は Project**: メインエージェントは、やることの正本を GitHub の issue と Project に置き、着手前に `gh issue view <n>` で本文と依存を読む ／ 例: `hirai-task ready` で着手できる issue を出す ／ 失効: 外部トラッカー（Asana / Jira）に正本を移したとき
 - **3 段**: メインエージェントは、仕事を wave → feature → task の 3 段（項目「種別」と sub-issue）で組み、task は PR 1 本で閉じる粒度にする ／ 例: PR の本文に `Closes #12` を書く ／ 失効: なし
-- **Status は 8 値**: メインエージェントは、Status を次の 8 値で扱う。承認待ち / 着手可 / 判断待ち / 依存待ち / 進行中 / レビュー中 / 完了 / 保留。レビュー中と完了は原則として組込の自動化が動かす。自動化が動かない PR（既定の branch 以外向け）のときだけ `hirai-task review <n>` で レビュー中 にする ／ 例: 既定の branch 向けの PR は出せばレビュー中になる ／ 失効: なし
+- **Status は 8 値**: メインエージェントは、Status を次の 8 値で扱う。承認待ち / 着手可 / 判断待ち / 依存待ち / 進行中 / レビュー中 / 完了 / 保留。レビュー中と完了は原則として組込の自動化が動かす（閉じたのに完了でない task は `today` が 完了 にする）。自動化が動かない PR（既定の branch 以外向け）のときだけ `hirai-task review <n>` で レビュー中 にする ／ 例: 既定の branch 向けの PR は出せばレビュー中になる ／ 失効: なし
 - **feature の着手可は人だけ**: メインエージェントは、feature の着手を人がボードで「着手可」にするまで待ち、自分では動かさない ／ 例: feature が着手可で、未完了の blocked by が無ければ（先の wave が出ていなくても。着手可が wave の門を越えてよいの意思表示）、子の task はあとから足したものも `hirai-task start` で着手してよい（feature が承認待ちの間は呼ばない） ／ 失効: なし
 - **完了条件は検証可能に**: メインエージェントは、issue の完了条件を再現コマンドか観察可能な事実で書く ／ 例: 「ログイン E2E が green」「`GET /health` が 200 を返す」 ／ 失効: なし
 - **書き込みはメイン専任**: サブエージェントは issue を読むだけにし、Status や本文の変更は結果報告でメインに返す ／ 例: 報告に「#12 完了、Status を 完了 へ」と書く ／ 失効: なし
 - **見回りの時機**: メインエージェントは、会話の最初に `hirai-task today`、自分が出した PR の merge の直後に `hirai-task after-merge <PR 番号>` を回す ／ 例: 新しい会話の最初の操作は `today` ／ 失効: 正本を GitHub 以外へ移したとき
+- **見回りが書くもの**: `today` は align・close-parents に加え、閉じたのに Status が 完了 でない task（この repo の行だけ）へ Status=完了 だけを書く（align・close-parents に 1 種増える。書く直前に state を読み直して開き直された行は飛ばし、書けた数の上限は 5・試す数の上限は 15、残りは次の today。書いた番号を 1 行で出し、書けない 1 件は理由を出してほかを続け、403・429 なら残りを打ち切る。align と同じ許可 `- today は書かない: はい` に従う。today に `--json` は無い） ／ 例: `閉じたのに完了でない 3 件を完了にした: #1・#2・#3` ／ 失効: 正本を GitHub 以外へ移したとき
+- **見回りが出す警告**: メインエージェントは、today の orphans が出す種別なしの行に「直す: `hirai-task set <n> 種別 task（feature・wave・設計メモならその値）`」を見たら、その行が feature・wave・設計メモなら種別をその値にして打つ。`set`・`start` は相手の種別が空だと同じ直し方つきの stderr に警告 1 行（止めない）。直近 7 日の `no-issue` ラベルの merge（既定の branch 向け。設計の PR もここに数える）は、issue を付け忘れた PR が混じっていないかを見る ／ 例: `no-issue の merge（7 日）3 件: #11・#12・#13` ／ 失効: 正本を GitHub 以外へ移したとき
 
 ## 承認の場所とカード（v2.8.0）
 

@@ -27,6 +27,7 @@ tasks: github-project
 | `commands/project-setup.md` | `/hirai-project-method:project-setup` Project の作成・紐づけ・項目・ビューの立ち上げ（既定は計画だけ。`--apply` で書く） |
 | `skills/github-project/` | GitHub Project の形の規範（正本は Project・3 段・Status 8 値・書き込みはメイン専任・承認カード） |
 | `docs/rules-reference/project-setup.md`・`glossary.md` | 立ち上げの手順と、wave・feature・8 状態の用語 |
+| `hirai-task today` の見回りの書き込み | align・close-parents に加え、**閉じたのに Status が 完了 でない task へ Status=完了 だけを書く**（書き込みが 1 種増える。書いた番号を 1 行で出し、書けない 1 件は理由を出してほかを続け、403・429 なら残りを打ち切る。align と同じ許可（`- today は書かない: はい`）に従う。today に `--json`・`--dry-run` は無く、付けると exit 2。書く直前に state を読み直し、この repo の行だけを書く。書けた数の上限は 5・試す数の上限は 15）。種別なしの行には直すコマンドを 1 行出し、`set`・`start` は相手の種別が空なら stderr に警告 1 行（止めない）。直近 7 日に `no-issue` ラベルで merge した既定の branch 向けの PR を番号で出す（closed の PR 100 件の読みを使い、API を増やさない。100 件で見切れて 0 件のときも「0 件」と出す） |
 | `hirai-task today` の `nightly_ci` の 1 行 | `.claude/mode.yml` の `nightly_ci: <workflow のファイル名>` があるときだけ、`gh run list --event schedule -L 1` の結果を先頭に 1 行出す |
 | `scripts/ghp-path.sh` | 件数の控え（`~/.claude/plugins/data/hirai-project-method-hirai-lite/`）を読み書きするシェル関数 |
 

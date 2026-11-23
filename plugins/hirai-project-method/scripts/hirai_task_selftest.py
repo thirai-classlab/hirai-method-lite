@@ -610,7 +610,8 @@ def _command_row(i: dict) -> dict:
         'content': {
             '__typename': i.get('type', 'Issue'), 'number': i['number'],
             'title': i.get('title', f"row {i['number']}"), 'state': i.get('state', 'OPEN'),
-            'url': '',
+            # 本物の形: url は issue の URL（別 repo の行は i['url'] で渡す）。
+            'url': i.get('url') or f"https://github.com/{gh_task.REPO}/issues/{i['number']}",
             'parent': ({'number': i['parent_number']} if i.get('parent_number') is not None else None),
         },
         'fieldValues': {'nodes': field_values},
@@ -623,6 +624,7 @@ def make_command_gh(
     closing_refs: dict[int, list[int]] | None = None, project_number: int = 7,
     write_log: list[tuple] | None = None, paginate: dict[str, list] | None = None,
     children: dict[int, list[dict]] | None = None, field_defs: list[dict] | None = None,
+    graphql_log: list[str] | None = None,
 ):
     """close-parents・align・unblocked・after-merge・today を main([...]) 経由で走らせる
     ための、まとまった偽 gh。write_log には、実際に書き込みが起きたときだけ 1 行ずつ積む
@@ -639,12 +641,18 @@ def make_command_gh(
     closing_refs = closing_refs or {}
     paginate = paginate or {}
     field_defs = field_defs if field_defs is not None else _fake_field_defs()
-    items_by_number = {i['number']: i for i in items}
+    # 同じ番号が別 repo の行にもあるとき、番号で引く偽の答え（issue・REST の item）はこの repo の行だけにする。
+    items_by_number = {
+        i['number']: i for i in items
+        if not i.get('url') or i['url'].startswith(f'https://github.com/{gh_task.REPO}/')
+    }
     _reset_rest_fields_cache()
     gh_task._owner_type_cache = None
 
     def fake_run_gh(args: list[str], input_text: str | None = None) -> tuple[int, str, str]:
         joined = ' '.join(args)
+        if graphql_log is not None and args[:2] == ['api', 'graphql']:
+            graphql_log.append(joined)
         if 'repositoryOwner' in joined:
             return 0, json.dumps({'data': {'repositoryOwner': {'__typename': 'Organization'}}}), ''
         if '--paginate' in args:
@@ -755,7 +763,9 @@ def make_command_gh(
             m = re.match(r'^repos/[^/]+/[^/]+/issues/(\d+)$', path)
             if method == 'GET' and m:
                 number = int(m.group(1))
+                row = items_by_number.get(number) or {}
                 return 0, json.dumps({
+                    'number': number, 'state': str(row.get('state', 'OPEN')).lower(),
                     'sub_issues_summary': summaries.get(number, {'total': 0, 'completed': 0}),
                 }), ''
             if write_log is not None:
@@ -7854,6 +7864,681 @@ def main() -> int:
             '切り替えを切ると書き込みの API を呼ばない',
             _today_full_run_smoke,
         )
+
+        # ── today の直し 3 つ（閉じたのに完了でない・種別なし・no-issue の merge） ──
+        import contextlib
+
+        def _today_with(items, *, prs=None, flag=True, fail_numbers=(), extra_bodies=None, probe=None, on_sleep=None,
+                        override=None, stdout=None, stderr=None, expect_rc=0):
+            """items を板にして today を回し、(標準出力, 標準エラー, Status の PATCH した item 番号, 書き込みログ)
+            を返す。prs は直近の closed PR（REST の pulls の形）。fail_numbers の行は item id の引きが落ちる。
+            override(method, path, input_text) は REST を先に受け、(rc, 標準出力, 標準エラー) を返せばそれが答え、None なら偽の gh に任せる。
+            stdout・stderr は出力先の差し替え（BrokenPipe を起こす用）。"""
+            write_log: list[tuple] = []
+            patched: list[int] = []
+            graphql_log: list[str] = []
+            inner = make_command_gh(items, bodies=extra_bodies or {}, write_log=write_log, graphql_log=graphql_log)
+            sleeps: list[float] = []
+            journal_before = (
+                open(gh_task.JOURNAL_PATH, encoding='utf-8').read().splitlines()
+                if os.path.exists(gh_task.JOURNAL_PATH) else []
+            )
+
+            def fake_sleep(seconds):
+                sleeps.append(seconds)
+                if on_sleep is not None:
+                    on_sleep(len(sleeps))
+
+            def fake(args, input_text=None):
+                if len(args) > 3 and args[:2] == ['api', '-X']:
+                    method, path = args[2], args[3]
+                    if override is not None:
+                        answered = override(method, path, input_text)
+                        if answered is not None:
+                            return answered
+                    if method == 'GET' and '/pulls?' in path:
+                        return 0, json.dumps(prs if prs is not None else []), ''
+                    if method == 'GET' and path == f'repos/{gh_task.REPO}':
+                        return 0, json.dumps({'default_branch': 'stg'}), ''
+                    q = re.search(r'items\?.*q=([^&]*)', path)
+                    if method == 'GET' and q:
+                        num = re.search(r'#(\d+)', urllib.parse.unquote(q.group(1)))
+                        if num and int(num.group(1)) in fail_numbers:
+                            return 1, '', 'HTTP 502: boom'
+                    patch = re.search(r'/items/(\d+)$', path)
+                    if method == 'PATCH' and patch:
+                        patched.append(int(patch.group(1)) - 1000)
+                return inner(args, input_text)
+
+            orig_flag = gh_task.MIGRATION_ALIGN_WRITE_ENABLED
+            gh_task.MIGRATION_ALIGN_WRITE_ENABLED = flag
+            gh_task.run_gh = fake
+            orig_sleep = gh_task.sleep_fn
+            gh_task.sleep_fn = fake_sleep
+            out, err = stdout or io.StringIO(), stderr or io.StringIO()
+            try:
+                with redirect_stdout(out), contextlib.redirect_stderr(err):
+                    rc = gh_task.main(['today'])
+            finally:
+                gh_task.MIGRATION_ALIGN_WRITE_ENABLED = orig_flag
+                gh_task.sleep_fn = orig_sleep
+            assert rc == expect_rc, f'today が exit {rc}: {out.getvalue()}{err.getvalue()}'
+            if probe is not None:
+                journal_after = (
+                    open(gh_task.JOURNAL_PATH, encoding='utf-8').read().splitlines()
+                    if os.path.exists(gh_task.JOURNAL_PATH) else []
+                )
+                probe['sleeps'] = sleeps
+                probe['journal'] = [json.loads(ln) for ln in journal_after[len(journal_before):]]
+                probe['graphql'] = graphql_log
+            return out.getvalue(), err.getvalue(), patched, write_log
+
+        def _closed_row(number, status, kind='task', title=None):
+            return {
+                'number': number, 'type': 'Issue', 'kind': kind, 'status': status, 'state': 'CLOSED',
+                'title': title or f'closed {number}', 'parent_number': None,
+            }
+
+        def _today_writes_done_for_closed_not_done() -> None:
+            items = [
+                _closed_row(70, gh_task.IN_PROGRESS_STATUS), _closed_row(71, ''),
+                _closed_row(72, gh_task.DONE_STATUS),
+                {'number': 73, 'type': 'Issue', 'kind': 'task', 'status': gh_task.IN_PROGRESS_STATUS,
+                 'state': 'OPEN', 'title': '開いている', 'parent_number': None},
+            ]
+            text, _err, patched, log = _today_with(items)
+            assert patched == [70, 71], f'完了を書いた相手が違う: {patched}'
+            statuses = [e for e in log if e[0] == 'item-update']
+            assert statuses == [('item-update', 'F_Status', 'O_Status_完了')] * 2, statuses
+            assert '閉じたのに完了でない 2 件を完了にした: #70・#71' in text, text
+            assert '閉じたのに完了でない: #' not in text, f'書けたのに stuck に残った: {text}'
+
+        t('today: 閉じたのに完了でない行へ Status=完了 だけを書き、番号を 1 行で出す（stuck には残さない）',
+          _today_writes_done_for_closed_not_done)
+
+        def _today_closed_fix_continues_after_one_failure() -> None:
+            items = [_closed_row(80, gh_task.IN_PROGRESS_STATUS), _closed_row(81, gh_task.REVIEW_STATUS)]
+            text, _err, patched, _log = _today_with(items, fail_numbers=(80,))
+            assert patched == [81], f'書けない 1 件のあとが続かない: {patched}'
+            assert '閉じたのに完了でない 1 件を完了にした: #81' in text, text
+            assert '完了にできなかった: #80' in text and 'boom' in text, text
+            failed_line = next(ln for ln in text.splitlines() if '完了にできなかった: #80' in ln)
+            assert 'projectsV2' not in failed_line, f'理由の前に path の前置きが入った: {failed_line}'
+            assert '閉じたのに完了でない: #80' in text, f'書けなかった行が stuck に残らない: {text}'
+
+        t('today: 閉じたのに完了でない行の書き込みが 1 件落ちても理由を 1 行出し、ほかは続ける',
+          _today_closed_fix_continues_after_one_failure)
+
+        def _today_closed_fix_dry_when_not_allowed() -> None:
+            items = [_closed_row(90, gh_task.IN_PROGRESS_STATUS)]
+            text, _err, patched, _log = _today_with(items, flag=False)
+            assert patched == [], f'許可が無いのに書いた: {patched}'
+            assert '完了にした' not in text and '閉じたのに完了でない: #90' in text, text
+            # 「- today は書かない: はい」の目印が open の issue にあるときも書かない。
+            items = [
+                _closed_row(91, gh_task.IN_PROGRESS_STATUS),
+                {'number': 92, 'type': 'Issue', 'kind': 'task', 'status': gh_task.IN_PROGRESS_STATUS,
+                 'state': 'OPEN', 'title': '[操作] 一括', 'parent_number': None},
+            ]
+            text, _err, patched, _log = _today_with(items, extra_bodies={92: gh_task.NO_TODAY_MARK})
+            assert patched == [], f'目印があるのに書いた: {patched}'
+
+        t('today: 書き込みの許可が無い（切り替え・today は書かない の目印）ときは、完了を書かず stuck に出すだけ',
+          _today_closed_fix_dry_when_not_allowed)
+
+        def _today_closed_fix_none_and_feature_untouched() -> None:
+            items = [
+                _closed_row(95, gh_task.DONE_STATUS),
+                _closed_row(96, gh_task.IN_PROGRESS_STATUS, kind='feature', title='閉じた feature'),
+            ]
+            text, _err, patched, _log = _today_with(items)
+            assert patched == [], f'task でない行・完了の行に書いた: {patched}'
+            assert '完了にした' not in text, text
+
+        t('today: 0 件なら何も書かず何も出さない（feature・完了の行は対象外）', _today_closed_fix_none_and_feature_untouched)
+
+        def _closed_fix_matches_done_not_planned() -> None:
+            # done --not-planned が書く Status と、today が書く Status は同じ値（完了）。today を通して比べる。
+            specs = {97: dict(title='t', status=gh_task.IN_PROGRESS_STATUS, kind='task')}
+            rec_done: list = []
+            gh_task.run_gh = make_write_gh(specs, record=rec_done, rest_handler=lambda *a: {})
+            gh_task.cmd_done(97, '見送り')
+            _text, _err, patched, log = _today_with([_closed_row(97, gh_task.IN_PROGRESS_STATUS)])
+            written = [(f, v) for k, f, v in log if k == 'item-update']
+            assert patched == [97] and written == rec_done == [('F_Status', 'O_Status_完了')], (patched, written, rec_done)
+
+        t('閉じた理由が not planned でも、done --not-planned と today が書く Status は同じ（完了）',
+          _closed_fix_matches_done_not_planned)
+
+        def _today_closed_fix_journal_sleep_order_graphql() -> None:
+            # journal・8.5 秒おき・書く順（align の前）・板の取り直し・GraphQL を増やさない、を today を通して見る。
+            def board():
+                return [
+                    _closed_row(60, gh_task.IN_PROGRESS_STATUS), _closed_row(61, ''),
+                    {'number': 62, 'type': 'Issue', 'kind': gh_task.FEATURE_KIND, 'status': gh_task.READY_STATUS,
+                     'state': 'OPEN', 'title': 'F', 'parent_number': None},
+                    {'number': 63, 'type': 'Issue', 'kind': 'task', 'status': gh_task.PENDING_STATUS,
+                     'state': 'OPEN', 'title': 'child', 'parent_number': 62},
+                ]
+            probe: dict = {}
+            seen_by_align: list = []
+            orig_align = gh_task.cmd_align
+
+            def spy_align(*args, **kwargs):
+                seen_by_align.extend((i['number'], i['status']) for i in (kwargs.get('items') or []))
+                return orig_align(*args, **kwargs)
+
+            gh_task.cmd_align = spy_align
+            try:
+                _text, _err, _patched, log = _today_with(board(), probe=probe)
+            finally:
+                gh_task.cmd_align = orig_align
+            assert (60, gh_task.DONE_STATUS) in seen_by_align and (61, gh_task.DONE_STATUS) in seen_by_align, \
+                f'align が書いたあとの板（完了）を見ていない: {seen_by_align}'
+            closes = [r for r in probe['journal'] if r['op'] == 'close-sync']
+            assert [(r['number'], r['from'], r['to']) for r in closes] == [
+                (60, gh_task.IN_PROGRESS_STATUS, gh_task.DONE_STATUS), (61, '', gh_task.DONE_STATUS),
+            ], probe['journal']
+            assert all(r['repo'] == gh_task.REPO and r['project'] == 7 for r in closes)
+            assert probe['sleeps'][:2] == [gh_task._WRITE_INTERVAL_SECONDS] * 2, probe['sleeps']
+            writes = [(f, v) for k, f, v in log if k == 'item-update']
+            assert writes == [('F_Status', 'O_Status_完了')] * 2 + [('F_Status', 'O_Status_着手可')], f'書く順が違う: {writes}'
+            # 板は 3 回（最初・close-parents のあと・align のあと）。書き込みで GraphQL の読みは増えない。
+            reads = [g for g in probe['graphql'] if 'items(first:' in g]
+            assert len(reads) == 3, f'板の読みが {len(reads)} 回: 取り直しが消えた/増えた'
+            base: dict = {}
+            _today_with([_closed_row(60, gh_task.DONE_STATUS), board()[2], board()[3]], probe=base)
+            extra = len(probe['graphql']) - len(base['graphql'])
+            # 比べる元の板でも align が書くので、owner の種類を引く 1 回は両方にある。完了の書き込みで増えるのは 0 回。
+            # open の issue の本文を読む GraphQL（許可の判定）は today 全体で 3 回（実測）。完了を書くために判定を増やさない。
+            allow_reads = [g for g in probe['graphql'] if 'issue(number:' in g and 'blockedBy' not in g]
+            assert len(allow_reads) == 3, f'許可の判定の読みが {len(allow_reads)} 回: {allow_reads}'
+            assert extra == 0, f'GraphQL が {extra} 回増えた（許す書き込みの判定・owner の種類は 1 回ずつ）: {probe["graphql"]}'
+
+        t('today: 完了の書き込みは journal に 1 件ずつ・8.5 秒おき・align の前・板は 3 回読み・GraphQL は増やさない',
+          _today_closed_fix_journal_sleep_order_graphql)
+
+        def _today_closed_fix_skips_reopened_and_other_repo() -> None:
+            # 書く直前に読み直す: 板を読んだあと（1 件目を書いた間）に 61 が reopen されたら、完了を書かない。
+            items = [_closed_row(60, gh_task.IN_PROGRESS_STATUS), _closed_row(61, gh_task.IN_PROGRESS_STATUS)]
+
+            def reopen(n_sleeps):
+                if n_sleeps == 1:
+                    items[1]['state'] = 'OPEN'
+
+            probe_reopen: dict = {}
+            text, _err, patched, _log = _today_with(items, on_sleep=reopen, probe=probe_reopen)
+            assert patched == [60], f'開き直された #61 に完了を書いた: {patched}'
+            assert probe_reopen['sleeps'] == [gh_task._WRITE_INTERVAL_SECONDS], f'飛ばした行で眠った: {probe_reopen["sleeps"]}'
+            assert '飛ばした: #61' in text and '2 件を完了にした' not in text, text
+            # 別 repo の閉じた同じ番号（#70）で、この repo の開いている #70 を完了にしない。
+            other = 'https://github.com/other-org/other-app/issues/70'
+            items = [
+                {**_closed_row(70, gh_task.IN_PROGRESS_STATUS), 'url': other},
+                {'number': 70, 'type': 'Issue', 'kind': 'task', 'status': gh_task.IN_PROGRESS_STATUS,
+                 'state': 'OPEN', 'title': 'この repo の 70', 'parent_number': None},
+            ]
+            text, _err, patched, _log = _today_with(items)
+            assert patched == [] and '完了にした' not in text, f'別 repo の #70 でこの repo の #70 を書いた: {patched} {text}'
+            board_70 = items
+            # この repo に同じ番号が無い別 repo の閉じた行は、書く対象にも「にする」の行にも入れない。
+            items = [{**_closed_row(72, gh_task.IN_PROGRESS_STATUS), 'url': other.replace('/70', '/72')}]
+            text, _err, patched, _log = _today_with(items)
+            assert patched == [] and '完了にする' not in text and '飛ばした' not in text and 'できなかった' not in text, text
+            # 書き込み後の写しも、別 repo の行・開き直された行には当てない。
+            rows = [{**board_70[0]}, {**board_70[1]}, {**_closed_row(80, ''), 'state': 'OPEN'}]
+            done = gh_task.with_done_status(rows + [_closed_row(81, '')], [70, 80, 81])
+            assert [r['status'] for r in done] == [gh_task.IN_PROGRESS_STATUS, gh_task.IN_PROGRESS_STATUS, '', gh_task.DONE_STATUS], done
+
+        t('today: 書く直前に state を読み直して開き直された行は飛ばし、別 repo の同じ番号の行には書かない',
+          _today_closed_fix_skips_reopened_and_other_repo)
+
+        def _ov(issue=None, search=None, patch=None, seen=None):
+            """REST の偽の答えを番号ごとに差し替える override（issue の GET・items の ?q= 検索・items の PATCH）。
+            値は (rc, 標準出力, 標準エラー)・None（偽の gh に任せる）を返す関数か、その tuple。"""
+            def pick(table, number):
+                got = (table or {}).get(number)
+                return got() if callable(got) else got
+
+            def override(method, path, input_text):
+                if seen is not None:
+                    seen.append((method, path))
+                m = re.match(r'^repos/[^/]+/[^/]+/issues/(\d+)$', path)
+                if method == 'GET' and m:
+                    return pick(issue, int(m.group(1)))
+                q = re.search(r'items\?.*q=([^&]*)', path)
+                if method == 'GET' and q:
+                    num = re.search(r'#(\d+)', urllib.parse.unquote(q.group(1)))
+                    return pick(search, int(num.group(1))) if num else None
+                p = re.search(r'/items/(\d+)$', path)
+                if method == 'PATCH' and p:
+                    return pick(patch, int(p.group(1)) - 1000)
+                return None
+            return override
+
+        RATE_403 = (1, '', 'gh: You have exceeded a secondary rate limit. (HTTP 403)')
+        RATE_429 = (1, '', 'gh: Too Many Requests (HTTP 429)')
+
+        def _today_closed_fix_limit_and_early_line() -> None:
+            n = 7  # 書けた件数の上限は 5 件
+            items = [_closed_row(300 + k, gh_task.IN_PROGRESS_STATUS) for k in range(n)]
+            text, _err, patched, _log = _today_with(items)
+            assert gh_task.CLOSED_DONE_WRITE_LIMIT == 5 and gh_task.CLOSED_DONE_TRY_LIMIT == 15, '上限の定数が変わった'
+            assert patched == [300 + k for k in range(5)], patched
+            lines = text.splitlines()
+            head = next(i for i, ln in enumerate(lines) if ln == '閉じたのに完了でない 7 件のうち 5 件を完了にする: #300・#301・#302・#303・#304')
+            done = next(i for i, ln in enumerate(lines) if ln.startswith('閉じたのに完了でない 5 件を完了にした'))
+            assert head < done, '書く前の 1 行が書いた後の 1 行より先に出ない'
+            assert '残り 2 件は次の today' in text, text
+
+        t('today: 完了を書けた数に上限があり、書く前に「7 件のうち 5 件」の 1 行を出し、残りは次の today と出す', _today_closed_fix_limit_and_early_line)
+
+        def _today_closed_fix_failures_do_not_use_the_quota() -> None:
+            # 書けない 5 件が先頭に並んでも、あとの書ける 3 件に届く（失敗・飛ばしは書けた枠に数えない）。
+            items = [_closed_row(100 + k, gh_task.IN_PROGRESS_STATUS) for k in range(8)]
+            text, _err, patched, _log = _today_with(items, fail_numbers=tuple(range(100, 105)))
+            assert patched == [105, 106, 107], f'先頭の失敗が枠を食った: {patched}'
+            assert '閉じたのに完了でない 8 件のうち 5 件を完了にする: #100・#101・#102・#103・#104' in text, text
+            assert '閉じたのに完了でない 3 件を完了にした: #105・#106・#107' in text, text
+            assert '残り' not in text, f'全部試したのに「残り」を出した: {text}'
+            # 試す数にも上限がある（15 件）。書けた 3 件のあと、試さなかった 5 件を「残り 5 件」と出す。
+            items = [_closed_row(200 + k, gh_task.IN_PROGRESS_STATUS) for k in range(20)]
+            text, _err, patched, _log = _today_with(items, fail_numbers=tuple(range(200, 212)))
+            assert patched == [212, 213, 214], patched
+            assert '残り 5 件は次の today' in text, text
+            assert text.count('完了にできなかった:') == 12, text
+            # 全部が書けないときも、試すのは 15 件まで。
+            seen: list = []
+            items = [_closed_row(220 + k, gh_task.IN_PROGRESS_STATUS) for k in range(20)]
+            text, _err, patched, _log = _today_with(items, fail_numbers=tuple(range(220, 240)), override=_ov(seen=seen))
+            tried = {int(re.search(r'%23(\d+)', p).group(1)) for m, p in seen if m == 'GET' and 'q=%23' in p}
+            assert patched == [] and len(tried) == 15, f'試した件数が 15 でない: {sorted(tried)}'
+            assert '残り 5 件は次の today' in text, text
+
+        t('today: 失敗・飛ばしは書けた枠に数えず、試す数の上限は別（15）。「残り N 件」は試さなかった数',
+          _today_closed_fix_failures_do_not_use_the_quota)
+
+        def _today_closed_fix_stops_on_rate_limit() -> None:
+            items = [_closed_row(110 + k, gh_task.IN_PROGRESS_STATUS) for k in range(8)]
+            seen: list = []
+            text, _err, patched, _log = _today_with(items, override=_ov(search={111: RATE_403}, seen=seen))
+            assert patched == [110], f'403 のあとも書いた: {patched}'
+            tried = [m for m, p in seen if m == 'GET' and 'q=%23' in p]
+            assert len(tried) == 2, f'403 のあとも検索を続けた: {tried}'
+            assert '完了にできなかった: #111' in text and '打ち切った' in text and '残り 6 件' in text, text
+            # PATCH の 429（secondary rate limit）でも残りを打ち切る。
+            items = [_closed_row(120 + k, gh_task.IN_PROGRESS_STATUS) for k in range(3)]
+            text, _err, patched, _log = _today_with(items, override=_ov(patch={120: RATE_429}))
+            assert patched == [] and '完了にできなかった: #120' in text and '残り 2 件は打ち切った' in text, text
+            assert '完了にした' not in text, text
+            # 読み直しの 403 でも同じ。
+            items = [_closed_row(125 + k, gh_task.IN_PROGRESS_STATUS) for k in range(3)]
+            text, _err, patched, _log = _today_with(items, override=_ov(issue={125: RATE_403}))
+            assert patched == [] and '残り 2 件は打ち切った' in text, (patched, text)
+
+        t('today: 403・429（rate limit）が出たら残りを打ち切り、その旨を 1 行出す（検索・読み直し・書き込みのどこでも）',
+          _today_closed_fix_stops_on_rate_limit)
+
+        def _today_closed_fix_reread_answers() -> None:
+            issue = {
+                130: (1, '', 'gh: Not Found (HTTP 404)'),
+                132: (0, json.dumps({'number': 132}), ''),
+                133: (0, 'null', ''),
+                134: (0, json.dumps({'number': 134, 'state': 'open'}), ''),
+                135: (0, json.dumps({'number': 135, 'state': 'closed', 'state_reason': 'not_planned'}), ''),
+                136: (0, '[]', ''),
+            }
+            items = [_closed_row(130 + k, gh_task.IN_PROGRESS_STATUS) for k in range(7)]
+            seen: list = []
+            probe: dict = {}
+            text, _err, patched, _log = _today_with(items, override=_ov(issue=issue, seen=seen), probe=probe)
+            assert patched == [131, 135], patched
+            values = [(f, v) for k, f, v in _log if k == 'item-update']
+            assert values == [('F_Status', 'O_Status_完了')] * 2, f'完了以外を書いた: {values}'
+            lines = {n: next((ln for ln in text.splitlines() if f'#{n}（' in ln and ('できなかった' in ln or '飛ばした' in ln)), '') for n in range(130, 137)}
+            assert 'できなかった' in lines[130] and 'Not Found' in lines[130], lines[130]
+            assert '飛ばした' in lines[132] and '不明' in lines[132] and 'reopen' not in lines[132], lines[132]
+            assert 'できなかった' in lines[133], lines[133]
+            assert '飛ばした' in lines[134] and 'reopen' in lines[134], lines[134]
+            assert lines[135] == '' and lines[131] == '', 'not planned・普通の行が書けなかった扱いになった'
+            assert 'できなかった' in lines[136], lines[136]
+            assert '2 件を完了にした: #131・#135' in text, text
+            # 読み直しはこの repo の issue を引き、飛ばした・失敗の行では眠らない。
+            gets = [p for m, p in seen if m == 'GET' and re.match(r'^repos/[^/]+/[^/]+/issues/\d+$', p)]
+            assert gets and all(p.startswith(f'repos/{gh_task.REPO}/issues/') for p in gets), gets
+            assert probe['sleeps'].count(gh_task._WRITE_INTERVAL_SECONDS) == len(patched), probe['sleeps']
+
+        t('today: 読み直しが 404・state なし・null・open・not planned・配列でも today は止まらず、安全側（書かない）に倒す。not planned は書く',
+          _today_closed_fix_reread_answers)
+
+        def _today_closed_fix_rereads_after_lookup() -> None:
+            # 読み直しは item id の検索のあと、書く直前。検索の間に reopen された行へ 完了 を上書きしない。
+            items = [_closed_row(140, gh_task.IN_PROGRESS_STATUS), _closed_row(141, gh_task.IN_PROGRESS_STATUS)]
+
+            def reopen_during_search():
+                items[0]['state'] = 'OPEN'
+                return None
+
+            text, _err, patched, _log = _today_with(items, override=_ov(search={140: reopen_during_search}))
+            assert patched == [141] and '飛ばした: #140' in text, f'検索の間の reopen に書いた: {patched} {text}'
+            # 検索の反映待ち（2 秒おきの引き直し）の間の reopen も同じ。
+            row = [_closed_row(142, gh_task.IN_PROGRESS_STATUS)]
+            calls = {'n': 0}
+
+            def lagging_search():
+                calls['n'] += 1
+                return (0, '[]', '') if calls['n'] <= 2 else None
+
+            def reopen_on_first_sleep(count):
+                if count == 1:
+                    row[0]['state'] = 'OPEN'
+
+            text, _err, patched, _log = _today_with(row, on_sleep=reopen_on_first_sleep, override=_ov(search={142: lagging_search}))
+            assert calls['n'] == 3 and patched == [] and '飛ばした: #142' in text, (calls, patched, text)
+
+        t('today: 完了は「item id と選択肢を引く → state を読み直す → item_id を渡して書く」の順（検索の間・反映待ちの間の reopen に書かない）',
+          _today_closed_fix_rereads_after_lookup)
+
+        def _today_closed_fix_survives_closed_pipe() -> None:
+            class _Out(io.StringIO):
+                def __init__(self, broken):
+                    super().__init__()
+                    self.broken, self.snapshots = broken, []
+
+                def flush(self):
+                    self.snapshots.append(self.getvalue())
+                    if self.broken:
+                        raise BrokenPipeError(32, 'Broken pipe')
+
+            def board():
+                return [
+                    _closed_row(150, gh_task.IN_PROGRESS_STATUS),
+                    {'number': 151, 'type': 'Issue', 'kind': gh_task.FEATURE_KIND, 'status': gh_task.READY_STATUS,
+                     'state': 'OPEN', 'title': 'F', 'parent_number': None},
+                    {'number': 152, 'type': 'Issue', 'kind': 'task', 'status': gh_task.PENDING_STATUS,
+                     'state': 'OPEN', 'title': 'child', 'parent_number': 151},
+                ]
+            # 出力先が閉じても（today | head）、完了を書いたあとの align まで進む。
+            _text, _err, patched, log = _today_with(board(), stdout=_Out(True))
+            writes = [(f, v) for k, f, v in log if k == 'item-update']
+            assert writes == [('F_Status', 'O_Status_完了'), ('F_Status', 'O_Status_着手可')], f'align まで進まない: {writes}'
+            # 対象の行は書く前に flush して残す（時間切れで止められても何を書いていたか分かる）。
+            out = _Out(False)
+            _today_with(board(), stdout=out)
+            early = [s for s in out.snapshots if '件を完了にする: #150' in s]
+            assert early and '完了にした' not in early[0], '書く前の行を flush していない'
+
+        t('today: 出力先が閉じても（BrokenPipeError）stdout を捨てて続け、完了を書いたあとの align まで走る。書く前の行は flush する',
+          _today_closed_fix_survives_closed_pipe)
+
+        def _today_closed_fix_stuck_names_other_repo() -> None:
+            other = 'https://github.com/other-org/other-app/issues/70'
+            items = [
+                {**_closed_row(70, gh_task.IN_PROGRESS_STATUS), 'url': other},
+                _closed_row(71, gh_task.IN_PROGRESS_STATUS),
+            ]
+            text, _err, patched, _log = _today_with(items, fail_numbers=(71,))
+            stuck70 = next(ln for ln in text.splitlines() if ln.startswith('  閉じたのに完了でない: #70'))
+            stuck71 = next(ln for ln in text.splitlines() if ln.startswith('  閉じたのに完了でない: #71'))
+            assert 'other-org/other-app' in stuck70, f'別 repo の行に repo 名が無い: {stuck70}'
+            assert 'other-org' not in stuck71, f'この repo の行に repo 名が付いた: {stuck71}'
+
+        t('today の stuck: 別 repo の閉じた行は repo 名を添えて出す（書けなかったこの repo の行と見分ける）',
+          _today_closed_fix_stuck_names_other_repo)
+
+        def _today_closed_fix_journal_failure_keeps_going() -> None:
+            orig = gh_task._append_journal
+
+            def broken(entry):
+                raise OSError(28, 'No space left on device')
+
+            gh_task._append_journal = broken
+            try:
+                items = [_closed_row(160, gh_task.IN_PROGRESS_STATUS), _closed_row(161, gh_task.IN_PROGRESS_STATUS)]
+                text, err, patched, _log = _today_with(items)
+            finally:
+                gh_task._append_journal = orig
+            assert patched == [160, 161] and '2 件を完了にした: #160・#161' in text, (patched, text)
+            assert err.count('journal を書けなかった') == 2, err
+
+        t('today: journal が書けなくても警告 1 行で続け、書いた番号を出す', _today_closed_fix_journal_failure_keeps_going)
+
+        def _today_closed_fix_hold_and_kindless_rows() -> None:
+            items = [
+                _closed_row(170, '保留'),
+                _closed_row(171, '', kind=''),
+                _closed_row(172, gh_task.READY_STATUS),
+            ]
+            text, _err, patched, _log = _today_with(items)
+            assert patched == [170, 171, 172], f'保留・種別空・着手可のまま閉じた行を書いていない: {patched}'
+            assert '3 件を完了にした: #170・#171・#172' in text, text
+
+        t('today: 保留・種別が空・着手可のまま閉じた行にも 完了 を書く', _today_closed_fix_hold_and_kindless_rows)
+
+        def _today_with_args_exits_2_without_writing() -> None:
+            for args in (['--json'], ['--dry-run'], ['--help']):
+                write_log: list[tuple] = []
+                gh_task.run_gh = make_command_gh([_closed_row(90, gh_task.IN_PROGRESS_STATUS)], write_log=write_log)
+                err = io.StringIO()
+                try:
+                    with redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                        rc = gh_task.main(['today'] + args)
+                except gh_task.GhError as exc:
+                    rc = exc.code
+                else:
+                    rc = 0
+                assert rc == 2, f'today {args} が exit {rc}'
+                assert [e for e in write_log if e[0] in ('PATCH', 'POST', 'item-update', 'graphql-update')] == [], args
+
+        t('today に引数（--json・--dry-run・--help）を付けると exit 2 で何も書かない', _today_with_args_exits_2_without_writing)
+
+        def _closed_fix_reason_keeps_the_cause() -> None:
+            exc = gh_task.GhError('gh api GET orgs/example-org/projectsV2/7/items?q=%2380&per_page=100 が失敗した: '
+                                  'gh: API rate limit exceeded for user\nrun gh auth refresh -s project', 1)
+            reason = gh_task._short_reason(exc)
+            assert reason == 'gh: API rate limit exceeded for user / run gh auth refresh -s project', reason
+
+        t('完了にできなかった理由は、path の前置きを落として gh の理由（2 行目の案内も）を残す', _closed_fix_reason_keeps_the_cause)
+
+        def _closed_fix_reason_is_one_line_of_200() -> None:
+            reason = gh_task._short_reason(gh_task.GhError('x' * 500))
+            assert reason == 'x' * 200, len(reason)
+            assert '\n' not in gh_task._short_reason(gh_task.GhError('a\n\n  b\nc')), '改行が残った'
+            assert gh_task._short_reason(gh_task.GhError('')) == '不明'
+
+        t('完了にできなかった理由は 1 行・200 字まで（空なら「不明」）', _closed_fix_reason_is_one_line_of_200)
+
+        def _orphans_kindless_row_shows_fix_command() -> None:
+            items = [
+                {'number': 930, 'type': 'Issue', 'kind': '', 'status': '', 'state': 'OPEN',
+                 'title': '種別なし', 'parent_number': None},
+                {'number': 931, 'type': 'Issue', 'kind': 'task', 'status': gh_task.PENDING_STATUS,
+                 'state': 'OPEN', 'title': '親なし', 'parent_number': None},
+            ]
+            text, _err, _patched, _log = _today_with(items, flag=False)
+            lines = text.splitlines()
+            i = next(n for n, ln in enumerate(lines) if '#930' in ln and '種別なし' in ln)
+            assert lines[i + 1].strip() == '直す: hirai-task set 930 種別 task（feature・wave・設計メモならその値）', lines[i:i + 2]
+            j = next(n for n, ln in enumerate(lines) if '#931' in ln and '親なし' in ln)
+            assert '直す:' not in lines[j + 1] if j + 1 < len(lines) else True, '親なしの行に直す行を出した'
+            assert text.count('直す:') == 1, text
+
+        t('today の orphans: 種別なしの行の次に直すコマンドを 1 行出す（親なしの行には出さない）',
+          _orphans_kindless_row_shows_fix_command)
+
+        def _set_start_warn_when_kind_empty() -> None:
+            def run(fn):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err), redirect_stdout(io.StringIO()):
+                    rc = fn()
+                return rc, err.getvalue()
+
+            specs = {
+                940: dict(title='t', status=gh_task.READY_STATUS, kind=''),
+                941: dict(title='t', status=gh_task.READY_STATUS, kind='task'),
+            }
+            rec: list = []
+            gh_task.run_gh = make_write_gh(specs, record=rec)
+            rc, err = run(lambda: gh_task.cmd_set(940, 'Status', gh_task.PENDING_STATUS))
+            assert rc == 0 and err.strip() == '警告: #940 は種別が空。直すには hirai-task set 940 種別 task（feature・wave・設計メモならその値）', repr(err)
+            assert rec == [('F_Status', 'O_Status_承認待ち')], f'警告で書き込みが変わった: {rec}'
+            rc, err = run(lambda: gh_task.cmd_set(941, 'Status', gh_task.PENDING_STATUS))
+            assert rc == 0 and err == '', repr(err)
+            # 警告は書き込みの前に出す（書き込みで落ちても警告は残る）。
+            err_buf = io.StringIO()
+            order: list[str] = []
+            inner_gh = gh_task.run_gh
+
+            def spy(args, input_text=None):
+                if 'PATCH' in args:
+                    order.append('警告あり' if err_buf.getvalue() else '警告なし')
+                return inner_gh(args, input_text)
+
+            gh_task.run_gh = spy
+            with contextlib.redirect_stderr(err_buf), redirect_stdout(io.StringIO()):
+                gh_task.cmd_set(940, 'Status', gh_task.PENDING_STATUS)
+            gh_task.run_gh = inner_gh
+            assert order == ['警告あり'], f'警告が書き込みより後に出た: {order}'
+            rc, err = run(lambda: gh_task.cmd_set(940, gh_task.KIND_FIELD, 'task'))
+            assert rc == 0 and err == '', f'種別自身を set するのに警告した: {err!r}'
+            rc, err = run(lambda: gh_task.cmd_start(940, None))
+            assert rc == 0 and err.strip() == '警告: #940 は種別が空。直すには hirai-task set 940 種別 task（feature・wave・設計メモならその値）', repr(err)
+            rc, err = run(lambda: gh_task.cmd_start(941, None))
+            assert rc == 0 and err == '', repr(err)
+
+        t('set・start: 相手の種別が空なら stderr に警告 1 行（止めない・exit 0・書き込みは同じ）。種別自身の set は警告しない',
+          _set_start_warn_when_kind_empty)
+
+        def _pr(number, labels, merged_at, updated_at=None):
+            return {
+                'number': number, 'title': f'PR {number}', 'body': '', 'merged_at': merged_at,
+                'updated_at': updated_at or merged_at or '2000-01-01T00:00:00Z',
+                'labels': [{'name': name} for name in labels],
+            }
+
+        def _days_ago(days: float) -> str:
+            moment = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+            return moment.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        def _no_issue_line(prs) -> str:
+            text, _err, _p, _l = _today_with([], prs=prs, flag=False)
+            return '\n'.join(ln for ln in text.splitlines() if 'no-issue の merge' in ln)
+
+        def _today_lists_no_issue_merges() -> None:
+            assert _no_issue_line([]) == '', '0 件なのに出た'
+            prs = [
+                _pr(11, ['no-issue'], _days_ago(1)),
+                _pr(13, ['no-issue', 'x'], _days_ago(3)),
+                _pr(12, ['no-issue'], _days_ago(2)),
+                _pr(14, ['other'], _days_ago(1)),            # ラベル違い
+                _pr(15, ['no-issue'], None),                 # merge されず close
+                _pr(16, ['no-issue'], _days_ago(8)),         # 8 日前
+            ]
+            assert _no_issue_line(prs) == 'no-issue の merge（7 日）3 件: #11・#12・#13', _no_issue_line(prs)
+            assert _no_issue_line([_pr(16, ['no-issue'], _days_ago(8))]) == '', '8 日前だけなのに出た'
+
+        t('today: 直近 7 日に no-issue で merge した PR を「N 件: #a・#b」の 1 行で出す（0 件・8 日前・ラベル違い・未 merge は数えない）',
+          _today_lists_no_issue_merges)
+
+        def _today_no_issue_marks_truncation() -> None:
+            recent = [_pr(200 + n, ['no-issue'] if n == 0 else [], _days_ago(1), _days_ago(1)) for n in range(100)]
+            line = _no_issue_line(recent)
+            assert line == 'no-issue の merge（7 日・直近の closed PR 100 件まで）1 件: #200', line
+            # 100 件でも、最後の PR の更新が 7 日より前なら 7 日分は読み切っている。
+            recent[-1] = _pr(299, [], _days_ago(9), _days_ago(9))
+            assert _no_issue_line(recent) == 'no-issue の merge（7 日）1 件: #200', _no_issue_line(recent)
+
+        t('today: closed の PR 100 件で 7 日に届かないときは「100 件まで」と分かるように出す', _today_no_issue_marks_truncation)
+
+        def _today_no_issue_zero_but_cut_off_is_shown() -> None:
+            recent = [_pr(400 + n, [], _days_ago(1), _days_ago(1)) for n in range(100)]
+            line = _no_issue_line(recent)
+            assert line == 'no-issue の merge（7 日・直近の closed PR 100 件まで）0 件', line
+            assert _no_issue_line(recent[:99]) == '', '切れていない 0 件を出した'
+
+        t('today: 100 件で 7 日に届かず no-issue が 0 件のときは「0 件」と出し、切れていない 0 件は出さない',
+          _today_no_issue_zero_but_cut_off_is_shown)
+
+        def _today_no_issue_window_labels_and_boundary() -> None:
+            prs = [
+                _pr(21, ['no-issue'], _days_ago(6)),            # 6 日前は数える（7 日の窓）
+                _pr(22, ['no-issue-x'], _days_ago(1)),          # ラベルは名前の完全一致
+                _pr(23, ['x-no-issue'], _days_ago(1)),
+                _pr(24, ['No-Issue'], _days_ago(1)),
+            ]
+            assert _no_issue_line(prs) == 'no-issue の merge（7 日）1 件: #21', _no_issue_line(prs)
+            # 境目: ちょうど 7 日前の merge は数え、1 秒前は数えない（時計を止めて比べる）。
+            import types
+            fixed = datetime.datetime(2026, 11, 24, 0, 0, 0, tzinfo=datetime.timezone.utc)
+
+            class _Clock(datetime.datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return fixed
+
+            real = gh_task.datetime
+            gh_task.datetime = types.SimpleNamespace(
+                datetime=_Clock, timezone=datetime.timezone, timedelta=datetime.timedelta,
+            )
+            try:
+                edge = gh_task.no_issue_merge_line([
+                    _pr(31, ['no-issue'], '2026-11-17T00:00:00Z'), _pr(32, ['no-issue'], '2026-11-16T23:59:59Z'),
+                ])
+            finally:
+                gh_task.datetime = real
+            assert edge == 'no-issue の merge（7 日）1 件: #31', edge
+
+        t('today の no-issue の merge: 窓は 7 日（6 日前は数え、ちょうど 7 日前は数え、1 秒前は数えない）。ラベルは完全一致',
+          _today_no_issue_window_labels_and_boundary)
+
+        def _today_no_issue_cut_off_uses_updated_at() -> None:
+            # 100 件目の「更新」が窓の中なら、merge が古くても先に窓内の PR が残りうる（更新で見る）。
+            recent = [_pr(500 + n, [], _days_ago(1), _days_ago(1)) for n in range(99)]
+            last = _pr(599, [], _days_ago(30), _days_ago(1))
+            line = _no_issue_line(recent + [last])
+            assert line == 'no-issue の merge（7 日・直近の closed PR 100 件まで）0 件', line
+            # updated_at が無いときは、窓の外と決めつけず見切れとして出す。
+            nodate = _pr(598, [], _days_ago(30), _days_ago(1))
+            del nodate['updated_at']
+            line = _no_issue_line(recent + [nodate])
+            assert '100 件まで' in line, line
+
+        t('today の no-issue の merge: 100 件で見切れるかは最後の PR の更新で見る（merge の日付でも、updated_at なしでも）',
+          _today_no_issue_cut_off_uses_updated_at)
+
+        def _orphans_other_repo_kindless_row_has_no_fix() -> None:
+            items = [
+                {'number': 71, 'type': 'Issue', 'kind': '', 'status': '', 'state': 'OPEN', 'title': '別 repo',
+                 'parent_number': None, 'url': 'https://github.com/other-org/other-app/issues/71'},
+            ]
+            text, _err, _p, _l = _today_with(items, flag=False)
+            assert '#71' in text and '直す:' not in text, text
+
+        t('today の orphans: 別 repo の種別なしの行には直すコマンドを出さない（この repo の同じ番号を書き換えさせない）',
+          _orphans_other_repo_kindless_row_has_no_fix)
+
+        def _today_reads_closed_prs_once() -> None:
+            calls: list[str] = []
+            inner = make_command_gh([])
+
+            def fake(args, input_text=None):
+                if len(args) > 3 and args[:2] == ['api', '-X'] and '/pulls?' in args[3]:
+                    calls.append(args[3])
+                    return 0, '[]', ''
+                return inner(args, input_text)
+
+            gh_task.run_gh = fake
+            orig_flag = gh_task.MIGRATION_ALIGN_WRITE_ENABLED
+            gh_task.MIGRATION_ALIGN_WRITE_ENABLED = False
+            try:
+                with redirect_stdout(io.StringIO()):
+                    assert gh_task.main(['today']) == 0
+            finally:
+                gh_task.MIGRATION_ALIGN_WRITE_ENABLED = orig_flag
+            assert len(calls) == 1, f'closed の PR を {len(calls)} 回引いた（API を増やさない）: {calls}'
+            assert 'state=closed' in calls[0] and 'sort=updated&direction=desc&per_page=100' in calls[0], calls
+
+        t('today: closed の PR の一覧は merged-designs と no-issue で 1 回だけ引く', _today_reads_closed_prs_once)
 
         # ── 前夜の CI（today の 1 行。nightly_ci の設定が無いときは gh を呼ばない） ──
         def _nightly(setting: str | None, gh_result, *, now: str = '2026-11-23T20:00:00+00:00',
