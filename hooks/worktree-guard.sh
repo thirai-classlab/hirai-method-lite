@@ -19,6 +19,8 @@
 # 通信しない。入力を読む道具（jq か python3）が無い・入力が読めないときは通す（fail-open。
 # 止まらないことは scripts/orca-context.sh が会話の開始時に言う）。
 set -uo pipefail
+# 環境の GIT_DIR（linked worktree の git hook や rebase --exec から起きた会話）で、対象のリポを取り違えない
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_PREFIX 2>/dev/null
 
 input=""
 [ -t 0 ] || input="$(cat 2>/dev/null)" || input=""
@@ -328,10 +330,10 @@ scan_commits() {
 # にある（設計 §6。外側の .gitignore は見ない）。.tmp/ に作った worktree・clone は外側の git に入らないので止めない
 outer_ignored() {
   local cur="$1" rel="${2:-}" parent otop oprefix
-  while :; do
+  while [ "$cur" != / ]; do
     parent="$(dirname "$cur")"
     otop="$(git -C "$parent" rev-parse --show-toplevel 2>/dev/null)" || return 1
-    [ -n "$otop" ] || return 1
+    [ -n "$otop" ] && [ "$otop" != "$cur" ] || return 1   # 絶対 path の GIT_DIR があると同じ toplevel を返し続ける
     oprefix="$(git -C "$parent" rev-parse --show-prefix 2>/dev/null)" || return 1
     rel="${oprefix}$(basename "$cur")${rel:+/$rel}"
     case "$rel" in
@@ -339,6 +341,7 @@ outer_ignored() {
     esac
     cur="$otop"
   done
+  return 1
 }
 
 # phys <dir> -> 物理 path（解けなければ <dir> のまま）
@@ -365,6 +368,8 @@ under_home_claude() {
   local h
   h="${HOME:-}"; [ -n "$h" ] || return 1
   h="$(phys "$h")/.claude"
+  case "$1" in "$h"|"$h"/*) return 0 ;; esac
+  h="$(phys "$h")"   # ~/.claude が symlink のとき
   case "$1" in "$h"|"$h"/*) return 0 ;; esac
   return 1
 }

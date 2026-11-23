@@ -14,13 +14,13 @@ description: commit 前に build / test / lint を通す。3 つ全部が exit 0
 | `Cargo.toml` がある | `cargo build` | `cargo test` | `cargo clippy -- -D warnings` |
 | `go.mod` がある | `go build ./...` | `go test ./...` | `go vet ./...` |
 | `pyproject.toml` がある | (なし) | `pytest` | `ruff check .` |
-| どれも無い | (なし) | `bash "$P/tests/smoke.sh"` | (なし) |
+| どれも無い | (なし) | `HARNESS_SMOKE_QUICK=1 bash "$P/tests/smoke.sh"` | (なし) |
 
 `$P` はプラグイン本体の場所。プラグインの場所を指す環境変数は**空で渡ることがある**ので、下の 1 行目（`/init` `/update` と同じ**素材行**）で解決してから使う。
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
-bash "$P/tests/smoke.sh"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -I -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+HARNESS_SMOKE_QUICK=1 bash "$P/tests/smoke.sh"
 ```
 
 `package.json` の場合は `scripts` に該当キーが存在するかを確認し、無いコマンドは飛ばして「build: script 不在のため未実行」と報告する。推測でコマンドを作らない。

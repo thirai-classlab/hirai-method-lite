@@ -5,6 +5,8 @@
 # どちらも off（既定）なら 1 バイトも出さない。常に exit 0（fail-open）。
 # worktree: block でも jq と python3 が無いと guard は入力を読めず止まらない。そのときは「止まりません」と言う（条 9）。
 set -uo pipefail
+# 環境の GIT_DIR（linked worktree の git hook や rebase --exec から起きた会話）で、対象のリポを取り違えない
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_PREFIX 2>/dev/null
 
 # phys <dir> -> 物理 path（解けなければ <dir> のまま）
 phys() {
@@ -15,12 +17,14 @@ phys() {
 
 # root は会話のリポの toplevel（サブディレクトリで開いても hooks/worktree-guard.sh・bin/hirai-notify と同じ mode.yml を読む）。
 # toplevel が HOME か HOME の祖先なら git でないものとして dir のまま（scripts/tasks-path.sh の harness_top と同じ規則）。
-# in_repo=1 は「guard が守るリポの中」（toplevel があり HOME か HOME の祖先でない）。
+# in_repo: 1 = guard が守るリポの中（toplevel があり HOME か HOME の祖先でない）・0 = HOME の git の中（止めない）・2 = git でない dir
+# （下のリポの編集は guard が止めるので、今までどおり言う）。
 root="$(phys "${CLAUDE_PROJECT_DIR:-$PWD}")"
-in_repo=0
+in_repo=2
 if top="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then
   top="$(phys "$top")"
   home="$(phys "${HOME:-/nonexistent}")"
+  in_repo=0
   case "$home/" in
     "$top"/*) ;;
     *) [ "$top" = / ] || { root="$top"; in_repo=1; } ;;
@@ -31,10 +35,10 @@ fi
 # hooks/worktree-guard.sh の outer_ignored と同じ判定。直すときは両方）。guard が止めない場所では「止まります」と言わない
 outer_ignored() {
   local cur="$1" rel="" parent otop oprefix
-  while :; do
+  while [ "$cur" != / ]; do
     parent="$(dirname "$cur")"
     otop="$(git -C "$parent" rev-parse --show-toplevel 2>/dev/null)" || return 1
-    [ -n "$otop" ] || return 1
+    [ -n "$otop" ] && [ "$otop" != "$cur" ] || return 1   # 絶対 path の GIT_DIR があると同じ toplevel を返し続ける
     oprefix="$(git -C "$parent" rev-parse --show-prefix 2>/dev/null)" || return 1
     rel="${oprefix}$(basename "$cur")${rel:+/$rel}"
     case "$rel" in
@@ -42,6 +46,7 @@ outer_ignored() {
     esac
     cur="$otop"
   done
+  return 1
 }
 
 # in_orca_wt <top> -> rc 0 なら Orca の worktree の会話（hooks/worktree-guard.sh の in_orca_wt と同じ判定。直すときは両方）
@@ -85,8 +90,8 @@ notify="${HC_NOTIFY:-$(yml_get notify)}"
 case "$wt" in
   warn|block)
     if ! in_orca_wt "$root"; then
-      if [ "$wt" = "block" ] && { [ "$in_repo" -eq 0 ] || outer_ignored "$root"; }; then
-        :   # guard は止めない場所（リポの外・HOME の git・外側の .tmp/ の下）。言わない（条 9）
+      if [ "$wt" = "block" ] && { [ "$in_repo" -eq 0 ] || { [ "$in_repo" -eq 1 ] && outer_ignored "$root"; }; }; then
+        :   # guard は止めない場所（HOME の git・外側の .tmp/ の下）。言わない（条 9）
       elif [ "$wt" = "block" ]; then
         if command -v jq >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1; then
           echo "[harness] worktree: block — Orca の worktree ではないため、Edit・Write・NotebookEdit での git に入るファイルの編集と git commit は止まります（MCP の書き込みの道具は止めません）。orca worktree create --name <名前> で worktree を作って作業してください"

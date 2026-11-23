@@ -56,7 +56,7 @@ _harness_resolve() {
     cur="${cur%/*}"; [ -n "$cur" ] || cur=/
   done
   if [ -n "$_HR_TOP" ]; then
-    h="${HOME:-}"; h="$(_harness_phys "$h" 2>/dev/null || printf '%s' "$h")"; [ "$h" = / ] || h="${h%/}"
+    h="${HOME:-}"; [ -z "$h" ] || h="$(_harness_phys "$h" 2>/dev/null || printf '%s' "$h")"; [ "$h" = / ] || h="${h%/}"
     if [ "$_HR_TOP" = / ] || { [ -n "$h" ] && { [ "$_HR_TOP" = "$h" ] || case "$h/" in "$_HR_TOP"/*) true ;; *) false ;; esac; }; }; then
       _HR_TOP=""
     fi
@@ -107,15 +107,15 @@ harness_state_dir() {
 }
 
 # harness_tasks_file [dir] -> 台帳パスを stdout、無ければ空 + rc 1
-# 渡された dir に既にあればそれ、無ければ harness_root の下で探す。
+# 渡された dir → harness_root → toplevel の順で在るもの。
 harness_tasks_file() {
-  local d="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" r p
+  local d="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" r t p
   if [ -n "${HARNESS_TASKS_FILE:-}" ]; then
     printf '%s' "$HARNESS_TASKS_FILE"
     return 0
   fi
-  r="$(harness_root "$d")"
-  for p in "$d/docs/tasks/list.md" "$d/.claude/tasks/list.md" "$r/docs/tasks/list.md" "$r/.claude/tasks/list.md"; do
+  r="$(harness_root "$d")"; t="$(harness_top "$d")"
+  for p in "$d/docs/tasks/list.md" "$d/.claude/tasks/list.md" "$r/docs/tasks/list.md" "$r/.claude/tasks/list.md" "$t/docs/tasks/list.md" "$t/.claude/tasks/list.md"; do
     if [ -f "$p" ]; then
       printf '%s' "$p"
       return 0
@@ -125,15 +125,15 @@ harness_tasks_file() {
 }
 
 # harness_draft_dir [dir] -> 設計 draft の置き場を stdout (末尾スラッシュなし)
-# 既にある dir (渡された dir → harness_root の順)。無ければ harness_root の下の作るべき場所。
+# 既にある dir (渡された dir → harness_root → toplevel の順)。無ければ harness_root の下の作るべき場所。
 harness_draft_dir() {
-  local d="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" r p
+  local d="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" r t p
   if [ -n "${HARNESS_DRAFT_DIR:-}" ]; then
     printf '%s' "$HARNESS_DRAFT_DIR"
     return 0
   fi
-  r="$(harness_root "$d")"
-  for p in "$d/docs/draft" "$d/.claude/draft" "$r/docs/draft" "$r/.claude/draft"; do
+  r="$(harness_root "$d")"; t="$(harness_top "$d")"
+  for p in "$d/docs/draft" "$d/.claude/draft" "$r/docs/draft" "$r/.claude/draft" "$t/docs/draft" "$t/.claude/draft"; do
     if [ -d "$p" ]; then
       printf '%s' "$p"
       return 0
@@ -144,13 +144,13 @@ harness_draft_dir() {
 
 # harness_incidents_file [dir] -> 事故記録 (T2) のパスを stdout
 harness_incidents_file() {
-  local d="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" r p
+  local d="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" r t p
   if [ -n "${HARNESS_INCIDENTS_FILE:-}" ]; then
     printf '%s' "$HARNESS_INCIDENTS_FILE"
     return 0
   fi
-  r="$(harness_root "$d")"
-  for p in "$d/docs/rules-reference/incidents.md" "$d/.claude/rules-reference/incidents.md" "$r/docs/rules-reference/incidents.md" "$r/.claude/rules-reference/incidents.md"; do
+  r="$(harness_root "$d")"; t="$(harness_top "$d")"
+  for p in "$d/docs/rules-reference/incidents.md" "$d/.claude/rules-reference/incidents.md" "$r/docs/rules-reference/incidents.md" "$r/.claude/rules-reference/incidents.md" "$t/docs/rules-reference/incidents.md" "$t/.claude/rules-reference/incidents.md"; do
     if [ -f "$p" ]; then
       printf '%s' "$p"
       return 0
@@ -167,7 +167,7 @@ harness_incidents_file() {
 # 読む側 (SessionStart / 画面下部) と書く側 (/config) が別々の順で解決すると、
 # 「セッション冒頭は normal・画面下部は loop」のように食い違う。3 箇所ともここを通す。
 
-# _harness_yml_candidates <dir> <キー> -> そのキーを引く mode.yml のパスを優先順に 1 行ずつ stdout。
+# _harness_yml_candidates <dir> <キー> -> そのキーを引く mode.yml のパスを _HY_PKG → _HY_TOP → _HY_HOME に入れる (無い所は空)。
 # mode:・tasks:・auto_sync: などは「パッケージ (dir から toplevel までで最初に .claude/mode.yml を持つ dir) → toplevel → ホーム」。
 # worktree:・notify:・nightly_ci: は「toplevel → ホーム」だけ (サブディレクトリのは読まない)。
 # git でない・toplevel が HOME か HOME の祖先なら、toplevel の代わりに dir 自身。
@@ -180,23 +180,23 @@ _harness_yml_candidates() {
   case "${2:-}" in
     worktree|notify|nightly_ci) pkg="" ;;
   esac
-  [ -z "$pkg" ] || printf '%s\n' "$pkg/.claude/mode.yml"
-  [ "$top" = "$pkg" ] || printf '%s\n' "$top/.claude/mode.yml"
-  [ -z "${HOME:-}" ] || printf '%s\n' "$HOME/.claude/mode.yml"
+  _HY_PKG=""; _HY_TOP=""; _HY_HOME=""
+  [ -z "$pkg" ] || _HY_PKG="$pkg/.claude/mode.yml"
+  [ "$top" = "$pkg" ] || _HY_TOP="$top/.claude/mode.yml"
+  [ -z "${HOME:-}" ] || _HY_HOME="$HOME/.claude/mode.yml"
 }
 
 # harness_mode_file [root] -> すでに在る mode.yml のパスを stdout。
 # パッケージ → toplevel → ホーム側の順で探し、どこにも無ければ空 + rc 1。
 harness_mode_file() {
   local p
-  while IFS= read -r p; do
-    if [ -f "$p" ]; then
+  _harness_yml_candidates "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" mode
+  for p in "$_HY_PKG" "$_HY_TOP" "$_HY_HOME"; do
+    if [ -n "$p" ] && [ -f "$p" ]; then
       printf '%s' "$p"
       return 0
     fi
-  done <<EOF
-$(_harness_yml_candidates "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" mode)
-EOF
+  done
   return 1
 }
 
@@ -267,12 +267,12 @@ harness_yml_file_value() {
 harness_yml_value() {
   local k="${2:-}" v="" p
   [ -n "$k" ] || return 0
-  while IFS= read -r p; do
+  _harness_yml_candidates "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" "$k"
+  for p in "$_HY_PKG" "$_HY_TOP" "$_HY_HOME"; do
+    [ -n "$p" ] || continue
     v="$(harness_yml_file_value "$p" "$k")"
     [ -z "$v" ] || break
-  done <<EOF
-$(_harness_yml_candidates "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" "$k")
-EOF
+  done
   printf '%s' "$v"
 }
 
@@ -316,6 +316,7 @@ harness_tasks_migrate() {
   root="$(harness_root "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
   f="$root/.claude/mode.yml"
   cur="$(harness_yml_file_value "$f" tasks)"
+  [ -n "$cur" ] || cur="$(harness_yml_file_value "$(harness_top "$root")/.claude/mode.yml" tasks)"
   [ -z "$cur" ] || return 0
   slug="$(harness_tasks_slug "$root")"
   cache=""

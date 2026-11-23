@@ -211,6 +211,16 @@ r6_update_checks() {
     o="$(rr "$M/$sd" 'unset HC_TASKS; harness_mode "$PWD"; echo; harness_tasks_form "$PWD"')"
     [ "$o" = loop$'\n'github-project ] || echo "FAIL E-subdir-settings-only $sd (settings.json だけ・rules だけ) で mode・tasks が toplevel の値 (loop・github-project) にならない: [$o]"
   done
+  # E3b 項目の無い mode.yml を持つパッケージは、その項目だけ toplevel の値になる・台帳は toplevel のものを引く
+  mkdir -p "$M/packages/part/.claude" "$M/docs/tasks"; printf 'mode: normal\n' > "$M/packages/part/.claude/mode.yml"; printf '# 台帳\n' > "$M/docs/tasks/list.md"
+  printf 'mode: loop\ntasks: github-project\nauto_sync: on\nworktree: block\n' > "$M/.claude/mode.yml"
+  o="$(rr "$M/packages/part" 'unset HC_TASKS HC_AUTO_SYNC; harness_mode "$PWD"; echo; harness_tasks_form "$PWD"; echo; harness_auto_sync "$PWD"')"
+  [ "$o" = normal$'\n'github-project$'\n'on ] || echo "FAIL E-package-fallback 項目の無いパッケージの mode.yml で、tasks・auto_sync が toplevel の値にならない: [$o]"
+  o="$(rr "$M/apps/web" 'harness_tasks_file "$PWD"')"
+  [ "$o" = "$M/docs/tasks/list.md" ] || echo "FAIL E-ledger-toplevel settings.json だけのパッケージで、台帳が toplevel のものにならない: [$o]"
+  o="$( cd "$M/apps/api" && env -u HOME -u HC_TASKS -u CLAUDE_PROJECT_DIR bash -c ". \"$s/scripts/tasks-path.sh\"; harness_tasks_form \"\$PWD\"" 2>/dev/null )"
+  [ "$o" = github-project ] || echo "FAIL E-home-unset HOME が無いとき、サブディレクトリで toplevel の値が読まれない: [$o]"
+  rm -f "$M/docs/tasks/list.md"
   printf 'mode: normal\nworktree: block\n' > "$M/.claude/mode.yml"
   # E4 zsh の chpwd が標準出力に書いても、path を返す関数 (harness_mode_write_file) の出力が崩れない
   if command -v zsh >/dev/null 2>&1; then
@@ -404,6 +414,14 @@ CL="$T/P/.tmp/clone"; git -C "$CL" -c user.email=a@b -c user.name=a commit -q --
 git -C "$CL" worktree add -q "$CL/.claude/worktrees/agent-z" -b z
 ed "$CL/.claude/worktrees/agent-z/b.txt" | chk ALLOW tmp-clone-worktree-edit HC_WORKTREE=block
 bs "$T/P" "git -C $CL/.claude/worktrees/agent-z commit -am x" | chk ALLOW tmp-clone-worktree-commit HC_WORKTREE=block
+# 絶対 path の GIT_DIR がある環境でも、5 秒の hook の上限より早く終わって止める
+o="$(ed "$T/P/sub/f.txt" | env GIT_DIR="$T/P/.git" python3 -I -c 'import subprocess,sys
+try: sys.stdout.write(subprocess.run(["bash",sys.argv[1]],stdin=sys.stdin,capture_output=True,text=True,timeout=4).stdout)
+except subprocess.TimeoutExpired: print("TIMEOUT")' "$G")"
+case "$o" in *deny*) echo "ok   git-dir-env" ;; *) echo "FAIL guard-git-dir-env 絶対 path の GIT_DIR で終わらないか通した: [$o]"; fail=1 ;; esac
+# ~/.claude が git のリポの中への symlink でも、記憶の置き場は止めない
+mkdir -p "$T/hs/dotfiles/claude/projects"; git init -q "$T/hs/dotfiles"; ln -s "$T/hs/dotfiles/claude" "$T/hs/.claude"
+ed "$T/hs/.claude/projects/m.md" | chk ALLOW home-claude-symlink HC_WORKTREE=block HOME="$T/hs"
 exit $fail
 R6GUARD
   cat > "$s/ctx-test.sh" <<'R6CTX'
@@ -422,6 +440,8 @@ out="$(env CLAUDE_PROJECT_DIR="$T/W3" ORCA_WORKTREE_ID=repo::$T/W bash "$C")"; [
 # guard が止めない場所 (.tmp の clone・HOME が git) では「止まります」と言わない
 out="$(env CLAUDE_PROJECT_DIR="$T/P/.tmp/clone" HC_WORKTREE=block bash "$C" 2>&1 </dev/null)"; [ -z "$out" ] && echo "ok   tmp-clone silent" || { echo "FAIL ctx-tmp-clone-silent (guard と判定が違う): $out"; fail=1; }
 out="$(env CLAUDE_PROJECT_DIR="$T/hm/Desktop" HOME="$T/hm" HC_WORKTREE=block bash "$C" 2>&1 </dev/null)"; [ -z "$out" ] && echo "ok   home-git silent" || { echo "FAIL ctx-home-git-silent (guard と判定が違う): $out"; fail=1; }
+mkdir -p "$T/nh/.claude" "$T/nh/work"; printf 'worktree: block\n' > "$T/nh/.claude/mode.yml"
+chk nonrepo-home-block 'worktree: block' CLAUDE_PROJECT_DIR="$T/nh/work" HOME="$T/nh"
 exit $fail
 R6CTX
   ( cd "$s" && env -u CLAUDE_PROJECT_DIR -u ORCA_WORKTREE_ID bash guard-test.sh "$s/hooks/worktree-guard.sh" 2>&1 | grep '^FAIL' )
@@ -513,6 +533,12 @@ rest "$T/N2" | grep -q 'worktree の残り: 未コミット 1 件・未 push 0 �
 mkdir -p "$T/pyc"; printf 'open(%s, "w").write("x")\n' "\"$T/pymark\"" > "$T/pyc/json.py"; rm -f "$T/pymark"; echo run:C > "$T/N2/.claude/state/coordinator"
 ( cd "$T/pyc" && env HC_NOTIFY=orca PATH="$T/bin:$PATH" FAKE_LOG="$T/log" HIRAI_COORDINATOR=run:C bash "$N" done "$T/N2/.tmp/rr.md" d >/dev/null 2>&1 )
 [ ! -e "$T/pymark" ] || echo "FAIL notify-python-isolated 作業ディレクトリの json.py を python3 が読み込んだ (-I が無い)"
+# HOME が git のとき、git でない dir の控えへ送り、HOME の控えは使わない・消さない
+mkdir -p "$T/hg/.claude/state" "$T/hg/work/nogit/.claude/state" "$T/hg/work/nogit/.tmp"; git init -q "$T/hg"
+printf 'notify: orca\n' > "$T/hg/work/nogit/.claude/mode.yml"; echo r > "$T/hg/work/nogit/.tmp/r.md"
+echo run:HOMEOLD > "$T/hg/.claude/state/coordinator"; echo run:FOLDER > "$T/hg/work/nogit/.claude/state/coordinator"
+: > "$T/log"; ( cd "$T/hg/work/nogit" && env -u HIRAI_COORDINATOR -u HIRAI_DISPATCH_ID -u CLAUDE_PROJECT_DIR HOME="$T/hg" PATH="$T/bin:$PATH" FAKE_LOG="$T/log" bash "$N" done .tmp/r.md d >/dev/null 2>&1 )
+{ grep -q -- '--to run:FOLDER' "$T/log" && [ -f "$T/hg/.claude/state/coordinator" ] && [ ! -f "$T/hg/work/nogit/.claude/state/coordinator" ]; } || echo "FAIL notify-home-coordinator HOME が git のとき、別の会話の控えへ送ったか消した: $(cat "$T/log") home=$(ls "$T/hg/.claude/state") folder=$(ls "$T/hg/work/nogit/.claude/state")"
 exit 0
 R6NOTIFY
   ( cd "$s" && bash notify-test.sh "$s/hooks/notify-attention.sh" "$s/bin/hirai-notify" 2>&1 | grep '^FAIL' )
@@ -734,7 +760,7 @@ D-statusline-root|scripts/statusline.sh|s/HIRAI_TASK_ROOT="\$root" //
 C-joined|scripts/update-check.sh|s/^  harness_update_pm_notice "\$root" "\${2:-}"$/  :/
 E-subdir-tasks|scripts/tasks-path.sh|s/if \[ -e "\$cur\/.git" \]; then _HR_TOP/if false; then _HR_TOP/
 E-subdir-first|scripts/tasks-path.sh|s/if \[ -z "\$_HR_FIRST" \] \&\& {/if false \&\& {/
-E-subdir-first-mode|scripts/tasks-path.sh|s/^  \[ -z "\$pkg" \] || printf .%s\\n. "\$pkg\/.claude\/mode.yml"$/  :/
+E-subdir-first-mode|scripts/tasks-path.sh|s/^  \[ -z "\$pkg" \] || _HY_PKG=.*$/  :/
 E-subdir-state|scripts/tasks-path.sh|s/for p in "\$d\/.claude\/state" "\$r\/.claude\/state"; do/for p in "$r\/.claude\/state"; do/
 E-subdir-nomarker|scripts/tasks-path.sh|s/elif \[ -n "\$_HR_TOP" \]; then printf/elif false; then printf/
 E-subdir-state-pkg|scripts/tasks-path.sh|s/^  r="\$(harness_root "\$d")"$/  r="$d"/
@@ -742,7 +768,10 @@ E-top-worktree|scripts/tasks-path.sh|s/worktree|notify|nightly_ci) pkg=""/zzz) p
 E-home-git|scripts/tasks-path.sh|s/^      _HR_TOP=""$/      :/
 E-step0-line|commands/init.md|s/\[ "\$R" != "\$(builtin pwd -P)" \]/[ "$R" != "$(builtin pwd -P)" ] \&\& [ ! -d "$PWD\/.claude" ]/
 E-step0-line|commands/update.md|s/\[ "\$R" != "\$(builtin pwd -P)" \]/[ "$R" != "$(builtin pwd -P)" ] \&\& [ ! -d "$PWD\/.claude" ]/
-E-subdir-settings-only|scripts/tasks-path.sh|s/^  pkg="\$_HR_PKG"$/  pkg="$_HR_FIRST"/;s/^  \[ "\$top" = "\$pkg" \] || printf/  [ -n "$pkg" ] || printf/
+E-subdir-settings-only|scripts/tasks-path.sh|s/^  pkg="\$_HR_PKG"$/  pkg="$_HR_FIRST"/;s/^  \[ "\$top" = "\$pkg" \] || _HY_TOP=/  [ -n "$pkg" ] || _HY_TOP=/
+E-package-fallback|scripts/tasks-path.sh|s/^  \[ "\$top" = "\$pkg" \] || _HY_TOP=/  [ -n "$pkg" ] || _HY_TOP=/
+E-ledger-toplevel|scripts/tasks-path.sh|s/ "\$t\/docs\/tasks\/list.md" "\$t\/.claude\/tasks\/list.md"//
+E-home-unset|scripts/tasks-path.sh|s/\[ -z "\$h" \] || h="\$(_harness_phys/h="$(_harness_phys/
 E-chpwd|scripts/tasks-path.sh|s/CDPATH= builtin cd -- "\$1" >\/dev\/null 2>&1 \&\& builtin pwd -P/cd "$1" \&\& pwd/
 E-home-symlink|scripts/tasks-path.sh|s/h="\$(_harness_phys "\$h" 2>\/dev\/null || printf .%s. "\$h")"; //
 H-disabled-main-local|scripts/tasks-path.sh|s/ if main else \[\]) +/ if False else []) +/
@@ -771,7 +800,10 @@ guard-outer-gitignored|hooks/worktree-guard.sh|s/^  return 1$/  git -C "$otop" c
 guard-tmp-clone-commit|hooks/worktree-guard.sh|s/outer_ignored "\$top" \&\& return 0/:/
 guard-tmp-clone-edit|hooks/worktree-guard.sh|s/outer_ignored "\$top" "\$rel" \&\& exit 0/:/
 ctx-subdir-shows-block|scripts/orca-context.sh|s/rev-parse --show-toplevel/rev-parse --show-cdup/
-ctx-tmp-clone-silent|scripts/orca-context.sh|s/ || outer_ignored "\$root"//
+ctx-tmp-clone-silent|scripts/orca-context.sh|s/ || { \[ "\$in_repo" -eq 1 \] \&\& outer_ignored "\$root"; }//
+ctx-nonrepo-home-block|scripts/orca-context.sh|s/^in_repo=2$/in_repo=0/
+guard-git-dir-env|hooks/worktree-guard.sh|/^unset GIT_DIR/d;s/while \[ "\$cur" != \/ \]; do/while :; do/;s/ \&\& \[ "\$otop" != "\$cur" \]//
+guard-home-claude-symlink|hooks/worktree-guard.sh|s/^  h="\$(phys "\$h")"   # ~\/.claude が symlink のとき$/  :/
 guard-home-claude-git-edit|hooks/worktree-guard.sh|s/under_home_claude "\$abs" \&\& exit 0/:/
 guard-home-claude-git-commit|hooks/worktree-guard.sh|s/under_home_claude "\$(phys "\$dir")" \&\& return 0/:/
 guard-home-git-edit|hooks/worktree-guard.sh|s/home_scope "\$top" \&\& exit 0/:/
@@ -793,6 +825,7 @@ notify-assign|hooks/notify-attention.sh|s/if (!safe_value(v)) exit/if (0) exit/
 notify-rest-excludes-tmp|bin/hirai-notify|s# | grep -vE '[^']*'##
 notify-cdpath-relative-file|bin/hirai-notify|s/CDPATH= builtin cd -- "\$(dirname "\$file")" >\/dev\/null 2>&1 \&\& builtin pwd -P/cd "$(dirname "$file")" \&\& pwd -P/
 notify-python-isolated|bin/hirai-notify|s/python3 -I -c/python3 -c/
+notify-home-coordinator|bin/hirai-notify|s/\[ ! -f "\$lib" \] || t=/false \&\& t=/
 X
       ;;
     worktrees)

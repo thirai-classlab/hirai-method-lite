@@ -83,14 +83,20 @@ fi
 
 # notify の値: env HC_NOTIFY > プロジェクトの mode.yml > ホームの mode.yml > off
 # プロジェクトの root は harness_top "$PWD"（git のトップ。トップが HOME か HOME の祖先なら cwd のまま。開始時の表示・guard と同じ規則）
+lib="$(CDPATH= builtin cd -- "$(dirname "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && builtin pwd -P)/scripts/tasks-path.sh"
 notify="${HC_NOTIFY:-}"
-if [ -z "$notify" ]; then
-  lib="$(CDPATH= builtin cd -- "$(dirname "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && builtin pwd -P)/scripts/tasks-path.sh"
-  if [ -f "$lib" ]; then
-    notify="$( . "$lib" 2>/dev/null && harness_yml_value "$PWD" notify )" || notify=""
-  fi
+if [ -z "$notify" ] && [ -f "$lib" ]; then
+  notify="$( . "$lib" 2>/dev/null && harness_yml_value "$PWD" notify )" || notify=""
 fi
 [ "$notify" = "orca" ] || exit 0
+
+# top_of <dir> -> 控え・本文・後始末の root（harness_top。道具が無ければ git のトップ、git でなければ dir のまま）
+top_of() {
+  local t=""
+  [ ! -f "$lib" ] || t="$( . "$lib" 2>/dev/null && harness_top "$1" )" || t=""
+  [ -n "$t" ] || t="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" || t=""
+  printf '%s' "${t:-$1}"
+}
 
 # 宛先がまだ無いとき: 導入先の .claude/state/coordinator の 1 行目 > ORCA_TERMINAL_HANDLE があれば宛先を省いて送る
 omit_to=0
@@ -101,8 +107,7 @@ if [ -z "$dispatch" ] && [ -z "$to" ]; then
   # 控えは更新から 24 時間（COORDINATOR_TTL_MIN 分）だけ使う。使い回した worktree の古い Run へ送らないため
   for cdir in "$PWD" "${CLAUDE_PROJECT_DIR:-}"; do
     [ -n "$cdir" ] && [ -d "$cdir" ] || continue
-    croot="$(git -C "$cdir" rev-parse --show-toplevel 2>/dev/null)" || croot=""
-    [ -n "$croot" ] || croot="$cdir"
+    croot="$(top_of "$cdir")"
     if [ -n "$(find "$croot/.claude/state/coordinator" -type f -mmin "-$COORDINATOR_TTL_MIN" 2>/dev/null)" ]; then
       to="$(head -1 "$croot/.claude/state/coordinator" 2>/dev/null | tr -d '[:space:]')" || to=""
       [ -z "$to" ] || { coordinator_file="$croot/.claude/state/coordinator"; break; }
@@ -120,7 +125,7 @@ fi
 
 # <file> は絶対 path にして渡す（コーディネーターは別の dir から読む）。無ければ引数の取り違えとして止める
 if [ "$kind" = "waiting" ]; then
-  wroot="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" || wroot="$PWD"
+  wroot="$(top_of "$PWD")"
   wbody="${wroot}｜${summary}"
   wsubject="${arg_subject:-権限の確認で止まっています}"
 else
@@ -169,8 +174,8 @@ EOF_WT
 # 未コミット: untracked は all（status.showUntrackedFiles=no の設定でも数える）。未 push: origin のどの branch にも無い commit の数（upstream の有無によらない）
 worktree_rest() {
   local top dirty ahead
-  top="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" || return 0
-  [ -n "$top" ] || return 0
+  top="$(top_of "$PWD")"
+  [ -e "$top/.git" ] || return 0   # git でない（HOME の git の下も）
   dirty="$(GIT_OPTIONAL_LOCKS=0 git -C "$top" status --porcelain --untracked-files=all 2>/dev/null | grep -vE '^.. "?(\.tmp|\.claude/state)(/|"|$)' | wc -l | tr -d '[:space:]')"
   case "$dirty" in ''|*[!0-9]*) return 0 ;; esac
   ahead="$(GIT_OPTIONAL_LOCKS=0 git -C "$top" rev-list --count HEAD --not --remotes=origin 2>/dev/null | tr -d '[:space:]')"
@@ -206,7 +211,7 @@ rc=$?
 # 担当が終わった（done）ら宛先の控えを消す（次に同じ worktree を使う担当が、この Run へ送らないため）。送れたときだけ
 if [ "$rc" -eq 0 ] && [ "$kind" = "done" ]; then
   [ -z "$coordinator_file" ] || rm -f "$coordinator_file" 2>/dev/null
-  croot_done="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" || croot_done="$PWD"
+  croot_done="$(top_of "$PWD")"
   rm -f "$croot_done/.claude/state/coordinator" 2>/dev/null
 fi
 exit "$rc"
