@@ -2451,6 +2451,24 @@ PYEOF
 
 # ---------- case 10: 同梱物 (MCP 定義 / agents) が壊れていない ----------
 # .mcp.json に実キーを書いてしまう事故と、frontmatter 欠けで読み込まれない agent を止める。
+# mcp_screen_issues <.mcp.json> <README.md> -> serena が起動のたびに画面を開く・README の起動方法が違うとき、問題を出す (無ければ空)
+mcp_screen_issues() {
+  python3 - "$1" "$2" <<'PY' 2>&1
+import json, sys
+servers = json.load(open(sys.argv[1], encoding="utf-8")).get("mcpServers", {})
+readme = open(sys.argv[2], encoding="utf-8").read()
+args = servers.get("serena", {}).get("args", [])
+at = args.index("--open-web-dashboard") if "--open-web-dashboard" in args else -1
+if at < 0 or args[at + 1:at + 2] != ["False"]:
+    print("serena:--open-web-dashboard False が無い")
+for name, cfg in servers.items():
+    line = " ".join([cfg.get("command", "")] + cfg.get("args", []))
+    rows = [r for r in readme.splitlines() if r.startswith("| `%s` |" % name)]
+    if not any("| `%s` |" % line in r for r in rows):
+        print("%s:README の表の起動方法が .mcp.json と違う" % name)
+PY
+}
+
 case_10() {
   local f base name desc bad=""
   # (a) .mcp.json は妥当な JSON で、env の値が全て ${...} 参照 (実値の直書き禁止)
@@ -2494,6 +2512,22 @@ for name, cfg in d.items():
 print(" ".join(bad))
 ' "$ROOT/.mcp.json" 2>&1)"
   if [ -n "$bad" ]; then fail 10 "同梱 MCP は版を固定する" "$bad"; return; fi
+
+  # (a-3) serena は既定だと起動のたびにダッシュボードをブラウザや窓で開く。会話を開いただけで利用者の画面に
+  # 出ないよう --open-web-dashboard False を付け、README の表の起動方法は .mcp.json と同じ文字列にする。
+  bad="$(mcp_screen_issues "$ROOT/.mcp.json" "$ROOT/README.md")"
+  if [ -n "$bad" ]; then fail 10 "同梱 MCP は会話を開いただけで画面に出ない・README の起動方法が同じ" "$bad"; return; fi
+  local mw; mw="$(mktemp -d)"
+  sed -e '/"--open-web-dashboard"/d' -e 's/"False"/"ide"/' "$ROOT/.mcp.json" > "$mw/1.json"
+  sed 's/"False"/"True"/' "$ROOT/.mcp.json" > "$mw/2.json"
+  sed 's/"--open-web-dashboard"/"--open-web-dashbord"/' "$ROOT/.mcp.json" > "$mw/3.json"
+  sed 's/ --open-web-dashboard False`/`/' "$ROOT/README.md" > "$mw/README.md"
+  for f in "$mw/1.json" "$mw/2.json" "$mw/3.json"; do
+    [ -n "$(mcp_screen_issues "$f" "$ROOT/README.md")" ] || bad="$bad 壊した複製 $(basename "$f") が FAIL しない"
+  done
+  [ -n "$(mcp_screen_issues "$ROOT/.mcp.json" "$mw/README.md")" ] || bad="$bad 壊した複製 README.md が FAIL しない"
+  rm -rf "$mw"
+  if [ -n "$bad" ]; then fail 10 "serena の引数と README の起動方法の確かめが空振りしない" "$bad"; return; fi
 
   # (b) agents/*.md は name (= ファイル名) と description を frontmatter に持つ
   if [ ! -d "$ROOT/agents" ]; then fail 10 "agents/ が存在する" "無い"; return; fi
@@ -3165,7 +3199,7 @@ PYEOF
   local r6n; r6n="$(r6_suite notify)$(r6_suite worktrees)"; [ -z "$r6n" ] || pr_bad="$pr_bad [6 巡目の notify・hirai-worktrees] $r6n"
   if [ -n "$pr_bad" ]; then fail 10 "commands はプラグイン本体の場所を素材行で解決する" "$pr_bad"; return; fi
 
-  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) にカード 3 種と目印 + カードの 7 語 + AskUserQuestion + 記入例 ${n_ex} 件 (どれも長さの決まりの内) + 悪い例/良い例 + 進め方の用語集 / 承認を求める ${n_site} コマンドすべてが AskUserQuestion と同じ行にポインタを持ちカードの 7 語を備える / 手順書の逐語実行で /init は承認の型を導入先へ置き 2 回目は上書きせず user では docs/ を作らず、/update は無いときだけ足し在れば触らず docs/ を新設しない / commands の CLAUDE_PLUGIN_ROOT 無防備使用 0 件・素材行 ${n_boot} 本が 1 種類で \$P を使う全ブロックに在り、未設定でも installed_plugins.json の hirai-lite の最大版 (辞書順では負ける 3.10.0 で確認。退役した hirai-lite-v2 の大きい版には落ちない) → hirai-lite キャッシュの最大版の順で解決し harness_plugin_root と一致 / update.md ${n_up} 行 (<=220) / init.md ${n_in} 行 (<=310) / 手順 0 の逐語実行で 控えはコピー (project 側も home 側も元が残る)・置き場は一時領域の rules-backup-*・消えるタイミングを表示 を実挙動で確認 / hirai-notify は サブ dir・相対 path・引用符つき notify・/bin/bash 3.2・UTF-8 で <絶対 path>｜<要約> を送り、値の無い --to・--dispatch-id と取り違えは exit 2、引数が環境変数より先、notify: off は何も送らない / pr-retarget は bin/ にあり旧名が無く、承認ビューの節は足すプラグインにあり、設計の起点は 3 行以内で、ADR の置き場の行がある / guard の入れ子・heredoc・日本語・大小の path・notify の秘密の伏せと coordinator の期限・hirai-worktrees の 4 条件が壊した複製で FAIL し / hirai-task は偽の HOME・gh 無しで --selftest が通り、引数なしと git の外では exit 2、gh を呼ばず、絶対パスを持たない (内部の名前は HIRAI_INTERNAL_WORDS を渡したときだけ見る)"
+  pass 10 "MCP 定義は鍵を直書きせず・serena は起動時に画面を開かず README の起動方法と同じ (壊した複製 4 通りで FAIL) / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) にカード 3 種と目印 + カードの 7 語 + AskUserQuestion + 記入例 ${n_ex} 件 (どれも長さの決まりの内) + 悪い例/良い例 + 進め方の用語集 / 承認を求める ${n_site} コマンドすべてが AskUserQuestion と同じ行にポインタを持ちカードの 7 語を備える / 手順書の逐語実行で /init は承認の型を導入先へ置き 2 回目は上書きせず user では docs/ を作らず、/update は無いときだけ足し在れば触らず docs/ を新設しない / commands の CLAUDE_PLUGIN_ROOT 無防備使用 0 件・素材行 ${n_boot} 本が 1 種類で \$P を使う全ブロックに在り、未設定でも installed_plugins.json の hirai-lite の最大版 (辞書順では負ける 3.10.0 で確認。退役した hirai-lite-v2 の大きい版には落ちない) → hirai-lite キャッシュの最大版の順で解決し harness_plugin_root と一致 / update.md ${n_up} 行 (<=220) / init.md ${n_in} 行 (<=310) / 手順 0 の逐語実行で 控えはコピー (project 側も home 側も元が残る)・置き場は一時領域の rules-backup-*・消えるタイミングを表示 を実挙動で確認 / hirai-notify は サブ dir・相対 path・引用符つき notify・/bin/bash 3.2・UTF-8 で <絶対 path>｜<要約> を送り、値の無い --to・--dispatch-id と取り違えは exit 2、引数が環境変数より先、notify: off は何も送らない / pr-retarget は bin/ にあり旧名が無く、承認ビューの節は足すプラグインにあり、設計の起点は 3 行以内で、ADR の置き場の行がある / guard の入れ子・heredoc・日本語・大小の path・notify の秘密の伏せと coordinator の期限・hirai-worktrees の 4 条件が壊した複製で FAIL し / hirai-task は偽の HOME・gh 無しで --selftest が通り、引数なしと git の外では exit 2、gh を呼ばず、絶対パスを持たない (内部の名前は HIRAI_INTERNAL_WORDS を渡したときだけ見る)"
 }
 
 case_1; case_2; case_3; case_4; case_5; case_6; case_7; case_8; case_9; case_10
