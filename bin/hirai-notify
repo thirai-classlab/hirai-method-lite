@@ -2,10 +2,13 @@
 # hirai-notify: Orca のコーディネーターへ、担当の会話の「問い」「完了」「停止」を知らせる。
 #
 #   hirai-notify question|done|stopped <file> <要約> [--dispatch-id <id>] [--to <run:id>]
+#   hirai-notify waiting <要約> [--subject <件名>] [--dispatch-id <id>] [--to <run:id>]
 #
 #   question : 決めてもらうことができた。<file> は単独で読める問い（決めること・案・帰結・推し）。
 #   done     : 終わった。<file> は報告。
 #   stopped  : 続けられないエラーで止まった。<file> は報告。
+#   waiting  : 権限の確認の画面などで止まっている（ファイル無し。hooks/notify-attention.sh が送る）。
+#              --type escalation・件名は --subject（既定「権限の確認で止まっています」）・本文は <導入先の root>｜<要約>。
 #
 # 送り方:
 #   Orca に立ち上げられた担当（--dispatch-id か環境変数 HIRAI_DISPATCH_ID で Dispatch の id を渡されたとき。
@@ -25,16 +28,31 @@
 # 送る操作は、検査の結果を見てから別の呼び出しで打つ（`;` `&&` `||` の分岐の後ろに繋げない）。
 set -uo pipefail
 
-usage() { echo "usage: hirai-notify question|done|stopped <file> <要約> [--dispatch-id <id>] [--to <run:id>]" >&2; }
+usage() {
+  echo "usage: hirai-notify question|done|stopped <file> <要約> [--dispatch-id <id>] [--to <run:id>]" >&2
+  echo "       hirai-notify waiting <要約> [--subject <件名>] [--dispatch-id <id>] [--to <run:id>]" >&2
+}
 
-kind="${1:-}"; file="${2:-}"; summary="${3:-}"
-case "$kind" in question|done|stopped) ;; *) usage; exit 2 ;; esac
-[ -n "$file" ] && [ -n "$summary" ] || { usage; exit 2; }
-shift 3
+kind="${1:-}"; file=""; summary=""
+case "$kind" in
+  question|done|stopped)
+    file="${2:-}"; summary="${3:-}"
+    [ -n "$file" ] && [ -n "$summary" ] || { usage; exit 2; }
+    shift 3 ;;
+  waiting)
+    summary="${2:-}"
+    [ -n "$summary" ] || { usage; exit 2; }
+    shift 2 ;;
+  *) usage; exit 2 ;;
+esac
 arg_to=""
 arg_dispatch=""
+arg_subject=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    --subject)
+      [ "$kind" = "waiting" ] && [ $# -ge 2 ] && [ -n "$2" ] || { echo "hirai-notify: --subject は waiting だけで、値が要る" >&2; usage; exit 2; }
+      arg_subject="$2"; shift 2 ;;
     --to|--dispatch-id)
       [ $# -ge 2 ] && [ -n "$2" ] || { echo "hirai-notify: $1 に値が無い" >&2; usage; exit 2; }
       if [ "$1" = "--to" ]; then arg_to="$2"; else arg_dispatch="$2"; fi
@@ -73,15 +91,22 @@ if ! command -v orca >/dev/null 2>&1; then
 fi
 
 # <file> は絶対 path にして渡す（コーディネーターは別の dir から読む）。無ければ引数の取り違えとして止める
-if [ ! -f "$file" ]; then
-  echo "hirai-notify: <file> が無い: ${file}（引数は <file> <要約> の順）" >&2
-  exit 2
+if [ "$kind" = "waiting" ]; then
+  wroot="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" || wroot="$PWD"
+  wbody="${wroot}｜${summary}"
+  wsubject="${arg_subject:-権限の確認で止まっています}"
+else
+  if [ ! -f "$file" ]; then
+    echo "hirai-notify: <file> が無い: ${file}（引数は <file> <要約> の順）" >&2
+    exit 2
+  fi
+  file="$(cd "$(dirname "$file")" && pwd -P)/$(basename "$file")"
 fi
-file="$(cd "$(dirname "$file")" && pwd -P)/$(basename "$file")"
 
 args=()
 if [ -n "$dispatch" ]; then
   case "$kind" in
+    waiting)  args=(--type escalation --subject "$wsubject" --body "$wbody") ;;
     question) args=(--type question --subject "$summary" --body "${file}｜${summary}") ;;
     done)     args=(--type worker_done --outcome succeeded --report-path "$file" --subject "$summary") ;;
     stopped)  args=(--type worker_done --outcome failed --report-path "$file" --subject "$summary") ;;
@@ -89,6 +114,7 @@ if [ -n "$dispatch" ]; then
   args+=(--dispatch-id "$dispatch")
 elif [ -n "$to" ]; then
   case "$kind" in
+    waiting)  args=(--type escalation --subject "$wsubject" --body "$wbody") ;;
     question) args=(--type question --subject "$summary" --body "${file}｜${summary}") ;;
     done)     args=(--type status --subject "完了: ${summary}" --body "${file}｜${summary}") ;;
     stopped)  args=(--type status --subject "停止: ${summary}" --body "${file}｜${summary}") ;;

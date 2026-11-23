@@ -721,6 +721,15 @@ ok = any("Edit" in e.get("matcher", "") and "Bash" in e.get("matcher", "")
          and any("worktree-guard.sh" in x.get("command", "") for x in e.get("hooks", [])) for e in h)
 sys.exit(0 if ok else 1)
 PYEOF
+  # hooks.json が Notification (matcher permission_prompt) と PermissionDenied を notify-attention.sh に結んでいる
+  python3 - "$ROOT/hooks/hooks.json" <<'PYEOF' || bad="$bad [hooks.json に Notification(permission_prompt) と PermissionDenied の notify-attention.sh が結ばれていない]"
+import json, sys
+h = json.load(open(sys.argv[1]))["hooks"]
+def wired(ev, matcher):
+    return any(e.get("matcher", "") == matcher
+               and any("notify-attention.sh" in x.get("command", "") for x in e.get("hooks", [])) for e in h.get(ev, []))
+sys.exit(0 if wired("Notification", "permission_prompt") and wired("PermissionDenied", "") else 1)
+PYEOF
   if [ -n "$bad" ]; then fail 2 "止める手段と fail-open" "$bad"; return; fi
 
   pass 2 "context-budget.sh は既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% ちょうどで発火 / loop-reminder.sh は置き場 6 通りで loop のときだけ ${lines} 行を出し normal では 1 バイトも出さない (要点 4 つ入り・全行 [harness] 始まり) / HC_LOOP_REMINDER=off・大文字 LOOP・壊れた/読めない mode.yml・共通ライブラリ不在でも exit 0 無出力 / worktree-guard.sh は worktree: block のとき、Orca の worktree でない会話からの git に入るファイルの Edit・Write と git commit を止めて worktree の作り方を出し (6 場合)、.tmp・リポの外・git switch・git checkout -b・読み取り・Orca の worktree の編集と commit・off・warn は通し (9 場合)、壊れた入力は fail-open、mode.yml の項目で働き、hooks.json の PreToolUse に結ばれている / 守るリポは cwd ではなく操作の対象 (git -C・Edit の file_path) で決め (別リポ・cwd が非リポ 7 場合)、git commit の形 12 と引用符つき -C・バックスラッシュ改行を止め、heredoc の本文・--dry-run・--help・.tmp/・.claude/state/ は止めず、/bin/bash 3.2 でも止め、jq 無しは python3 で読み、どちらも無ければ止めずに orca-context が「止まりません」と言う"
@@ -1800,9 +1809,25 @@ PYCMD
     ( cd "$aw/proj" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ab" ) >/dev/null 2>&1
     grep -q 'USER-EDIT' "$aw/proj/docs/rules-reference/approval-template.md" \
       || abad="$abad /init の 2 回目が承認の型を上書きした"
-    # (c) 全プロジェクト共通 (user) では docs/ ごと作らない
+    # (b-2) PR の本文の雛形: 無ければ .github/ に配布版と 1 バイト違わず置き、在れば触らない (1 回目の実行で置かれている)
+    cmp -s "$ROOT/templates/pull_request_template.md" "$aw/proj/.github/pull_request_template.md" \
+      || abad="$abad /init が PR の雛形を置かない (または中身が配布版と違う)"
+    printf 'USER-PR\n' >> "$aw/proj/.github/pull_request_template.md"
+    ( cd "$aw/proj" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ab" ) >/dev/null 2>&1
+    grep -q 'USER-PR' "$aw/proj/.github/pull_request_template.md" \
+      || abad="$abad /init の 2 回目が PR の雛形を上書きした"
+    # docs/ や リポ直下に別の置き場で在れば .github/ に重ねて置かない
+    mkdir -p "$aw/prd/docs" "$aw/prr"; printf 'MINE\n' > "$aw/prd/docs/pull_request_template.md"; printf 'MINE\n' > "$aw/prr/PULL_REQUEST_TEMPLATE.md"
+    ( cd "$aw/prd" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ab" ) >/dev/null 2>&1
+    ( cd "$aw/prr" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ab" ) >/dev/null 2>&1
+    { [ ! -e "$aw/prd/.github/pull_request_template.md" ] && [ "$(cat "$aw/prd/docs/pull_request_template.md")" = MINE ]; } \
+      || abad="$abad /init が docs/ の PR の雛形があるのに .github/ へ置いた (または触った)"
+    { [ ! -e "$aw/prr/.github/pull_request_template.md" ] && [ "$(cat "$aw/prr/PULL_REQUEST_TEMPLATE.md")" = MINE ]; } \
+      || abad="$abad /init がリポ直下の PR の雛形があるのに .github/ へ置いた (または触った)"
+    # (c) 全プロジェクト共通 (user) では docs/ ごと作らない (PR の雛形も置かない)
     ( cd "$aw/u" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "${ab/SCOPE=;/SCOPE=user;}" ) >/dev/null 2>&1
     [ -e "$aw/u/docs" ] && abad="$abad /init user が docs/ を作っている"
+    [ -e "$aw/u/.github" ] && abad="$abad /init user が .github/ を作っている"
     # (d) /update 手順 4: docs/rules-reference が在って型が無ければ足す / 在れば触らない
     ( cd "$aw/up" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ub" ) >/dev/null 2>&1
     cmp -s "$at" "$aw/up/docs/rules-reference/approval-template.md" \
@@ -2038,11 +2063,105 @@ JSONEOF
   { [ "$nrc" -eq 2 ] && [ ! -s "$nlog" ]; } || nb="$nb [値の無い --dispatch-id] exit=${nrc} (期待 2・送らない)"
   nrun done 要約G ../../.tmp-q.md --to run:R1
   { [ "$nrc" -eq 2 ] && [ ! -s "$nlog" ]; } || nb="$nb [<file> と <要約> の取り違え] exit=${nrc} (期待 2・送らない)"
+  # (g-2) hirai-notify waiting: --type escalation・件名は既定「権限の確認で止まっています」か --subject・本文は <git の root>｜<要約>。
+  # --subject は waiting だけ (exit 2)・宛先が無ければ exit 1 で送らない。
+  local nroot; nroot="$(cd "$nrepo" && pwd -P)"
+  nrun waiting 要約W --to run:R1
+  nline="$(cat "$nlog")"
+  { [ "$nrc" -eq 0 ] && printf '%s' "$nline" | grep -qF -- '--type escalation' && printf '%s' "$nline" | grep -qF -- '--subject 権限の確認で止まっています' \
+      && printf '%s' "$nline" | grep -qF -- "--body ${nroot}｜要約W" && printf '%s' "$nline" | grep -qF -- '--to run:R1'; } \
+    || nb="$nb [waiting --to] exit=${nrc} 記録=[${nline}]"
+  nrun waiting 要約W --subject 分類器が止めました --dispatch-id d9
+  nline="$(cat "$nlog")"
+  { [ "$nrc" -eq 0 ] && printf '%s' "$nline" | grep -qF -- '--subject 分類器が止めました' && printf '%s' "$nline" | grep -qF -- '--dispatch-id d9'; } \
+    || nb="$nb [waiting --subject] exit=${nrc} 記録=[${nline}]"
+  nrun waiting 要約W
+  { [ "$nrc" -eq 1 ] && [ ! -s "$nlog" ]; } || nb="$nb [waiting 宛先なし] exit=${nrc} (期待 1・送らない)"
+  nrun question ../../.tmp-q.md 要約Q --subject X --to run:R1
+  { [ "$nrc" -eq 2 ] && [ ! -s "$nlog" ]; } || nb="$nb [waiting 以外の --subject] exit=${nrc} (期待 2・送らない)"
+
+  # (g-3) hooks/notify-attention.sh: 偽の orca・使い捨てのリポ・/bin/bash 3.2。判断を変えない (標準出力なし・exit 0)。
+  local na_out na_err na_rc
+  na_out="$nw/na.out"; na_err="$nw/na.err"
+  # na_run <HC_NOTIFY の値> <stdin の JSON> -> nlog を空にして hook を打つ。exit は na_rc、標準出力は na_out、標準エラーは na_err
+  na_run() {
+    : > "$nlog"
+    printf '%s' "$2" | env -i HOME="$nw/home" PATH="$nbin:/usr/bin:/bin" LANG=en_US.UTF-8 HC_NOTIFY="$1" HIRAI_COORDINATOR="${NA_TO-run:R1}" \
+      CLAUDE_PLUGIN_DATA="$nw/data" /bin/bash "$ROOT/hooks/notify-attention.sh" >"$na_out" 2>"$na_err"
+    na_rc=$?
+  }
+  local long cmd70 j_perm j_deny
+  cmd70="$(printf 'a%.0s' $(seq 1 60))TOPSECRET-TAIL"
+  j_perm="{\"hook_event_name\":\"Notification\",\"notification_type\":\"permission_prompt\",\"message\":\"Claude needs your permission to use Bash\",\"cwd\":\"$nrepo\",\"session_id\":\"s1\"}"
+  na_run off "$j_perm"
+  { [ "$na_rc" -eq 0 ] && [ ! -s "$nlog" ] && [ ! -s "$na_out" ]; } || nb="$nb [notify-attention: notify off] exit=${na_rc} 送った=[$(cat "$nlog")]"
+  na_run orca "$j_perm"
+  nline="$(cat "$nlog")"
+  { [ "$na_rc" -eq 0 ] && [ ! -s "$na_out" ] && [ "$(grep -c . "$nlog")" -eq 1 ] && printf '%s' "$nline" | grep -qF -- '--type escalation' \
+      && printf '%s' "$nline" | grep -qF -- '権限の確認で止まっています' && printf '%s' "$nline" | grep -qF -- "${nroot}｜Claude needs your permission to use Bash"; } \
+    || nb="$nb [notify-attention: permission_prompt が 1 通] exit=${na_rc} 記録=[${nline}]"
+  na_run orca "$j_perm"
+  { [ "$na_rc" -eq 0 ] && [ ! -s "$nlog" ] && [ ! -s "$na_out" ]; } || nb="$nb [notify-attention: 同じ会話の 1 分以内の 2 通目を送った] 記録=[$(cat "$nlog")]"
+  na_run orca "{\"hook_event_name\":\"Notification\",\"notification_type\":\"idle_prompt\",\"message\":\"idle\",\"cwd\":\"$nrepo\",\"session_id\":\"s2\"}"
+  { [ "$na_rc" -eq 0 ] && [ ! -s "$nlog" ]; } || nb="$nb [notify-attention: permission_prompt 以外の通知を送った] 記録=[$(cat "$nlog")]"
+  j_deny="{\"hook_event_name\":\"PermissionDenied\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"${cmd70}\",\"env\":{\"K\":\"TOPSECRET-ENV\"}},\"reason\":\"classifier blocked\",\"cwd\":\"$nrepo\",\"session_id\":\"s3\"}"
+  na_run orca "$j_deny"
+  nline="$(cat "$nlog")"
+  { [ "$na_rc" -eq 0 ] && [ ! -s "$na_out" ] && [ "$(grep -c . "$nlog")" -eq 1 ] && printf '%s' "$nline" | grep -qF -- '--type escalation' \
+      && printf '%s' "$nline" | grep -qF -- '分類器が止めました' && printf '%s' "$nline" | grep -qF -- 'classifier blocked' \
+      && printf '%s' "$nline" | grep -qF -- "$(printf 'a%.0s' $(seq 1 60))"; } \
+    || nb="$nb [notify-attention: PermissionDenied が 1 通] exit=${na_rc} 記録=[${nline}]"
+  printf '%s' "$nline" | grep -q 'TOPSECRET' && nb="$nb [notify-attention: tool_input の中身 (コマンドの 60 字より後ろか env) を送った] 記録=[${nline}]"
+  na_run orca '{broken json'
+  { [ "$na_rc" -eq 0 ] && [ ! -s "$nlog" ] && [ ! -s "$na_out" ]; } || nb="$nb [notify-attention: 壊れた入力] exit=${na_rc}"
+  NA_TO= na_run orca "{\"hook_event_name\":\"PermissionDenied\",\"tool_name\":\"Edit\",\"reason\":\"r\",\"cwd\":\"$nrepo\",\"session_id\":\"s4\"}"
+  { [ "$na_rc" -eq 0 ] && [ ! -s "$na_out" ] && [ "$(grep -c . "$na_err")" -eq 1 ]; } \
+    || nb="$nb [notify-attention: 送れないときは stderr 1 行・出力なし・exit 0] exit=${na_rc} stderr 行=$(grep -c . "$na_err") 出力=$(wc -c < "$na_out")"
   printf 'notify: off\n' > "$nrepo/.claude/mode.yml"
   nrun done ../../.tmp-q.md 要約H --to run:R1
   { [ "$nrc" -eq 0 ] && [ ! -s "$nlog" ]; } || nb="$nb [notify: off] exit=${nrc} 送った: $(cat "$nlog")"
+  # (g-4) hirai-pr-asset: 使い捨ての bare リポへ。branch pr-assets を作る・積み増す・作業ツリーと HEAD を動かさない・
+  # remote を読めない / 無いと exit 1・/bin/bash 3.2。
+  local pw pa_rc pa_bad="" pa_head pa_st pa_out
+  pw="$(mktemp -d)"; mkdir -p "$pw/img" "$pw/work" "$pw/bare.git"
+  git init -q --bare "$pw/bare.git" 2>/dev/null
+  printf 'x' > "$pw/img/a.png"; printf 'y' > "$pw/img/b.png"
+  ( cd "$pw/work" && git init -q 2>/dev/null && printf 'f\n' > f.txt && git add f.txt \
+    && git -c user.name=t -c user.email=t@e commit -q -m init && git remote add origin "$pw/bare.git" ) >/dev/null 2>&1
+  pa_head="$(git -C "$pw/work" rev-parse HEAD 2>/dev/null)"
+  pa_st="$(git -C "$pw/work" status --porcelain 2>&1)$(git -C "$pw/work" symbolic-ref HEAD 2>&1)"
+  # pa_run <dir> <引数...> -> exit は pa_rc、標準出力は pa_out
+  pa_run() {
+    local d="$1"; shift
+    pa_out="$( cd "$d" && env -i HOME="$pw" PATH="/usr/bin:/bin" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@e GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@e \
+      /bin/bash "$ROOT/bin/hirai-pr-asset" "$@" 2>"$pw/pa.err" )"
+    pa_rc=$?
+  }
+  pa_run "$pw/work" 5 "$pw/img/a.png"
+  { [ "$pa_rc" -eq 0 ] && git -C "$pw/bare.git" rev-parse -q --verify refs/heads/pr-assets >/dev/null 2>&1 \
+      && git -C "$pw/bare.git" ls-tree -r --name-only pr-assets 2>/dev/null | grep -qx '5/a.png' && printf '%s' "$pa_out" | grep -qF '![a]('; } \
+    || pa_bad="$pa_bad [1 回目: branch を作り 5/a.png を置き貼る行を出す] exit=${pa_rc} $(cat "$pw/pa.err")"
+  pa_run "$pw/work" 5 "$pw/img/b.png"
+  { [ "$pa_rc" -eq 0 ] && [ "$(git -C "$pw/bare.git" rev-list --count pr-assets 2>/dev/null)" = 2 ] \
+      && git -C "$pw/bare.git" ls-tree -r --name-only pr-assets 2>/dev/null | grep -qx '5/a.png' \
+      && git -C "$pw/bare.git" ls-tree -r --name-only pr-assets 2>/dev/null | grep -qx '5/b.png'; } \
+    || pa_bad="$pa_bad [2 回目: 積み増す (2 commit・a と b が残る)] exit=${pa_rc} $(cat "$pw/pa.err")"
+  { [ "$(git -C "$pw/work" rev-parse HEAD 2>&1)" = "$pa_head" ] && [ "$(git -C "$pw/work" status --porcelain 2>&1)$(git -C "$pw/work" symbolic-ref HEAD 2>&1)" = "$pa_st" ] \
+      && [ -z "$(git -C "$pw/work" branch --list pr-assets)" ]; } \
+    || pa_bad="$pa_bad [作業ツリー・HEAD・branch が動いた]"
+  git -C "$pw/work" remote set-url origin "$pw/missing.git" 2>/dev/null
+  pa_run "$pw/work" 5 "$pw/img/a.png"
+  [ "$pa_rc" -eq 1 ] || pa_bad="$pa_bad [remote を読めない] exit=${pa_rc} (期待 1)"
+  git -C "$pw/work" remote remove origin 2>/dev/null
+  pa_run "$pw/work" 5 "$pw/img/a.png"
+  [ "$pa_rc" -eq 1 ] || pa_bad="$pa_bad [remote が無い] exit=${pa_rc} (期待 1)"
+  pa_run "$pw/work" abc "$pw/img/a.png"
+  [ "$pa_rc" -eq 2 ] || pa_bad="$pa_bad [PR 番号が数字でない] exit=${pa_rc} (期待 2)"
+  rm -rf "$pw"
+  [ -z "$pa_bad" ] || nb="$nb hirai-pr-asset:${pa_bad}"
+
   rm -rf "$nw"
-  [ -z "$nb" ] || pr_bad="$pr_bad hirai-notify:${nb}"
+  [ -z "$nb" ] || pr_bad="$pr_bad hirai-notify・notify-attention・hirai-pr-asset:${nb}"
 
   # (h) 3.0.0 の直しが残っている: pr-retarget は bin/ にあり scripts/ に無い (Bash ツールでは土台の bin/ が PATH に入る) /
   # 承認ビューの節の本体は足すプラグインにあり土台の approval-template には指しだけ / 設計の起点は 3 行以内

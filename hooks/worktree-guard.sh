@@ -97,7 +97,7 @@ emit_deny() {
 }
 
 deny() {
-  emit_deny "$1 このリポは .claude/mode.yml で worktree: block です。Orca の worktree で作業してください: orca worktree create --name <名前> --base-branch <基の branch> （作った worktree の会話で同じ操作をする）"
+  emit_deny "$1 このリポは .claude/mode.yml で worktree: block です。Orca の worktree で作業してください: orca worktree create --name <名前> --base-branch <基の branch> （作った worktree の会話で同じ操作をする）。別のリポへの commit は git -C <dir> commit で（cd では追えません）"
   exit 0
 }
 

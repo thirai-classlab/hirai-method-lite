@@ -62,7 +62,7 @@ Claude Code で次の 2 行を順に実行します。
 |---|---|
 | コマンド 12 個 + スキル 2 個（画面では合わせて **Skills**） | `/hirai-lite:init` `/hirai-lite:commit` `/hirai-lite:start-task` など、こちらから呼び出して使う操作 12 個と、AI が必要なときに自分で読む手引き 2 個（`grilling` / `context-engineering`）。GitHub Project 用の `/hirai-project-method:board`・`:project-setup` と skill `github-project` は足すプラグインにある |
 | エージェント 1 個（**Agents**） | テストを先に書く進め方の担当（`tdd-guide`）。v2.7.0 でレビューの agent 2 個は外した（正しさは組み込みの `/code-review`。脆弱性は観点を指示した reviewer と、利用者が打つ `/security-review`。詳しくは「同梱しているエージェント」） |
-| 自動処理 4 本 | セッション開始時の表示（版と効いている設定を含む）、容量が増えたときの警告、`loop`（自動で進む）のときの進め方の再掲、`worktree: block` のときだけ働く編集前の確認（`worktree-guard.sh`。既定の `off` では何もしない） |
+| 自動処理 5 本 | セッション開始時の表示（版と効いている設定を含む）、容量が増えたときの警告、`loop`（自動で進む）のときの進め方の再掲、`worktree: block` のときだけ働く編集前の確認（`worktree-guard.sh`。既定の `off` では何もしない）、`notify: orca` のときだけ働く「権限の確認で止まっています」の知らせ（`notify-attention.sh`。判断は変えない） |
 | 外部ツール接続 2 個（**MCP servers**） | コードを検索する `serena` と、ライブラリの公式ドキュメントを取ってくる `context7` |
 
 あわせて、毎回のセッションで常にかかる容量の見積もりも出ます（v1.8.0 をターミナルの `claude plugin details` で見ると `Always-on: ~520 tok` と表示されました。v1.7.0 は約 452 tokens で、増えた分は `grilling` の名前と説明が常時載るぶんです）。
@@ -71,7 +71,7 @@ Claude Code で次の 2 行を順に実行します。
 >
 > **`Hooks` の件数はスクリプトの本数ではなく、きっかけ（イベント）の種類数です。** v1.11.0 の `claude plugin details hirai-lite` は `Hooks (2)  SessionStart, UserPromptSubmit` と出ますが、スクリプトは 3 本あります（`UserPromptSubmit` に 2 本ぶら下がっているため）。偽 HOME への実インストールで確かめた挙動で、3 本目を足しても表示は `(2)` のままです（別イベントを足したコピーでは `(3)` に増えました）。本数を数えるなら `ls <プラグイン>/hooks/*.sh`、または `tests/smoke.sh` case 6 の `hook=3/5` を見てください。
 
-- **自動処理（hooks）だけを対象にした承認画面は出ません。** 入れた時点で動きます。中身は `hooks/session-start.sh` と `hooks/context-budget.sh` と `hooks/loop-reminder.sh` と `hooks/worktree-guard.sh` の 4 本だけで、どれも短いシェルスクリプトです。**前の 3 本は操作を止めません**（文章を足すだけ）。`worktree-guard.sh` は `.claude/mode.yml` に `worktree: block` を置いたリポでだけ、Orca の worktree でない会話からの編集と `git commit` を止めます（既定は `off` で何もしません。→ [Orca で並行に進める](#orca-で並行に進める選べる機能)）。`loop-reminder.sh` は進め方が `loop` のときだけ動き、`normal`（確認あり）では 1 バイトも出しません。
+- **自動処理（hooks）だけを対象にした承認画面は出ません。** 入れた時点で動きます。中身は `hooks/session-start.sh` と `hooks/context-budget.sh` と `hooks/loop-reminder.sh` と `hooks/worktree-guard.sh` と `hooks/notify-attention.sh` の 5 本だけで、どれも短いシェルスクリプトです。**`worktree-guard.sh` 以外は操作を止めません**（文章を足すか、コーディネーターへ知らせるだけで、承認・拒否の判断は変えません）。`worktree-guard.sh` は `.claude/mode.yml` に `worktree: block` を置いたリポでだけ、Orca の worktree でない会話からの編集と `git commit` を止めます（既定は `off` で何もしません。→ [Orca で並行に進める](#orca-で並行に進める選べる機能)）。`loop-reminder.sh` は進め方が `loop` のときだけ動き、`normal`（確認あり）では 1 バイトも出しません。
 - **外部ツール接続（MCP）の 2 つも、承認なしで自動的につながります。** `claude mcp list` で確かめると `plugin:hirai-lite:serena: uvx … - ✔ Connected` のように、名前の頭に `plugin:hirai-lite:` が付いて出ます。`serena` は `uvx`（[uv](https://docs.astral.sh/uv/)）、`context7` は `npx`（Node.js）が必要です。無い場合は該当のものが「つながらない」と出るだけで、ほかの機能はそのまま動きます。
 
 選び終わると `Plugin is now active.`（もう使えます）か `Run /reload-plugins to activate.`（`/reload-plugins` と入力すると使えます）のどちらかが出ます。後者なら、そのまま `/reload-plugins` を実行してください。
@@ -158,6 +158,14 @@ GitHub Project でやることを回すリポだけが入れます。
 
 - `worktree: block`: Orca の worktree でない会話（環境変数 `ORCA_WORKTREE_ID` が無い、または本体の checkout）からの、**リポの中の git に入るファイル**への Edit・Write と、`git commit` を止め、worktree の作り方を 1 行で示します。**読み取り・リポの外（`~/.claude` の記憶の置き場など）・git に入らない場所（`.tmp/` など）への書き込み・`git switch`・`git checkout` は止めません。** 並行の会話が同じ作業ツリーを触る事故を編集の時点で止めるための、`rules/_meta.md` 条 5 の唯一の例外です。`block` を外せば例外も消えます
 - `notify: orca`: 担当の会話が終わったとき・止まったとき・ユーザーに決めてもらうことができたときに、`hirai-notify` でコーディネーターへ知らせます。Orca が立ち上げた担当は `worker_done`・`question`（Dispatch の id は、Orca が担当の最初に差し込む前置きの文から `--dispatch-id` で渡す）、立ち上げられていない会話は依頼文で渡された宛先（`--to` か環境変数 `HIRAI_COORDINATOR`）へ `status`・`question`（`bin/hirai-notify`）
+- `notify: orca` のときは、担当の会話が**権限の確認の画面で止まったとき**（Notification の `permission_prompt`。約 6 秒待っても答えが無いとき）と、auto mode の分類器が操作を止めたとき（`PermissionDenied`）にも、`hooks/notify-attention.sh` が `hirai-notify waiting <要約>`（`--type escalation`。件名は「権限の確認で止まっています」「分類器が止めました」、本文は `<リポの root>｜<message か tool_name と reason の要約>`）を送ります。ユーザーが画面を見に行くまで止まりに気付けない事故（2026-11-23 に 2 回）への手当てです。**判断は変えません**（何も出力せず exit 0）。送れなくても会話は止めず、stderr に 1 行だけ出します。同じ会話から 1 分に 2 通以上は送りません。秘密を含みうる `tool_input` の中身は送らず、コマンドは先頭 60 字までです
+- **`worktree: block` の限界（止める範囲を広げません。`_meta.md` 条 5 は止めすぎを避ける）**:
+  - `cd <別のリポ> && git commit` は `cd` を追わず、**会話の cwd のリポ**で判定します。別のリポへ commit するときは `git -C <dir> commit` を使ってください（拒否の文言にも 1 行出します）
+  - `git -C` の引数に変数やコマンド置換（`$DIR`・`$(...)`）を含む形は、値を解決できないので**通します**
+
+### PR の本文と画面のキャプチャ
+
+PR の本文は 9 節（ひとことで → 課題 → 解決の方針 → 何が変わるか → 読む順 → 実装の要点 → 確かめたこと → 承認カード・決めてほしいこと → 対応する issue）で、課題から実装へ抽象から具体の順に書きます。雛形は `templates/pull_request_template.md` で、`/hirai-lite:init` が導入先の `.github/pull_request_template.md` に**無ければ**置きます（あれば触りません）。背景と各節の書き方は `docs/rules-reference/git-and-pr.md` の §9、規範は `rules/code.md` の「PR」の節です。画面を変えた PR は、前後のキャプチャを `hirai-pr-asset <PR 番号> <png ...>` で branch `pr-assets` に置き、出た Markdown の 1 行を「何が変わるか」に貼ります（作業ツリーの branch は動かしません。押し先は git の remote から引き、読めないと exit 1）。
 
 ## やること管理（GitHub Project）・コンソール・スマートフォン
 
@@ -566,15 +574,15 @@ claude plugins install mattpocock-skills
 | `.claude-plugin/plugin.json` | プラグインのマニフェスト（`VERSION` と同じ版を書く） |
 | `.claude-plugin/marketplace.json` | マーケットプレイス定義。3 行: `hirai-lite`（土台・`source: "./"`）・`hirai-project-method`（足すプラグイン・`./plugins/hirai-project-method`）・退役した 2.x（`ref: v2`） |
 | `plugins/hirai-project-method/` | 足すプラグイン（`hirai-task`・`/board`・`/project-setup`・skill `github-project`・自分の `plugin.json`・`tests/smoke.sh`）。土台に依存する（`hirai-lite >=3.0.0`） |
-| `bin/` | `hirai-notify`（Orca のコーディネーターへの知らせ）。足すプラグインの `hirai-task` は `plugins/hirai-project-method/bin/` |
+| `bin/` | `hirai-notify`（Orca のコーディネーターへの知らせ）・`hirai-pr-retarget`（積んだ PR の付け替え）・`hirai-pr-asset`（PR の本文に載せる画面のキャプチャを branch `pr-assets` に置く）。足すプラグインの `hirai-task` は `plugins/hirai-project-method/bin/` |
 | `.mcp.json` | 同梱する MCP サーバー 2 つの定義（キーは環境変数参照のみ） |
 | `agents/` | サブエージェント 1 個（`tdd-guide`。MIT、出典は `NOTICE.md`） |
 | `commands/` | スラッシュコマンド 12 個（数の上限は v2.7.0 で外した。`init`・`update`・`config`・`rules-audit` は `disable-model-invocation: true` で説明文が常時載らず、Claude からは呼ばれない） |
 | `skills/` | スキル 2 個（`grilling` は MIT で出典は `NOTICE.md` / `context-engineering` は自作、`references/` に公式出典。`github-project` は足すプラグインへ移した）。`plugin.json` に `skills` キーは書かない（既定で読まれる） |
-| `hooks/` | `hooks.json` + SessionStart 1 本（`session-start.sh`）と UserPromptSubmit 2 本（`loop-reminder.sh` / `context-budget.sh`）は context を足すだけで、操作は止めない。PreToolUse 1 本（`worktree-guard.sh`）は `worktree: block` のときだけ編集と `git commit` を止める（条 5 の例外。既定の `off` では何もしない） |
+| `hooks/` | `hooks.json` + SessionStart 1 本（`session-start.sh`）と UserPromptSubmit 2 本（`loop-reminder.sh` / `context-budget.sh`）は context を足すだけで、操作は止めない。PreToolUse 1 本（`worktree-guard.sh`）は `worktree: block` のときだけ編集と `git commit` を止める（条 5 の例外。既定の `off` では何もしない）。Notification と PermissionDenied に結ぶ 1 本（`notify-attention.sh`）は `notify: orca` のときだけコーディネーターへ知らせる（判断は変えない） |
 | `rules/` | **プラグインは読まない。** `/init` が配置先の `.claude/rules/` へ配る素材 |
 | `scripts/` | hook / statusline が source する共通ライブラリ（パス解決 `tasks-path.sh` / context 使用率 `context-usage.sh` / 更新検知 `update-check.sh`）+ `/init` の二重ロード検査 |
-| `templates/` | `settings.json` / `mode.yml` / `CLAUDE.md` / draft の雛形（`CLAUDE.md` は `/init` が導入先へ置く。プラグイン直下に置くと `validate --strict` が警告するため `templates/` に置いている） |
+| `templates/` | `settings.json` / `mode.yml` / `CLAUDE.md` / draft / `pull_request_template.md`（PR の本文の 9 節。`/init` が導入先の `.github/` に、無ければ置く）の雛形（`CLAUDE.md` は `/init` が導入先へ置く。プラグイン直下に置くと `validate --strict` が警告するため `templates/` に置いている） |
 | `tests/smoke.sh` | 自己検証 10 case（予算監査を含む。hook 5 / skill 3 / case 10 の上限も case 6 が見る。command は数だけ出す）。足すプラグインは `plugins/hirai-project-method/tests/smoke.sh` が別に見る |
 | `CHANGELOG.md` | 版ごとの変更点。v0.6.0 以前の既知の不具合もここに記録 |
 | `CONTRIBUTING.md` | 開発の進め方。**3.0.0 から `main` 1 本で配る**（土台 `hirai-lite` と足すプラグイン `hirai-project-method`。退役した 2.x の `v2` は凍結） |

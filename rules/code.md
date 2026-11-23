@@ -39,6 +39,7 @@ paths:
 
 - **1 PR = 1 task**: 実装者は、1 つの task（台帳の形は 1 つの task ファイル）の完了条件だけを 1 PR にする。差分が 500 行を超えるなら task を分けて下の PR から積む ／ 例: 下の PR が squash で入ったら `hirai-pr-retarget <PR 番号> <既定ブランチ>`（土台の `bin/`。Bash ツールでは PATH に入る）で付け替えて CI を走らせ直す ／ 失効: なし
 - **本文に閉じる参照を入れる**: 実装者は、PR 本文に `Closes #<n>` を 1 行入れる（台帳の形は `task-<id>` を書く）。部分の PR は残りの完了条件を別 task へ移してから `Closes` にする ／ 例: `Closes #482` ／ 失効: なし
+- **PR の本文は 9 節の型で書く**: 実装者は、PR の本文を `.github/pull_request_template.md`（雛形は `templates/pull_request_template.md`）の 9 節で、課題 → 解決の方針 → 何が変わるか → 読む順 → 実装の順に書き、コードの変え方から書き始めない。画面を変えたら前後のキャプチャを `hirai-pr-asset <PR 番号> <png ...>` で置いて貼る ／ 例: 「読む順」に `rules/core.md` — 条の追加位置、`CHANGELOG.md` は読まなくてよい、と書く ／ 失効: なし
 - **merge を頼む前に合格を見る**: メインエージェントは、`gh pr checks <n>` で必須の検査が全て pass、AI レビューが CRITICAL・HIGH 0 件で終わっていることを見てから、user に merge を頼む。止まっているときは手元で通した CI の結果を PR に書く ／ 例: `gh pr checks 482` が全行 pass ／ 失効: なし
 
 ---
