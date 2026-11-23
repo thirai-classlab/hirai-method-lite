@@ -4,15 +4,15 @@
     "name": "thirai-classlab"
   },
   "metadata": {
-    "description": "hirai-method-lite を配るマーケットプレイス。1.x（hirai-lite・main）と 2.x（hirai-lite-v2・v2 ブランチ）の 2 系列を、別の entry 名で収録する。",
-    "version": "1.16.0"
+    "description": "hirai-method-lite を配るマーケットプレイス。土台 hirai-lite（3.x・main）と、GitHub Project のタスク管理を足す hirai-project-method（1.x・main の plugins/ の下）を収録する。hirai-lite-v2（2.x）は退役して v2 ブランチに凍結。",
+    "version": "3.0.0"
   },
   "plugins": [
     {
       "name": "hirai-lite",
       "source": "./",
-      "description": "常時ロードされるコンテキストに予算を置き、ルールの追加を 6 工程パイプラインで通す rules 3 層構造の軽量ハーネス。",
-      "version": "1.16.0",
+      "description": "常時ロードされるコンテキストに予算を置き、ルールの追加を 6 工程パイプラインで通す rules 3 層構造の軽量ハーネス。タスク管理は台帳が既定で、Orca の worktree の強制と知らせは mode.yml で選ぶ。",
+      "version": "3.0.0",
       "author": {
         "name": "thirai-classlab"
       },
@@ -22,6 +22,22 @@
         "rules",
         "context-budget",
         "task-management",
+        "workflow",
+        "orca"
+      ]
+    },
+    {
+      "name": "hirai-project-method",
+      "source": "./plugins/hirai-project-method",
+      "description": "hirai-lite に足す、GitHub Project でタスクを回すための道具（hirai-task・/board・/project-setup・skill github-project）。mode.yml の tasks: github-project のリポだけが入れる。",
+      "version": "1.0.0",
+      "author": {
+        "name": "thirai-classlab"
+      },
+      "license": "MIT",
+      "keywords": [
+        "task-management",
+        "github-projects",
         "workflow"
       ]
     },
@@ -32,7 +48,7 @@
         "url": "https://github.com/thirai-classlab/hirai-method-lite.git",
         "ref": "v2"
       },
-      "description": "rules 3 層とルール追加パイプラインを備えた軽量ハーネスの 2.x。台帳（docs/tasks/）に加えて、リポに紐づく GitHub Project でタスクを管理する形を持つ。",
+      "description": "退役。hirai-lite 3.0.0 と hirai-project-method へ移る（2.x は v2 ブランチに凍結。新しい版は出さない）。",
       "version": "2.9.0",
       "author": {
         "name": "thirai-classlab"

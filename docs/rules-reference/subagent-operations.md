@@ -42,7 +42,7 @@
 
 上記の同時 2 件は 2 つの対象にかかる。**(a) メインが Agent tool で直接起動する subagent**（この節の実測が直接の根拠）と、**(b) メインが Workflow ツールを起動する本数**（同時に走らせる Workflow 自体を 2 本までにする）。
 
-一方、**(c) 1 つの Workflow が内部で `parallel()` / `pipeline()` によって同時に走らせるエージェント数には上限を設けない**（`templates/settings.json` の `workflowSizeGuideline: "unrestricted"` が対応）。(a)/(b) と (c) が別枠なのは、原因が違うため: (a)/(b) はメインが手で tool 呼び出しを並べる形で行われ、tool-call の markup 崩れや API 接続の不安定さがそのまま stall に出る（この節の観測がその実例）。(c) は Claude が書いた script を Workflow ランタイムが実行し、同時実行数やリトライをランタイム自身が管理する。上記の実測はメインが手で並べた場合のものであり、Workflow ランタイムが管理する並列実行の安定性を測ったものではない。
+一方、**(c) 1 つの Workflow が内部で `parallel()` / `pipeline()` によって同時に走らせる数は、Workflow ランタイムが `min(16, max(2, CPU 数−2))` で抑える。** `templates/settings.json` の `workflowSizeGuideline` は 1 本の Workflow の**総数**の目安で、同時数には効かない（既定は `medium`・10 本未満）。(a)/(b) と (c) が別枠なのは、原因が違うため: (a)/(b) はメインが手で tool 呼び出しを並べる形で行われ、tool-call の markup 崩れや API 接続の不安定さがそのまま stall に出る（この節の観測がその実例）。(c) は Claude が書いた script を Workflow ランタイムが実行し、同時実行数やリトライをランタイム自身が管理する。上記の実測はメインが手で並べた場合のものであり、Workflow ランタイムが管理する並列実行の安定性を測ったものではない。
 
 ---
 
@@ -262,7 +262,7 @@
 |---|---|
 | 実装（簡単なものを含む）・検証・調査・移植・文書更新 | `sonnet`（既定） |
 | Workflow の各ステップでの実装 | `sonnet` |
-| レビュー（`code-reviewer` / `security-reviewer` 等の観点別レビュー） | 既定 (opus) |
+| レビュー（`/code-review` を回す reviewer・脆弱性の観点の reviewer 等の観点別レビュー） | 既定 (opus) |
 | 設計判断・統合レビュー（複数 reviewer の指摘を集約して判断する工程） | 既定 (opus) |
 
 **Workflow との対応**: `Workflow` ツールの `agent()` 呼び出しにも `model` を指定できる。ステップの実装は `sonnet`、複数ステップの成果を統合・判定する工程は既定のままにする — 委譲の粒度が「1 subagent」でも「Workflow の 1 ステップ」でも同じ基準で判断する。

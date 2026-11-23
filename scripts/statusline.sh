@@ -17,9 +17,13 @@
 # **この scripts は通信しない。** 画面下部は何度も描き直されるため、更新の有無は
 # SessionStart 側 (scripts/update-check.sh の harness_update_flag_sync) が置いたフラグ 1 ファイルの
 # 有無を見るだけにする。取得も版の比較もここでは行わない。
+# フラグのパスは CLAUDE_PROJECT_DIR の cksum で鍵を作る。update-check.sh の
+# harness_update_flag_file と同じ式 — この scripts はプラグインの置き場所を知れず
+# update-check.sh を source できない (導入先に複製されるのは statusline.sh 自身だけで、
+# update-check.sh は複製の対象外) ため、鍵の式だけをここにも書く (2 か所とも変えること)。
 set -uo pipefail
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || here="."
+here="$(CDPATH= builtin cd -- "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && builtin pwd -P)" || here="."
 root="${CLAUDE_PROJECT_DIR:-$PWD}"
 input="$(cat 2>/dev/null || true)"
 
@@ -44,6 +48,15 @@ pct() {  # 使用率を整数 % + 色に。非数は "—"。0-100 に clamp。
   if [ "$v" -ge 80 ] 2>/dev/null; then col="$RED"; elif [ "$v" -ge 50 ] 2>/dev/null; then col="$YEL"; fi
   printf '%s%s%%%s' "$col" "$v" "$R"
 }
+
+# 共通ライブラリ (同じディレクトリ) を先に読み、root を harness_root に解く (自分の .claude を持たないサブディレクトリで開いても
+# mode.yml・台帳・更新の鍵が toplevel と同じ値になり、自分の .claude を持つパッケージではそこを読む)。解くのはここ 1 回だけ (毎回動くので git を二重に打たない)。
+# tasks-path.sh と statusline.sh はどちらもプラグイン所有で、/init と /update が対で入れ替える。
+[ -f "$here/tasks-path.sh" ] && . "$here/tasks-path.sh" 2>/dev/null || true
+opened="$root"   # 開いた dir (台帳は「開いた dir → root」の順で引く)
+if command -v harness_root >/dev/null 2>&1; then
+  root="$(harness_root "$root")"
+fi
 
 model="$(jqf '.model.display_name')"; [ -n "$model" ] || model="Claude"
 
@@ -77,9 +90,6 @@ branch="$(jqf '.workspace.repo.branch')"
 [ -n "$branch" ] || branch="$(git -C "$root" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 [ -n "$branch" ] || branch="-"
 
-# 共通ライブラリ (同じディレクトリ) を先に読む。進め方と台帳のパス解決はここに集約している。
-# tasks-path.sh と statusline.sh はどちらもプラグイン所有で、/init と /update が対で入れ替える。
-[ -f "$here/tasks-path.sh" ] && . "$here/tasks-path.sh" 2>/dev/null || true
 
 # mode: 解決順は harness_mode (env HC_MODE > プロジェクトの mode.yml > ホームの mode.yml > normal)。
 # SessionStart (hooks/session-start.sh) と /config も同じ関数を通す。ここで独自に解決しない。
@@ -96,10 +106,36 @@ case "$mode" in
   *)      mode_label="$mode";                mode_col="$DIM" ;;
 esac
 
-# 未完了タスク: 台帳の解決順は scripts/tasks-path.sh (冒頭で source 済み、台帳なしは "—")
+# 未完了タスク: tasks: (mode.yml) が決める。ledger (既定) は台帳の件数、github-project は
+# 足すプラグインの `hirai-task line` (控えを読むだけ。--refresh を付けないので gh を叩かない。HIRAI_TASK_ROOT で会話のリポを渡す。
+# 取り直しは session-start.sh が起こす)。github-project のときだけ見出し語を「あなたの番」に替える —
+# 「やること 6（承認…」だと 6 を Project 番号のように読めるため。
+# この複製は古い tasks-path.sh と組になることがある (harness_tasks_form が無い) — その場合は ledger。
 todo="—"
-if command -v harness_tasks_file >/dev/null 2>&1; then
-  list="$(harness_tasks_file "$root" 2>/dev/null || true)"
+todo_label="やること"
+tasks_form="ledger"
+if command -v harness_tasks_form >/dev/null 2>&1; then
+  tasks_form="$(harness_tasks_form "$root" 2>/dev/null || echo ledger)"
+fi
+if [ "$tasks_form" = "github-project" ]; then
+  todo_label="あなたの番"
+  # 画面下の PATH にプラグインの bin/ は入らない。harness_pm_task_bin で絶対 path を引く
+  # (古い tasks-path.sh の複製には無いので、その場合だけ PATH の hirai-task に頼る)。
+  pm_task=""
+  if command -v harness_pm_task_bin >/dev/null 2>&1; then
+    pm_task="$(harness_pm_task_bin "$root" 2>/dev/null || true)"
+  elif command -v hirai-task >/dev/null 2>&1; then
+    pm_task="$(command -v hirai-task)"
+  fi
+  if [ -n "$pm_task" ]; then
+    # 会話のリポ (root) で引く (cwd がリポの中の別リポでも、会話のリポの件数を出す)
+    todo_ghp="$(HIRAI_TASK_ROOT="$root" "$pm_task" line 2>/dev/null || true)"
+    [ -n "$todo_ghp" ] && todo="$todo_ghp"
+  else
+    todo="hirai-project-method が未導入"
+  fi
+elif command -v harness_tasks_file >/dev/null 2>&1; then
+  list="$(harness_tasks_file "$opened" 2>/dev/null || true)"
   if [ -n "$list" ] && [ -f "$list" ]; then todo="$(harness_open_tasks "$list")"; fi
 fi
 
@@ -108,8 +144,10 @@ fi
 #   2. context 高 … 使用率が HC_CONTEXT_THRESHOLD 以上
 notice=""
 if [ "${HC_STATUSLINE_NOTICE:-on}" != "off" ]; then
+  update_flag_key="$(printf '%s' "$root" | cksum 2>/dev/null | awk '{print $1}')"
+  [ -n "$update_flag_key" ] || update_flag_key="default"
   if [ "${HARNESS_UPDATE_CHECK:-on}" != "off" ] \
-    && [ -s "${TMPDIR:-/tmp}/claude-harness-lite/update-available" ]; then
+    && [ -s "${TMPDIR:-/tmp}/claude-harness-lite/update-available-${update_flag_key}" ]; then
     notice="更新あり → /hirai-lite:update"
   elif command -v harness_ctx_over_threshold >/dev/null 2>&1 \
     && harness_ctx_over_threshold "${ctx_pct%%.*}"; then
@@ -121,7 +159,7 @@ fi
 line1="${DIM}${model}${R}${SEP}$(lbl ctx) ${ctx} ${DIM}・${R}$(lbl 5h) ${h5} ${DIM}・${R}$(lbl 7d) ${d7}"
 line1="${line1}${SEP}$(lbl 'mode:') ${mode_col}${mode_label}${R}"
 line1="${line1}${SEP}${DIM}${branch}${R}"
-line1="${line1}${SEP}$(lbl やること) ${DIM}${todo}${R}"
+line1="${line1}${SEP}$(lbl "$todo_label") ${DIM}${todo}${R}"
 
 # 2 行目 = 次にできる操作。設定リンクは常時、お知らせはその後ろに 1 件だけ。
 line2="${LNK}設定を確認・変更 → /hirai-lite:config${R}"

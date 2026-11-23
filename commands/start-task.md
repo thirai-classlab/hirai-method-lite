@@ -1,30 +1,58 @@
 ---
-description: タスクに着手する。台帳から対象を読み、feature branch へ切替え、list.md の status を「進行中」に更新する。
+description: タスクに着手する。台帳から対象を読み、feature branch へ切替え、list.md の status を「進行中」に更新する。GitHub Project の形では hirai-task に委ねる。
 ---
 
 # /start-task <task-id>
 
-引数が空なら `docs/tasks/list.md` の status が `未着手` の行を一覧表示し、どの id に着手するか聞き返して停止する。
+## 形の見分け (最初に 1 回)
+
+タスク管理の形は、リポの `.claude/mode.yml` の `tasks:`（`ledger` か `github-project`。項目が無ければ `ledger`）が決める。Project の有無・remote・gh の結果からは見分けない（GitHub を叩かず、尋ねて止まらない）。`ledger` が台帳の形（このファイル本来の手順）、`github-project` が GitHub Project の形。
+
+```bash
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -I -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+[ -f "$P/scripts/tasks-path.sh" ] || { echo "プラグイン本体が見つからない"; exit 2; }
+. "$P/scripts/tasks-path.sh"; harness_tasks_form "$PWD"; echo
+HT="$(harness_pm_task_bin 2>/dev/null || true)"; echo "hirai-task: ${HT:-なし}"
+```
+
+exit code が 2 (プラグイン本体が見つからない) なら、その場で報告して停止する (台帳の手順にもフォールバックしない)。1 行目の出力が `github-project` なら、下の「## GitHub Project の形の場合」だけを行い、以降の台帳の手順は行わない (台帳は作らず、書かない)。`ledger` なら、この節は無視して下の「## 台帳の解決」から続ける。
+
+**`hirai-task` は PATH に頼らず絶対 path で呼ぶ。** 上の 2 行目の `hirai-task: <絶対 path>` を `$HT` として、以降の `hirai-task <サブコマンド>` は `"$HT" <サブコマンド>` と読み替える（足すプラグインの `bin/` が PATH に入るのは Bash ツールだけで、hook と画面下には入らない。同じ関数でそろえてある）。`なし` なら、`github-project` の形では「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と 1 行で報告して終了する。
+
+## GitHub Project の形の場合
+
+引数が空なら `hirai-task ready` の結果を一覧表示し、どの id に着手するか聞き返して停止する。
+
+1. `hirai-task start <task-id>` を呼び、Status を 進行中 にする。着手可の task は、親を見ずに進行中にする（自分の未完了の blocked by だけを見る）。承認待ちの task は、目印が無く、親の feature が着手可で、自分と親の feature に未完了の blocked by が無いときだけ進める（先の wave が出ていなくても止めない）（today の align が着手可へ動かす子と同じ。あとから足した task も同じ）。断られるのは、親が無い・親の種別が feature でない・親が着手可でない・未完了の blocked by があるとき（理由に親の番号と Status が出る）。閉じた issue も断られる（`reopen` で開き直す）。`set` で進行中を書けるのは、今の Status がレビュー中・進行中・完了のときだけ（承認待ち・判断待ち・依存待ち・保留・着手可・空からは `start`）。レビュー中・完了を `set`・`review` で書けるのも、進行中・レビュー中・完了の task からだけ（そのほかからは exit 2。2 手で進行中に回れない）。`[User]` の task は、道具が着手可にしない（ユーザーの手作業）。ユーザーがボードで着手可にしたものは、着手可からの `start` が通る。`[操作]` の task は `--approved <出どころ>` を付ける経路がある。`$HT` が `なし` なら「hirai-task が見つからない。足すプラグインを入れる: `/plugin install hirai-project-method@hirai-lite`」と 1 行で報告して終了する（台帳の手順にもフォールバックしない）。
+2. `hirai-task start` が着手のあとに出す「読む束」（issue の本文の先頭の目印の `reads=` を 1 件 1 行）を上から順に読む。読む束の外は読まず、足りなければ「読む束に無い: `<path>`」と issue にコメントして止まる。reads が無い issue（目印の無いもの・目印はあって `reads=` が空のもの）は「読む束なし」の下に本文に出てくる docs/ の path の一覧が出る。束の外を読まないのは reads があるときだけ。reads が無いときは、出た docs/ の path の一覧は手がかりで、本文の参照の path（docs 以外も）も読む。「まだ無い」と出た path は成果物か移動・削除なので、無いことを確かめて先へ進む（path が出なければ本文の path を読む。`hirai-task show <n>` でも同じ束が出る）。
+   読む束の中の `[要判断]` で止まるのは、その task の要件 ID（目印の `reqs=` の各 ID と受入 `<ID>.<n>`）を含む行だけ。ほかの未決は止まらず、末尾の「読む束の未決 N 件（止めない）」に `path:行` で出る。読んで task に効きそうなら issue にコメントして人に返す。
+   `hirai-task start` が「着手不可」（目印の rev が古い・取り込み済みの提案）で止まったら、issue にコメントして読む束を読み直し、`hirai-task start <task-id> --reread` で目印を書き直して着手する。失効の提案・`[要判断]` は `--reread` でも止まる（人が判断する）。
+3. branch の切替えは `hirai-task start` の役目ではない。そのあと下の「## 手順」の 5〜6 (branch の切替え・未コミット変更の確認) はそのまま実行する。手順 7 (台帳の書き換え) だけ、ここでは実行しない。
+
+判定できる終了条件: `hirai-task start` が exit 0 で、`git rev-parse --abbrev-ref HEAD` が手順 5 で切替えた branch 名を返すこと。片方でも成立しなければ原因を 1 行で報告して停止する。
 
 ## 台帳の解決 (最初に 1 回)
 
-台帳パスは `$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > (旧レイアウト) `.claude/tasks/list.md` の順に解決する。**新しく作るときは常に `docs/tasks/list.md`**。
+引数が空なら `docs/tasks/list.md` の status が `未着手` の行を一覧表示し、どの id に着手するか聞き返して停止する。
+
+台帳パスは `$HARNESS_TASKS_FILE` > `docs/tasks/list.md` > (旧レイアウト) `.claude/tasks/list.md` の順に解決する。**新しく作るときは常に `harness_root` の下の `docs/tasks/list.md`**（`apps/api` など自分の `.claude/` を持たないサブディレクトリで打っても、toplevel の下に 1 本だけ作る。出力の「作る場所」）。
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT:-}"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"; [ -d "$P" ] || P="$HOME/.claude/plugins/marketplaces/hirai-lite"
-. "$P/scripts/tasks-path.sh"; LIST="$(harness_tasks_file "$PWD")"; echo "台帳 ${LIST:-なし}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -I -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+[ -f "$P/scripts/tasks-path.sh" ] || { echo "プラグイン本体が見つからない"; exit 2; }
+. "$P/scripts/tasks-path.sh"; LIST="$(harness_tasks_file "$PWD")"; echo "台帳 ${LIST:-なし} (無いとき作る場所: $(harness_root "$PWD")/docs/tasks/list.md)"
 ```
 
-空 (exit 1) なら台帳が無い。**その場で空の台帳を `docs/tasks/list.md` に作ってから続行する** (見出しと 6 列ヘッダは `/new-task` と同じ)。作った直後は行が 0 なので「台帳を作成した。task が無いので /new-task <id> <slug> で追加する」と報告して終了する。
+exit code が 2 (プラグイン本体が見つからない) なら、その場で報告して停止する (**既存の `docs/tasks/list.md` を上書きしない**)。空 (exit 1) なら台帳が無い。**その場で空の台帳を、出力の「作る場所」に作ってから続行する** (見出しと 6 列ヘッダは `/new-task` と同じ)。作った直後は行が 0 なので「台帳を作成した。task が無いので /hirai-lite:new-task <id> <slug> で追加する」と報告して終了する。
 
 以降この文書の `docs/tasks/list.md` は `$LIST` に、`docs/tasks/` は `$(dirname "$LIST")` に読み替える。`docs/draft/` は `harness_draft_dir "$PWD"` が返す draft dir (通常 `docs/draft/`) に読み替える。
 
 ## 手順
 
 1. `$LIST` を Read し、`<task-id>` の行を特定する。行が無ければ「id <task-id> は台帳に存在しない」と報告して終了する。
-2. 同行の詳細列にある `docs/tasks/task-<task-id>-<slug>.md` を Read する。ファイルが存在しなければ「タスクファイル不在。/new-task で作成する」と報告して終了する。
+2. 同行の詳細列にある `docs/tasks/task-<task-id>-<slug>.md` を Read する。ファイルが存在しなければ「タスクファイル不在。/hirai-lite:new-task で作成する」と報告して終了する。
 3. タスクファイルに `依存先:` があれば、そこに並ぶ id のタスクファイルを全部 Read し、ゴールと完了条件を確認する。依存先の status が `完了` でないものが 1 件以上あれば、その id を列挙して「先に着手するか、この依存を外すか」を user に聞く。
-   **承認を求めるときは判断材料 5 項目**（何をしたいか / なぜ / しないとどうなる / トレードオフ / どうやるか）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル）。 「なぜ」には未完了の依存 id と、それを待たずに進められる step の範囲を書く。
+   **承認を求めるときは承認カード**（決めること・推奨 / 目的 / 位置 / 承認すると / しないと / 注意 / 詳しく）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル。`AskUserQuestion` が使えないときの平文の出し方も同じファイル）。 「しないと」には未完了の依存を待つ期間（分からなければ「未確認」）、「承認すると」には依存を待たずに進められる step の範囲、「詳しく」に未完了の依存の番号を書く。
 4. 対応する `docs/draft/<slug>.md` が存在すれば Read する。draft に `approved_at:` が空、または行自体が無い場合は「未承認 draft のため着手しない」と報告して終了する。
 5. branch を切替える。
 

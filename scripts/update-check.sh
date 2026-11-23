@@ -13,23 +13,55 @@
 # パイプ先の早期終了で呼び出し元ごと落ちる事故を防ぐため (関数内で局所化する)。
 
 HARNESS_UPDATE_URL_DEFAULT="https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/main/VERSION"
+# 足すプラグイン hirai-project-method の最新版 (main の plugins/hirai-project-method/VERSION)。
+# HARNESS_UPDATE_URL だけを差し替えたとき (試験・社内ミラー) は取りに行かない。HARNESS_UPDATE_PM_URL で別に指す。
+HARNESS_UPDATE_PM_URL_DEFAULT="https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/main/plugins/hirai-project-method/VERSION"
+
+# このプラグインの配布の entry 名 (marketplace.json の entry 名と同じ値)。変えるときは、この 1 行と
+# commands/*.md の素材行の同じ文字列を合わせる (tests/smoke.sh が素材行と突き合わせる。
+# ズレていても壊れ方は fail-open — 解決できずに空を返すだけで、別の版を掴んだりはしない)。
+# 足すプラグイン hirai-project-method の控えの id は、足すプラグイン側の scripts/ghp-path.sh が持つ。
+# 3.0.0 で退役した旧系列 hirai-lite-v2 の entry は探さない (退役した版の置き場へ落ちない)。
+HARNESS_ENTRY_NAME="hirai-lite"
 
 # --- プラグイン本体の置き場所 --------------------------------------------------
 # $CLAUDE_PLUGIN_ROOT は**空で渡ることがある**。渡らない実行経路があるため、これを直に
 # パスの前に置いた行は「/VERSION」を読みに行って失敗する (v1.14.0 の /update が実環境で
-# 動かなかった原因)。空・不在なら 3 段で探す — 環境変数 → キャッシュ (版が最新のもの) →
-# マーケットプレイス。commands/*.md 冒頭の「素材行」と同じ 3 段で、
-# tests/smoke.sh case 10 (f) が「素材行の結果」と「この関数の結果」の一致を検査する。
+# 動かなかった原因)。空・不在なら 3 段で探す — 環境変数 → installed_plugins.json の
+# hirai-lite の行のうち版が最新の installPath → キャッシュ (hirai-lite の entry 名で、版が最新のもの)。
+# commands/*.md 冒頭の「素材行」と同じ 3 段で、tests/smoke.sh が「素材行の結果」と
+# 「この関数の結果」の一致を検査する。
 # シェルから使えるのはこの関数だが、**コマンド手順書は素材行のほうを使う** —
 # 関数を読むには先にこのファイルの場所が要る (それを解決するのが素材行の仕事)。
+#
+# installed_plugins.json は projectPath を見ない (どの checkout から呼ばれても同じ実体を
+# 指す最大版に揃える — 一時的な worktree のような checkout でも解決が外れないようにするため)。
+harness_plugin_root_from_installed() (
+  set -uo pipefail
+  local entry="${1:?}" f="$HOME/.claude/plugins/installed_plugins.json" p
+  [ -f "$f" ] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  p="$(python3 -I -c 'import json,re,sys
+d = json.load(open(sys.argv[1]))
+rows = [x for k, v in d.get("plugins", {}).items() if k.split("@", 1)[0] == sys.argv[2]
+        for x in v if x.get("installPath")]
+rows.sort(key=lambda x: [int(n) if n.isdigit() else 0
+                          for n in re.split(r"[.]", str(x.get("version", "0")).split("-", 1)[0])])
+print(rows[-1]["installPath"] if rows else "")' "$f" "$entry" 2>/dev/null)" || return 1
+  [ -n "$p" ] || return 1
+  printf '%s' "$p"
+)
+
 harness_plugin_root() (
   set -uo pipefail
   local p="${1:-${CLAUDE_PLUGIN_ROOT:-}}"
   if [ ! -d "$p" ]; then
-    p="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"
+    p="$(harness_plugin_root_from_installed "$HARNESS_ENTRY_NAME" 2>/dev/null)"
+  fi
+  if [ ! -d "$p" ]; then
+    p="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/"$HARNESS_ENTRY_NAME"/*/ 2>/dev/null | sort -V | tail -1)"
     p="${p%/}"
   fi
-  [ -d "$p" ] || p="$HOME/.claude/plugins/marketplaces/hirai-lite"
   printf '%s' "$p"
 )
 
@@ -116,49 +148,103 @@ harness_update_fetch_async() (
   printf '%s' "$now" > "$dir/stamp" 2>/dev/null || return 0
   url="${HARNESS_UPDATE_URL:-$HARNESS_UPDATE_URL_DEFAULT}"
   {
-    body="$(curl -fsSL --max-time 2 "$url" 2>/dev/null)" || exit 0
+    body="$(curl -fsSL --max-time 2 "$url" 2>/dev/null)"
     v="$(harness_semver_norm "$body")"
-    [ -n "$v" ] || exit 0
-    printf '%s' "$v" > "$dir/latest.tmp" 2>/dev/null \
-      && mv -f "$dir/latest.tmp" "$dir/latest" 2>/dev/null
+    if [ -n "$v" ]; then
+      printf '%s' "$v" > "$dir/latest.tmp" 2>/dev/null \
+        && mv -f "$dir/latest.tmp" "$dir/latest" 2>/dev/null
+    fi
+    pm_url="${HARNESS_UPDATE_PM_URL:-}"
+    [ -n "$pm_url" ] || [ -n "${HARNESS_UPDATE_URL:-}" ] || pm_url="$HARNESS_UPDATE_PM_URL_DEFAULT"
+    if [ -n "$pm_url" ]; then
+      body="$(curl -fsSL --max-time 2 "$pm_url" 2>/dev/null)"
+      v="$(harness_semver_norm "$body")"
+      if [ -n "$v" ]; then
+        printf '%s' "$v" > "$dir/latest-pm.tmp" 2>/dev/null \
+          && mv -f "$dir/latest-pm.tmp" "$dir/latest-pm" 2>/dev/null
+      fi
+    fi
     exit 0
   } >/dev/null 2>&1 </dev/null &
   return 0
 )
 
-# harness_update_notice [root] -> キャッシュ値が自分より新しい時だけ 1 行出力。他は無出力 rc 0。
+# harness_update_notice [plugin_root] [project_root] -> キャッシュ値が自分より新しい時だけ 1 行出力。他は無出力 rc 0。
 harness_update_notice() (
   set -uo pipefail
   harness_update_enabled || return 0
   local root="${1:-${CLAUDE_PLUGIN_ROOT:-$PWD}}" cur new
-  cur="$(harness_local_version "$root")" || return 0
-  new="$(harness_cached_version "$root")" || return 0
+  if cur="$(harness_local_version "$root")" && new="$(harness_cached_version "$root")" \
+     && harness_semver_gt "$new" "$cur"; then
+    printf '[harness] 更新あり v%s → v%s (/hirai-lite:update で適用)\n' "$cur" "$new"
+  fi
+  harness_update_pm_notice "$root" "${2:-}"
+)
+
+# harness_update_pm_notice [plugin_root] [project_root] -> 足すプラグイン hirai-project-method が入っていて、前回取得した main の版より古いときだけ 1 行。
+# このリポの行が無ければ (installed_plugins.json に行が無い・別のリポの行だけ) 何も出さない。常に rc 0。
+harness_update_pm_notice() (
+  set -uo pipefail
+  harness_update_enabled || return 0
+  local root="${1:-${CLAUDE_PLUGIN_ROOT:-$PWD}}" dir ip cur new
+  # このリポの行だけで比べる (別のリポの行の版で知らせない)。絞りは tasks-path.sh の harness_pm_install_dir の 1 か所。
+  command -v harness_pm_install_dir >/dev/null 2>&1 || . "$(CDPATH= builtin cd -- "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && builtin pwd -P)/tasks-path.sh" 2>/dev/null || return 0
+  command -v harness_pm_install_dir >/dev/null 2>&1 || return 0
+  ip="$(harness_pm_install_dir "${2:-${CLAUDE_PROJECT_DIR:-$PWD}}" 2>/dev/null)" || return 0
+  [ -n "$ip" ] || return 0
+  cur="$(harness_semver_norm "$(head -1 "$ip/VERSION" 2>/dev/null)")"
+  dir="$(harness_update_cache_dir "$root")"
+  [ -f "$dir/latest-pm" ] || return 0
+  new="$(harness_semver_norm "$(head -1 "$dir/latest-pm" 2>/dev/null)")"
   harness_semver_gt "$new" "$cur" || return 0
-  printf '[harness] 更新あり v%s → v%s (/update で適用)\n' "$cur" "$new"
+  printf '[harness] 足すプラグイン hirai-project-method の更新あり v%s → v%s (/hirai-lite:update で適用)\n' "$cur" "$new"
 )
 
 # --- 画面下部 (statusline) へ更新の有無を渡すフラグ -------------------------
 # statusline はプラグインの置き場所を知れない (settings.json では ${CLAUDE_PLUGIN_ROOT} が
 # 展開されないため、導入先へ複製された .claude/statusline.sh として動く)。VERSION もキャッシュ dir も
 # プラグインのパス起点なので、版の比較はここ (SessionStart 側) で済ませ、結果だけを
-# パスに依存しない固定の 1 ファイルへ書き写す。statusline はその 1 ファイルの有無を見るだけで、
+# 導入先ごとに分けた 1 ファイルへ書き写す。statusline はその 1 ファイルの有無を見るだけで、
 # 通信もバージョン比較もしない。
+#
+# **鍵はプロジェクトのパス (CLAUDE_PROJECT_DIR) の cksum にする。** プラグインのパスでは
+# 分けられない — statusline はプラグインの置き場所を知れないため、書く側 (ここ) と読む側
+# (statusline.sh) の双方が資格として持っている値でなければ、同じ鍵を導けない。プロジェクトの
+# パスなら両方が知っている (session-start.sh も statusline.sh も CLAUDE_PROJECT_DIR を読む)。
+# これが無いと、1.x と 2.x を併用する機械で、無関係な案件どうしの「更新あり」表示が
+# 入れ替わる (v1.14.2 の案件を開くと v1.16.0 の案件の画面下にも出る、という実害があった)。
+HARNESS_UPDATE_FLAG_DIR_NAME="claude-harness-lite"
 
-# harness_update_flag_file -> フラグのパスを stdout (作成はしない)
-harness_update_flag_file() (
+# harness_update_flag_key [project_root] -> 鍵 (cksum) を stdout。常に rc 0 (空にはしない)。
+harness_update_flag_key() (
   set -uo pipefail
-  printf '%s' "${TMPDIR:-/tmp}/claude-harness-lite/update-available"
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" key
+  key="$(printf '%s' "$root" | cksum 2>/dev/null | awk '{print $1}')"
+  [ -n "$key" ] || key="default"
+  printf '%s' "$key"
 )
 
-# harness_update_flag_sync [root] -> 新版があれば "<現版> <新版>" を書き、無ければ消す。常に rc 0。
-# HARNESS_UPDATE_CHECK=off のときも消す (止めた指定が古いフラグで無効化されないようにする)。
+# harness_update_flag_file [project_root] -> フラグのパスを stdout (作成はしない)
+harness_update_flag_file() (
+  set -uo pipefail
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}"
+  printf '%s/%s/update-available-%s' "${TMPDIR:-/tmp}" "$HARNESS_UPDATE_FLAG_DIR_NAME" \
+    "$(harness_update_flag_key "$root")"
+)
+
+# harness_update_flag_sync <plugin_root> [project_root] -> 新版があれば "<現版> <新版>" を書き、
+# 無ければ消す。常に rc 0。HARNESS_UPDATE_CHECK=off のときも消す (止めた指定が古いフラグで
+# 無効化されないようにする)。plugin_root は版の比較に使い、project_root はフラグの鍵に使う
+# (両者は別物 — 1 台の機械で複数案件を開くと project_root は毎回変わるが、plugin_root は
+# 同じキャッシュを指すことがある)。
 harness_update_flag_sync() (
   set -uo pipefail
-  local root="${1:-${CLAUDE_PLUGIN_ROOT:-$PWD}}" flag cur new
-  flag="$(harness_update_flag_file)"
+  local plugin_root="${1:-${CLAUDE_PLUGIN_ROOT:-$PWD}}" \
+        project_root="${2:-${CLAUDE_PROJECT_DIR:-$PWD}}" flag cur new
+  flag="$(harness_update_flag_file "$project_root")"
   if harness_update_enabled \
-    && cur="$(harness_local_version "$root")" \
-    && new="$(harness_cached_version "$root")" \
+    && cur="$(harness_local_version "$plugin_root")" \
+    && new="$(harness_cached_version "$plugin_root")" \
     && harness_semver_gt "$new" "$cur"; then
     mkdir -p "${flag%/*}" 2>/dev/null || return 0
     printf '%s %s' "$cur" "$new" > "$flag.tmp" 2>/dev/null \
@@ -185,12 +271,12 @@ harness_update_flag_sync() (
 # 切り替え)、そちらが起動後に背景で済ませる。hook から `claude plugin update` を叩くのは
 # 二重実装なうえ、セッション開始を通信で待たせることになるので行わない。
 
-HARNESS_OWNED_SCRIPTS_DEFAULT="statusline.sh tasks-path.sh context-usage.sh"
-
-# harness_sync_stamp_file [plugin_root] -> 前回入れ替えた版を控えるパスを stdout (作成はしない)
+# harness_sync_stamp_file [plugin_root] [project_root] -> 前回入れ替えた版を控えるパスを stdout (作成はしない)
+# 鍵は plugin_root と project_root の両方 (update-available の鍵と同じ作り)。plugin_root だけだと、版が変わって
+# 最初に開いた 1 リポだけが入れ替わり、同じ版の本体を使うほかのリポ・worktree は「版が同じ」と見て抜ける。
 harness_sync_stamp_file() (
   set -uo pipefail
-  printf '%s/synced' "$(harness_update_cache_dir "${1:-}")"
+  printf '%s/synced-%s' "$(harness_update_cache_dir "${1:-}")" "$(harness_update_flag_key "${2:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
 )
 
 # harness_sync_owned_scripts <plugin_root> <project_root> [force]
@@ -215,7 +301,7 @@ harness_sync_owned_scripts() (
       *) return 0 ;;
     esac
     [ -n "$cur" ] || return 0
-    stamp="$(harness_sync_stamp_file "$plug")"
+    stamp="$(harness_sync_stamp_file "$plug" "$root")"
     [ -f "$stamp" ] && prev="$(head -1 "$stamp" 2>/dev/null | tr -d '\r\n')"
     # 版が同じ = やることなし。比較も I/O もせずに抜ける。
     [ "$prev" = "$cur" ] && return 0
@@ -235,7 +321,8 @@ harness_sync_owned_scripts() (
         [ "$force" = "force" ] && printf 'placed  %s\n' "$d/context-usage.sh"
       fi
     fi
-    for s in ${HARNESS_OWNED_SCRIPTS:-$HARNESS_OWNED_SCRIPTS_DEFAULT}; do
+    # 直書き (zsh は変数を単語に分けない。`for s in $VAR` は 1 語のままになり黙って空振りする)
+    for s in statusline.sh tasks-path.sh context-usage.sh; do
       src="$plug/scripts/$s"; dst="$d/$s"
       [ -f "$src" ] || continue
       [ -e "$dst" ] || continue          # 置いていない場所に新しく作らない
@@ -255,7 +342,7 @@ harness_sync_owned_scripts() (
   done
 
   if [ "$force" != "force" ]; then
-    stamp="$(harness_sync_stamp_file "$plug")"
+    stamp="$(harness_sync_stamp_file "$plug" "$root")"
     mkdir -p "${stamp%/*}" 2>/dev/null && printf '%s' "$cur" > "$stamp" 2>/dev/null
     [ "$(( n + placed ))" -gt 0 ] || return 0
     printf '[harness] v%s に合わせてスクリプト %s 件を入れ替えました' "$cur" "$(( n + placed ))"

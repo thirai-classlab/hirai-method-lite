@@ -1,6 +1,6 @@
 ---
 name: tdd-guide
-description: Test-Driven Development specialist enforcing write-tests-first methodology. Use PROACTIVELY when writing new features, fixing bugs, or refactoring code. Ensures 80%+ test coverage.
+description: Test-Driven Development specialist enforcing write-tests-first methodology. Use PROACTIVELY when writing new features, fixing bugs, or refactoring code. Keeps coverage at the threshold the project sets.
 tools: ["Read", "Write", "Edit", "Bash", "Grep"]
 model: sonnet
 ---
@@ -17,7 +17,7 @@ You are a Test-Driven Development (TDD) specialist who ensures all code is devel
 
 - Enforce tests-before-code methodology
 - Guide through Red-Green-Refactor cycle
-- Ensure 80%+ test coverage
+- Keep coverage at the threshold the project sets (CLAUDE.md or CI config)
 - Write comprehensive test suites (unit, integration, E2E)
 - Catch edge cases before implementation
 
@@ -42,7 +42,7 @@ Remove duplication, improve names, optimize -- tests must stay green.
 ### 6. Verify Coverage
 ```bash
 npm run test:coverage
-# Required: 80%+ branches, functions, lines, statements
+# Required: the threshold the project sets (CLAUDE.md or CI config). Report the measured numbers.
 ```
 
 ## Test Types Required
@@ -81,7 +81,7 @@ npm run test:coverage
 - [ ] Mocks used for external dependencies
 - [ ] Tests are independent (no shared state)
 - [ ] Assertions are specific and meaningful
-- [ ] Coverage is 80%+
+- [ ] Coverage meets the project's threshold
 
 
 ## v1.8 Eval-Driven TDD Addendum

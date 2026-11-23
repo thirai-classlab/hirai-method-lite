@@ -6,12 +6,19 @@
 #                         やることが終わった / 続けられないエラーが出た。
 #                         ただし「新しい設計を足す」「決めた内容を変える」
 #                         「元に戻せない操作」は loop のときでも必ず確認する。
+#                         ターンをまたいで止まらずに続けるのは組み込みの /goal に任せる
+#                         (例: /goal 台帳に未着手の行が無く、着手した task はすべて PR を出した。
+#                          tasks: github-project のリポは /goal hirai-task ready が空で、着手した task はすべて PR を出した)。
 #
 # 切り替え : /hirai-lite:config （設定の一覧から mode（進め方）を変えるとこのファイルが書き換わる）
 # 一時的に : 環境変数 HC_MODE=loop (このファイルより優先される)
 # 置き場所 : 導入先リポジトリの .claude/mode.yml (/init が置く)
 # 読む人   : プラグインの hooks/session-start.sh と scripts/statusline.sh
-
+# 設定の 3 項目 (tasks / worktree / notify) は、下の auto_sync のあとに置いている。会話の開始時に、
+# 版と効いている 3 項目が 1 行で出る。
+# 読む順 : 項目ごとに「環境変数 → プロジェクトのこのファイル → ホームの ~/.claude/mode.yml → 既定」。
+#          値は " や ' で囲んでもよく、行末に # のコメントを書いてもよい。
+# tasks / worktree / notify はプロジェクトのこのファイルにだけ書く (ホームに書くと他のリポにも効く)。
 mode: normal
 
 # auto_sync（更新後の入れ替え） — 値は on か off の 2 つだけ。**既定は off。**
@@ -20,7 +27,7 @@ mode: normal
 #   on  : プラグインの版が変わった回のセッション冒頭だけ、/init が導入先へ複製した
 #         3 本 (statusline.sh / tasks-path.sh / context-usage.sh) を配布版に揃え、
 #         何件入れ替えたかを 1 行報告する。中身が違うものは .bak に控えてから入れ替える。
-#         決まりごと (rules) ・安全設定 (settings.json) ・CLAUDE.md ・やることの一覧表は
+#         決まりごと (rules) ・安全設定 (settings.json) ・CLAUDE.md ・やること管理の設定は
 #         **自動では一切書き換えない。** 版が同じ回は何もしない。
 #
 # 切り替え : /hirai-lite:config の項目 7
@@ -30,3 +37,45 @@ mode: normal
 # (/plugin → Marketplaces → Enable auto-update。第三者マーケットプレイスは既定 off)。
 
 auto_sync: off
+
+# tasks（やること管理の形） — 値は ledger か github-project の 2 つだけ。**既定は ledger。**
+#
+#   ledger         : docs/tasks/list.md の台帳で回す (1.x と同じ。GitHub を一切叩かない)
+#   github-project : GitHub Project で回す。足すプラグイン hirai-project-method が要る
+#                    (/plugin install hirai-project-method@hirai-lite)。無いと入れ方を示して止まる
+#
+# **自動では見分けない。** Project の有無・remote・gh の結果では決まらず、この 1 行だけが決める。
+# 切り替え : /hirai-lite:config の項目 8
+# 一時的に : 環境変数 HC_TASKS=ledger (このファイルより優先される)
+
+tasks: ledger
+
+# worktree（Orca の worktree の別セッション） — 値は off / warn / block の 3 つ。**既定は off。**
+#
+#   off   : 何もしない
+#   warn  : Orca の worktree でない会話の開始時に警告を 1 行出す
+#   block : Orca の worktree でない会話からの、リポの中の git に入るファイルの Edit・Write・NotebookEdit と
+#           git commit を止める（読み取り・リポの外・git に入らない場所・branch の切り替え・MCP の書き込みの道具は止めない）
+#           (読み取り・リポの外 (~/.claude の記憶の置き場など)・git に入らない場所・git switch は止めない)
+#
+# 切り替え : /hirai-lite:config の項目 8
+# 一時的に : 環境変数 HC_WORKTREE=warn (このファイルより優先される)
+
+worktree: off
+
+# notify（Orca のコーディネーターへの知らせ） — 値は off / orca の 2 つ。**既定は off。**
+#
+#   orca : 担当の会話が、決めてもらいたいこと・終わったこと・止まったことを hirai-notify で知らせる
+#
+# 切り替え : /hirai-lite:config の項目 8
+# 一時的に : 環境変数 HC_NOTIFY=orca (このファイルより優先される)
+
+notify: off
+
+# nightly_ci（前夜の CI の結果を today に出す。足すプラグイン hirai-project-method のときだけ効く） — 値は workflow のファイル名。**既定は空。**
+#
+#   ci.yml : `hirai-task today` の先頭に、その workflow の直近の schedule の run の結果を 1 行出す。空なら何も出さず gh も呼ばない
+#
+# 一時的に : 無し (このファイルとホームの ~/.claude/mode.yml だけを読む)
+
+nightly_ci:

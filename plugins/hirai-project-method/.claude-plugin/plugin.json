@@ -1,0 +1,21 @@
+{
+  "name": "hirai-project-method",
+  "description": "hirai-lite に足す、GitHub Project でタスクを回すための道具（hirai-task・/board・/project-setup・skill github-project）。mode.yml の tasks: github-project のリポだけが入れる。",
+  "version": "1.0.0",
+  "author": {
+    "name": "thirai-classlab"
+  },
+  "repository": "https://github.com/thirai-classlab/hirai-method-lite",
+  "license": "MIT",
+  "keywords": [
+    "task-management",
+    "github-projects",
+    "workflow"
+  ],
+  "dependencies": [
+    {
+      "name": "hirai-lite",
+      "version": ">=3.0.0"
+    }
+  ]
+}

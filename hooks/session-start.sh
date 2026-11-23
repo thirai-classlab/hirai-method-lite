@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# SessionStart hook: 現在の mode / 未完了タスク数 / 直近 state を 5 行以内で出力する。
+# SessionStart hook: 現在の mode と効いている設定 / 未完了タスク数 / 直近 state を 5 行以内で出力する。
 # 更新の合図と「更新後の入れ替え」の報告は、該当する回だけ末尾に 1 行ずつ足す。
 # 対象ファイルが 1 つも無くても正常終了する (fail-open)。
 #
 # パス解決は 2 段構え。
 #   plugin_root : $CLAUDE_PLUGIN_ROOT > このスクリプトの 1 つ上 ($BASH_SOURCE 起点)
-#   root        : $CLAUDE_PROJECT_DIR > $PWD   (導入先リポジトリ = ユーザーの資産)
+#   root        : $CLAUDE_PROJECT_DIR > $PWD を harness_root で解いたもの (git の toplevel までで最初に .claude/mode.yml・settings.json・rules が在る dir。
+#                 無ければ toplevel。導入先リポジトリ = ユーザーの資産)。worktree・notify は harness_top (toplevel) の mode.yml から引く
 set -uo pipefail
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || here="."
+here="$(CDPATH= builtin cd -- "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && builtin pwd -P)" || here="."
 plugin_root="${CLAUDE_PLUGIN_ROOT:-}"
 if [ -z "$plugin_root" ] || [ ! -d "$plugin_root" ]; then
-  plugin_root="$(cd "$here/.." 2>/dev/null && pwd)" || plugin_root="."
+  plugin_root="$(CDPATH= builtin cd -- "$here/.." >/dev/null 2>&1 && builtin pwd -P)" || plugin_root="."
 fi
 root="${CLAUDE_PROJECT_DIR:-}"
 if [ -z "$root" ] || [ ! -d "$root" ]; then
@@ -22,6 +23,14 @@ fi
 if [ -f "$plugin_root/scripts/tasks-path.sh" ]; then
   # shellcheck source=../scripts/tasks-path.sh
   . "$plugin_root/scripts/tasks-path.sh" 2>/dev/null || true
+fi
+
+# root は harness_root に解く (自分の .claude を持たないサブディレクトリで開いても、mode.yml・台帳・更新の鍵が toplevel と同じ値になり、
+# 自分の .claude を持つパッケージで開いたときはそこを読む)。
+# 解くのはここ 1 回だけ。以降の関数は解いた root を受け取り、git を打ち直さない。
+opened="$root"   # 開いた dir (台帳・控えは「開いた dir → root」の順で引く)
+if command -v harness_root >/dev/null 2>&1; then
+  root="$(harness_root "$root")"
 fi
 
 # --- mode: 解決順は harness_mode (env HC_MODE > プロジェクト > ホーム > normal) ---
@@ -39,15 +48,47 @@ case "$mode" in
   *)      mode_line="$mode" ;;
 esac
 
-# --- 未完了タスク数: 台帳 (解決順は scripts/tasks-path.sh) の table 行から数える ---
-list=""
-if command -v harness_tasks_file >/dev/null 2>&1; then
-  list="$(harness_tasks_file "$root" 2>/dev/null || true)"
+# --- タスク管理の形: .claude/mode.yml の tasks: が決める (自動では見分けない) ---
+# ledger (既定) は台帳の件数 (1.x と同じ。通信しない)。github-project のときだけ、足すプラグイン
+# hirai-project-method の hirai-task を、installed_plugins.json から引いた絶対 path で呼ぶ (土台は GitHub の関数を直接呼ばない)。
+tasks_form="ledger"
+if command -v harness_tasks_form >/dev/null 2>&1; then
+  tasks_form="$(harness_tasks_form "$root" 2>/dev/null || echo ledger)"
 fi
-if [ -n "$list" ] && [ -f "$list" ]; then
-  task_line="やること: $(harness_open_tasks "$list") 件 (${list#"$root"/})"
+if [ "$tasks_form" = "github-project" ]; then
+  # hook の PATH にプラグインの bin/ は入らない (Bash ツールだけに入る)。PATH に頼らず
+  # harness_pm_task_bin (installed_plugins.json の user・managed かこのリポ [git-common-dir が同じ] の行の最大版 → PATH。cache へは python3 が無いときだけ) で絶対 path を引く。
+  pm_task=""
+  if command -v harness_pm_task_bin >/dev/null 2>&1; then
+    pm_task="$(harness_pm_task_bin "$root" 2>/dev/null || true)"
+  elif command -v hirai-task >/dev/null 2>&1; then
+    pm_task="$(command -v hirai-task)"
+  fi
+  if [ -n "$pm_task" ]; then
+    # 件数は控えを読むだけ (通信しない)。取り直しは別に切り離して起こす。
+    # **取り直しを $(...) の中で呼ばない。** hirai-task line --refresh は背景の子が出力の
+    # パイプを持ったまま走るので、$(...) が子の終了まで戻らず、hook の 5 秒の timeout を食う。
+    # 出力を捨て、stdin も閉じて、この shell の直下で切り離す。
+    ghp_line="$(HIRAI_TASK_ROOT="$root" "$pm_task" line 2>/dev/null || true)"
+    HIRAI_TASK_ROOT="$root" "$pm_task" line --refresh >/dev/null 2>&1 </dev/null &
+    if [ -n "$ghp_line" ]; then
+      task_line="Project: あなたの番 ${ghp_line}"
+    else
+      task_line="Project: 件数を取得中です (hirai-task today で見られます)"
+    fi
+  else
+    task_line="tasks: github-project ですが hirai-task が見つかりません → /plugin install hirai-project-method@hirai-lite"
+  fi
 else
-  task_line="やること一覧はまだありません (/new-task で作れます)"
+  list=""
+  if command -v harness_tasks_file >/dev/null 2>&1; then
+    list="$(harness_tasks_file "$opened" 2>/dev/null || true)"
+  fi
+  if [ -n "$list" ] && [ -f "$list" ]; then
+    task_line="やること: $(harness_open_tasks "$list") 件 ($(d="${list#"$root"/}"; printf '%s' "${d#"$opened"/}"))"
+  else
+    task_line="やること一覧はまだありません (/hirai-lite:new-task で作れます)"
+  fi
 fi
 
 # --- 更新検知: 取得は背景 + 24h に 1 回、表示は前回キャッシュ値 (通信を待たない) ---
@@ -58,10 +99,16 @@ if [ -f "$plugin_root/scripts/update-check.sh" ]; then
   # shellcheck source=../scripts/update-check.sh
   . "$plugin_root/scripts/update-check.sh" 2>/dev/null || true
   if command -v harness_update_notice >/dev/null 2>&1; then
-    harness_update_fetch_async "$plugin_root" >/dev/null 2>&1 || true
-    update_line="$(harness_update_notice "$plugin_root" 2>/dev/null || true)"
+    # 同じ理由で外側に >/dev/null 2>&1 を付けない (このすぐ上のコメント参照)。
+    harness_update_fetch_async "$plugin_root" || true
+    update_line="$(harness_update_notice "$plugin_root" "$root" 2>/dev/null || true)"
+    # 土台と足すプラグインの 2 行は 1 行にまとめる (区切り「 ／ 」・2 つ目の [harness] は落とす)。
+    update_line="$(printf '%s\n' "$update_line" | awk 'NF{ if (n++) { sub(/^\[harness\] /, ""); printf " ／ %s", $0 } else printf "%s", $0 } END{ if (n) printf "\n" }')"
+    update_line="${update_line%$'\n'}"
     # 画面下部のお知らせ枠へ結果を渡す (statusline はプラグインのパスを知れないため)。
-    harness_update_flag_sync "$plugin_root" >/dev/null 2>&1 || true
+    # フラグの鍵はプロジェクト側のパス (root) にする (plugin_root では 1.x/2.x や
+    # 別案件どうしの「更新あり」表示が入れ替わる)。
+    harness_update_flag_sync "$plugin_root" "$root" >/dev/null 2>&1 || true
   fi
   # --- 更新後の入れ替え: **既定 off**。/config で on にした人だけ、プラグインが
   # 新しくなった回に限り、複製された 3 ファイル (statusline.sh / tasks-path.sh /
@@ -73,20 +120,47 @@ fi
 
 # --- 直近 state (導入先リポジトリ側) ---
 state=""
-for d in "$root/.claude/state" "$root/docs/state"; do
+# 控えの dir は /state save・resume と同じ harness_state_dir (渡された dir → harness_root の順で在る方)。docs/state は古い置き場。
+state_dirs=("$root/.claude/state" "$root/docs/state")
+command -v harness_state_dir >/dev/null 2>&1 && state_dirs=("$(harness_state_dir "$opened")" "$root/docs/state")
+for d in "${state_dirs[@]}"; do
   [ -d "$d" ] || continue
-  f="$(ls -t "$d" 2>/dev/null | head -1)"
+  # coordinator は Orca の担当の宛先の控え (再開用の state ではない)。続きの判定から外す。
+  f="$(ls -t "$d" 2>/dev/null | grep -v '^coordinator' | head -1)"
   [ -n "$f" ] && state="${d#"$root"/}/$f" && break
 done
 
-echo "[harness] 進め方: ${mode_line}"
+# --- 効いている設定: 版と tasks / worktree / notify を 1 行で (何が効いているかを 1 か所で見る) ---
+plugin_version=""
+command -v harness_local_version >/dev/null 2>&1 && plugin_version="$(harness_local_version "$plugin_root" 2>/dev/null || true)"
+cfg_worktree="${HC_WORKTREE:-}"; cfg_notify="${HC_NOTIFY:-}"
+if command -v harness_yml_value >/dev/null 2>&1; then
+  [ -n "$cfg_worktree" ] || cfg_worktree="$(harness_yml_value "$root" worktree 2>/dev/null || true)"
+  [ -n "$cfg_notify" ] || cfg_notify="$(harness_yml_value "$root" notify 2>/dev/null || true)"
+fi
+settings_line="hirai-lite ${plugin_version:+v${plugin_version}・}tasks: ${tasks_form}・worktree: ${cfg_worktree:-off}・notify: ${cfg_notify:-off}"
+
+# 5 行以内を守るため、効いている設定は進め方の行の後ろに足す (行を増やさない)
+echo "[harness] 進め方: ${mode_line} ／ ${settings_line}"
 echo "[harness] ${task_line}"
 if [ -n "$state" ]; then
-  echo "[harness] 前回の続き: ${state} (/state resume で読み込めます)"
+  echo "[harness] 前回の続き: ${state} (/hirai-lite:state resume で読み込めます)"
 else
   echo "[harness] 前回の続き: なし"
 fi
-[ -n "$update_line" ] && echo "$update_line"
-[ -n "$sync_line" ] && echo "$sync_line"
+# 更新の合図と入れ替えの報告は、重なっても 1 行にまとめる
+extra_line="$update_line"
+if [ -n "$sync_line" ]; then
+  if [ -n "$extra_line" ]; then extra_line="${extra_line} ／ ${sync_line#\[harness\] }"; else extra_line="$sync_line"; fi
+fi
+[ -n "$extra_line" ] && echo "$extra_line"
+# Orca の worktree の警告・知らせ方 (worktree / notify が off なら何も出ない)。
+# 何行出ても 1 行にまとめる (開始時の表示は 5 行以内: 設定 / タスク / 前回 / 更新 / Orca)。
+if [ -f "$plugin_root/scripts/orca-context.sh" ]; then
+  orca_out="$(CLAUDE_PROJECT_DIR="$root" bash "$plugin_root/scripts/orca-context.sh" 2>/dev/null || true)"
+  if [ -n "$orca_out" ]; then
+    printf '%s\n' "$orca_out" | awk 'NR==1{printf "%s", $0; next} {sub(/^\[harness\] /, ""); printf " ／ %s", $0} END{printf "\n"}'
+  fi
+fi
 
 exit 0

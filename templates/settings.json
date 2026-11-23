@@ -1,6 +1,6 @@
 {
   "ultracode": true,
-  "workflowSizeGuideline": "unrestricted",
+  "workflowSizeGuideline": "medium",
   "statusLine": {
     "type": "command",
     "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.sh\""

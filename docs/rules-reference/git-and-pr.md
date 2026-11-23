@@ -1,6 +1,6 @@
 # git / PR の落とし穴
 
-`rules/core.md` の commit 粒度・承認が要る操作、`rules/code.md` の commit 規約の背景。
+`rules/core.md` の commit 粒度・承認が要る操作、`rules/code.md` の commit 規約・PR の規範の背景。
 
 ---
 
@@ -26,9 +26,9 @@
 
 ---
 
-## 3. 完了 commit に台帳を同乗させる
+## 3. 完了の印は PR に同乗させる
 
-merge 後に統合先ブランチ上で台帳だけを直すことはできない (承認が要る操作のため)。台帳の 1 行を直すためだけに追加の PR が必要になった記録がある。詳細は [`task-ledger.md`](task-ledger.md) の項目 4 を参照。
+merge 後に統合先ブランチ上で完了の印だけを直すことはできない (承認が要る操作のため)。GitHub の形では、PR の本文に `Closes #<番号>` を書いておけば merge で issue が閉じ、Status が 完了 になる。積み上げ PR（base が main 以外）は自動では閉じない。`hirai-task review <番号>` は PR を出したときに Status を レビュー中 にするだけで、issue は閉じない。積み上げの PR は、merge のあと `hirai-task done <番号>` で issue を閉じる。ファイルに一覧表を持つ形（台帳の形）で追加の PR が必要になった記録は [`task-ledger.md`](task-ledger.md) の項目 4 を参照。
 
 ---
 
@@ -62,8 +62,48 @@ merge 後に統合先ブランチ上で台帳だけを直すことはできな�
 
 ---
 
+## 7. 積み上げた PR は、下が squash で入ったら付け替えて出し直す
+
+**何が起きたか**: 下の PR が squash で入ったあと、上の PR の base を `gh pr edit --base` で付け替えた。付け替えが起こすのは `edited` だけで、CI もレビューも走らず、検査の結果は古い base で測ったまま残った。
+
+**どう対処するか**: `git fetch origin` → `git rebase --onto origin/<既定の branch> <下の PR の最後の commit> <上の branch>` → `git push --force-with-lease`（user の承認を取る）→ `hirai-pr-retarget <PR 番号> <新しい base>`（土台の `bin/`。Bash ツールでは PATH に入る）。閉じて開き直すので `reopened` で CI とレビューが起動する。付け替えのあとは `gh pr checks <n>` で新しい実行を待つ。
+
+---
+
+## 8. merge を頼む前に、検査とレビューの合格を見る
+
+**何が起きたか**: 検査が止まっている（課金・queue）PR と、AI レビューが終わっていない PR に merge を頼み、merge のあとで直しが入って追いの PR になった。
+
+**どう対処するか**: merge を頼む前に、`gh pr checks <n>` で必須の検査が全て pass、AI レビューが CRITICAL・HIGH 0 件で終わっていることを見る。検査が走らない事情があるときは、手元で通した CI の全ジョブの結果を PR に貼り、user に「検査が止まっている」と伝えたうえで頼む。PR を作る手順では、本文に `Closes #<n>`（台帳の形は `task-<id>`）を 1 行入れる。
+
+---
+
+## 9. PR の本文は、課題から実装へ抽象から具体の順に書く
+
+**何が起きたか**: PR の本文がコードの変え方（「関数 X を Y に変えた」）から始まり、読む人はどのファイルから読めばよいか、何がどう変わるのか、どんな課題の解決なのかを本文から読み取れなかった（2026-11-23 のユーザーの指摘。「どのファイルを読めばいいのか、何がどう変わるのか、抽象から具体までを説明してくれないとわからない」）。
+
+**どう対処するか**: 本文は 9 節の型で書く。雛形は `templates/pull_request_template.md`（`/hirai-lite:init` が導入先の `.github/pull_request_template.md` に、無ければ置く。あれば触らない）。
+
+| 節 | 書くこと |
+|---|---|
+| 1 ひとことで | 課題と解決を 2 行。1 行目は何に困っていたか、2 行目はどう解いたか |
+| 2 課題 | 誰が・いつ・何に困るか。起きた事故と数字（件数は何の件数かを書く） |
+| 3 解決の方針 | 考え方と、採らなかった案とその理由。流れ・つながりは文の前に mermaid の図で全体像を置く |
+| 4 何が変わるか | 前と後。流れや状態が変わるなら前後の mermaid の図。画面は前後のキャプチャ、CI や検査は「こういう変更が、こう落ちる」の例を 1 つ |
+| 5 読む順 | ファイル 3〜5 本と、そこで何を見るか。読まなくてよいもの（生成物・整形だけの差分）も名指しする |
+| 6 実装の要点 | 読む順のファイルの中で、判断が入ったところだけ（3〜5 行） |
+| 7 確かめたこと | 走らせたコマンドと exit code。未検証は「未検証」と書く |
+| 8 承認カード・決めてほしいこと | merge を頼む 7 行のカード（型は [`approval-template.md`](approval-template.md)）。決めてほしいことが他にあれば 1 行ずつ |
+| 9 対応する issue | `Closes #<n>`（台帳の形は `task-<id>`）と、設計・ADR の path と役割を 1 行ずつ |
+
+**mermaid の図**: 「解決の方針」と「何が変わるか」では、流れ・つながり・前後の違いを、文の前に mermaid の図で全体像として置く（heyapro-app の PR #1894 と同じ決まり。GitHub は PR の本文の mermaid を描く）。図は文の代わりではないので、図のあとに考え方・理由を文で書く。種類は、処理の流れは `flowchart`、やり取りは `sequenceDiagram`、状態の移り変わりは `stateDiagram-v2`、表の関係は `erDiagram`。雛形には書き方の例を 1 つ、描かれないよう HTML の注の中に置いてある。注の中では矢印の `-->` が注を閉じてしまうので、例は `==>` で書き、使うときに注の外へ出して `-->` に戻す。
+
+**画面のキャプチャ**: GitHub には画像を CLI から PR に添付する口が無い。`hirai-pr-asset <PR 番号> <png ...>`（土台の `bin/`。Bash ツールでは PATH に入る）が、画像だけを積む branch `pr-assets` に置き、本文に貼る Markdown の 1 行を出す。作業ツリーの branch と index は動かさない。押し先は git の remote の URL から引く（remote を読めないと exit 1）。
+
+**ユーザーへの報告も同じ向き**: 結論と意味を先に、詳細はあとに書く（`rules/core.md`「事実で答える」）。
+
 ## 関連
 
 - 並列委譲時の git 制約: [`subagent-operations.md`](subagent-operations.md)
-- 台帳と完了 commit: [`task-ledger.md`](task-ledger.md)
+- 完了の印と PR: 上の項目 3、台帳の形の記録は [`task-ledger.md`](task-ledger.md)
 - 事故の一覧台帳: [`incidents.md`](incidents.md)

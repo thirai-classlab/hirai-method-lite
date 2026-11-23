@@ -14,21 +14,108 @@
 #
 # 進め方 / ルールは配置先が 2 通りある (プロジェクト側 = .claude/ と 全プロジェクト共通 = $HOME/.claude/)。
 # どちらに置いたかを決め打ちすると、片方に置いた利用者に対して黙って外れる。**在る側**を選ぶ。
-#   進め方   : HC_MODE (env) > <root>/.claude/mode.yml > $HOME/.claude/mode.yml > normal
-#   入れ替え : HC_AUTO_SYNC (env) > 同じ mode.yml の auto_sync > off (既定は入れ替えない)
-#   ルール   : HARNESS_RULES_DIR > <root>/.claude/rules > $HOME/.claude/rules > <root>/.claude/rules
+#   進め方   : HC_MODE (env) > <root>/.claude/mode.yml の mode > $HOME/.claude/mode.yml の mode > normal (項目ごとに引く)
+#   入れ替え : HC_AUTO_SYNC (env) > 項目ごとに プロジェクト > ホーム の auto_sync > off (既定は入れ替えない)
+#   形       : HC_TASKS (env) > 項目ごとに プロジェクト > ホーム の tasks (ledger / github-project) > ledger
+#   ルール   : HARNESS_RULES_DIR > <dir>/.claude/rules > <root>/.claude/rules > $HOME/.claude/rules > <root>/.claude/rules
 #
 # file-top に set -e / set -o pipefail を書かない。source 元の shell flags を汚染し、
 # パイプ先の早期終了で呼び出し元ごと落ちる事故を防ぐため (関数内で局所化する)。
 
-# harness_tasks_file [root] -> 台帳パスを stdout、無ければ空 + rc 1
+# _harness_phys <dir> -> dir の実体の絶対 path (symlink を解く)。解けなければ何も出さず rc 1。
+# cd は CDPATH を空にし、builtin で呼び (chpwd・alias・関数を避け)、出力を捨てる (zsh の chpwd の ls が混ざらない)。
+_harness_phys() {
+  CDPATH= builtin cd -- "$1" >/dev/null 2>&1 && builtin pwd -P
+}
+
+# _harness_abs <dir> -> 絶対 path (. や .. を畳み、symlink を解く。dir が無ければ $PWD を前に付けるだけ)。
+_harness_abs() {
+  local d="${1:-$PWD}" a
+  a="$(_harness_phys "$d")" || { case "$d" in /*) a="$d" ;; *) a="$PWD/$d" ;; esac; }
+  [ "$a" = / ] || a="${a%/}"
+  printf '%s' "$a"
+}
+
+# _harness_resolve [dir] -> 上へ辿って 2 つを決め、_HR_TOP (git の toplevel。無ければ空) と
+# _HR_FIRST (dir から toplevel までで最初に .claude/mode.yml・.claude/settings.json・.claude/rules が在る dir。無ければ空)、
+# _HR_PKG (同じく最初に .claude/mode.yml が在る dir。無ければ空。mode:・tasks:・auto_sync: の「パッケージ」) に入れる。
+# toplevel が HOME か HOME の祖先なら git でないものとして扱う (ホームの git を「リポ」と読まない)。
+# ファイルの有無だけで決め、git を打たない (毎回動く画面下と hook を遅くしない)。常に rc 0。
+_harness_resolve() {
+  local d cur h
+  d="$(_harness_abs "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  _HR_TOP=""; _HR_FIRST=""; _HR_PKG=""
+  cur="$d"
+  while :; do
+    if [ -z "$_HR_PKG" ] && [ -f "$cur/.claude/mode.yml" ]; then _HR_PKG="$cur"; fi
+    if [ -z "$_HR_FIRST" ] && { [ -f "$cur/.claude/mode.yml" ] || [ -f "$cur/.claude/settings.json" ] || [ -d "$cur/.claude/rules" ]; }; then
+      _HR_FIRST="$cur"
+    fi
+    if [ -e "$cur/.git" ]; then _HR_TOP="$cur"; break; fi
+    [ "$cur" = / ] && break
+    cur="${cur%/*}"; [ -n "$cur" ] || cur=/
+  done
+  if [ -n "$_HR_TOP" ]; then
+    h="${HOME:-}"; [ -z "$h" ] || h="$(_harness_phys "$h" 2>/dev/null || printf '%s' "$h")"; [ "$h" = / ] || h="${h%/}"
+    if [ "$_HR_TOP" = / ] || { [ -n "$h" ] && { [ "$_HR_TOP" = "$h" ] || case "$h/" in "$_HR_TOP"/*) true ;; *) false ;; esac; }; }; then
+      _HR_TOP=""
+    fi
+  fi
+  [ -n "$_HR_TOP" ] || { _HR_FIRST=""; _HR_PKG=""; }
+  return 0
+}
+
+# harness_top [dir] -> dir を含む git の toplevel を stdout。git でない・toplevel が HOME か HOME の祖先なら dir のまま。常に rc 0。
+# worktree:・notify:・nightly_ci: の mode.yml はここだけから引く (worktree-guard・hirai-notify・orca-context と同じ root)。
+harness_top() {
+  local d
+  d="$(_harness_abs "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  _harness_resolve "$d"
+  if [ -n "$_HR_TOP" ]; then printf '%s' "$_HR_TOP"; else printf '%s' "$d"; fi
+  return 0
+}
+
+# harness_root [dir] -> ハーネスの設定 (.claude/mode.yml・settings.json・rules・state・台帳) の root を stdout。常に rc 0。
+# dir から git の toplevel まで上へ見て、最初に .claude/mode.yml か .claude/settings.json か .claude/rules が在る dir。
+# どこにも無ければ toplevel (自分の .claude を持たない apps/api は toplevel、自分の .claude を持つパッケージはそこ)。
+# git でない・toplevel が HOME か HOME の祖先なら dir のまま (HOME の .claude は「ホーム側」として別に引く)。
+harness_root() {
+  local d
+  d="$(_harness_abs "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  _harness_resolve "$d"
+  if [ -n "$_HR_FIRST" ]; then printf '%s' "$_HR_FIRST"
+  elif [ -n "$_HR_TOP" ]; then printf '%s' "$_HR_TOP"
+  else printf '%s' "$d"; fi
+  return 0
+}
+
+# harness_state_dir [dir] -> 作業の控え (.claude/state) の dir を stdout。常に rc 0。
+# 渡された dir → harness_root の順で、coordinator 以外のファイルが在る方。どちらにも無ければ新しく作る場所 (harness_root の下)。
+# /state save・resume と開始時の「前回の続き」が同じこの 1 本を通す。
+harness_state_dir() {
+  local d r p
+  d="$(_harness_abs "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  r="$(harness_root "$d")"
+  for p in "$d/.claude/state" "$r/.claude/state"; do
+    if [ -d "$p" ] && ls -A "$p" 2>/dev/null | grep -v '^coordinator' | grep -q .; then
+      printf '%s' "$p"
+      return 0
+    fi
+  done
+  printf '%s' "$r/.claude/state"
+  return 0
+}
+
+# harness_tasks_file [dir] -> 台帳パスを stdout、無ければ空 + rc 1
+# 渡された dir → harness_root → toplevel の順で在るもの。
 harness_tasks_file() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" p
+  local d="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" r t p
   if [ -n "${HARNESS_TASKS_FILE:-}" ]; then
     printf '%s' "$HARNESS_TASKS_FILE"
     return 0
   fi
-  for p in "$root/docs/tasks/list.md" "$root/.claude/tasks/list.md"; do
+  r="$(harness_root "$d")"; t="$(harness_top "$d")"
+  for p in "$d/docs/tasks/list.md" "$d/.claude/tasks/list.md" "$r/docs/tasks/list.md" "$r/.claude/tasks/list.md" "$t/docs/tasks/list.md" "$t/.claude/tasks/list.md"; do
     if [ -f "$p" ]; then
       printf '%s' "$p"
       return 0
@@ -37,39 +124,42 @@ harness_tasks_file() {
   return 1
 }
 
-# harness_draft_dir [root] -> 設計 draft の置き場を stdout (末尾スラッシュなし)
+# harness_draft_dir [dir] -> 設計 draft の置き場を stdout (末尾スラッシュなし)
+# 既にある dir (渡された dir → harness_root → toplevel の順)。無ければ harness_root の下の作るべき場所。
 harness_draft_dir() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" p
+  local d="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" r t p
   if [ -n "${HARNESS_DRAFT_DIR:-}" ]; then
     printf '%s' "$HARNESS_DRAFT_DIR"
     return 0
   fi
-  for p in "$root/docs/draft" "$root/.claude/draft"; do
+  r="$(harness_root "$d")"; t="$(harness_top "$d")"
+  for p in "$d/docs/draft" "$d/.claude/draft" "$r/docs/draft" "$r/.claude/draft" "$t/docs/draft" "$t/.claude/draft"; do
     if [ -d "$p" ]; then
       printf '%s' "$p"
       return 0
     fi
   done
-  if [ -d "$root/docs" ]; then printf '%s' "$root/docs/draft"; else printf '%s' "$root/.claude/draft"; fi
+  if [ -d "$r/docs" ]; then printf '%s' "$r/docs/draft"; else printf '%s' "$r/.claude/draft"; fi
 }
 
-# harness_incidents_file [root] -> 事故記録 (T2) のパスを stdout
+# harness_incidents_file [dir] -> 事故記録 (T2) のパスを stdout
 harness_incidents_file() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" p
+  local d="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" r t p
   if [ -n "${HARNESS_INCIDENTS_FILE:-}" ]; then
     printf '%s' "$HARNESS_INCIDENTS_FILE"
     return 0
   fi
-  for p in "$root/docs/rules-reference/incidents.md" "$root/.claude/rules-reference/incidents.md"; do
+  r="$(harness_root "$d")"; t="$(harness_top "$d")"
+  for p in "$d/docs/rules-reference/incidents.md" "$d/.claude/rules-reference/incidents.md" "$r/docs/rules-reference/incidents.md" "$r/.claude/rules-reference/incidents.md" "$t/docs/rules-reference/incidents.md" "$t/.claude/rules-reference/incidents.md"; do
     if [ -f "$p" ]; then
       printf '%s' "$p"
       return 0
     fi
   done
-  if [ -d "$root/docs" ]; then
-    printf '%s' "$root/docs/rules-reference/incidents.md"
+  if [ -d "$r/docs" ]; then
+    printf '%s' "$r/docs/rules-reference/incidents.md"
   else
-    printf '%s' "$root/.claude/rules-reference/incidents.md"
+    printf '%s' "$r/.claude/rules-reference/incidents.md"
   fi
 }
 
@@ -77,13 +167,32 @@ harness_incidents_file() {
 # 読む側 (SessionStart / 画面下部) と書く側 (/config) が別々の順で解決すると、
 # 「セッション冒頭は normal・画面下部は loop」のように食い違う。3 箇所ともここを通す。
 
+# _harness_yml_candidates <dir> <キー> -> そのキーを引く mode.yml のパスを _HY_PKG → _HY_TOP → _HY_HOME に入れる (無い所は空)。
+# mode:・tasks:・auto_sync: などは「パッケージ (dir から toplevel までで最初に .claude/mode.yml を持つ dir) → toplevel → ホーム」。
+# worktree:・notify:・nightly_ci: は「toplevel → ホーム」だけ (サブディレクトリのは読まない)。
+# git でない・toplevel が HOME か HOME の祖先なら、toplevel の代わりに dir 自身。
+_harness_yml_candidates() {
+  local d top pkg
+  d="$(_harness_abs "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  _harness_resolve "$d"
+  pkg="$_HR_PKG"
+  if [ -n "$_HR_TOP" ]; then top="$_HR_TOP"; else top="$d"; fi
+  case "${2:-}" in
+    worktree|notify|nightly_ci) pkg="" ;;
+  esac
+  _HY_PKG=""; _HY_TOP=""; _HY_HOME=""
+  [ -z "$pkg" ] || _HY_PKG="$pkg/.claude/mode.yml"
+  [ "$top" = "$pkg" ] || _HY_TOP="$top/.claude/mode.yml"
+  [ -z "${HOME:-}" ] || _HY_HOME="$HOME/.claude/mode.yml"
+}
+
 # harness_mode_file [root] -> すでに在る mode.yml のパスを stdout。
-# プロジェクト側 → ホーム側の順で探し、どちらにも無ければ空 + rc 1。
+# パッケージ → toplevel → ホーム側の順で探し、どこにも無ければ空 + rc 1。
 harness_mode_file() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" p
-  for p in "$root/.claude/mode.yml" "${HOME:+$HOME/.claude/mode.yml}"; do
-    [ -n "$p" ] || continue
-    if [ -f "$p" ]; then
+  local p
+  _harness_yml_candidates "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" mode
+  for p in "$_HY_PKG" "$_HY_TOP" "$_HY_HOME"; do
+    if [ -n "$p" ] && [ -f "$p" ]; then
       printf '%s' "$p"
       return 0
     fi
@@ -95,7 +204,8 @@ harness_mode_file() {
 # **すでに在る側に書く。** 両方に無いときだけプロジェクト側に作る。
 # (ホーム側に置いた人のプロジェクトへ mode.yml を新設すると、ホーム側を黙って覆い隠す)
 harness_mode_write_file() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" p
+  local root p
+  root="$(harness_root "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
   if p="$(harness_mode_file "$root")"; then
     printf '%s' "$p"
     return 0
@@ -104,16 +214,15 @@ harness_mode_write_file() {
 }
 
 # harness_mode [root] -> いまの進め方 (normal / loop / 未知の値) を stdout。常に rc 0。
-# env HC_MODE > 在る側の mode.yml > normal。読めない・空・壊れている場合も normal。
+# env HC_MODE > プロジェクトの mode.yml の mode: > ホームの mode.yml の mode: > normal。
+# 項目ごとに引く (プロジェクト側に mode: が無ければホーム側の値を使う)。読めない・空・壊れている場合も normal。
 harness_mode() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" f m=""
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" m=""
   if [ -n "${HC_MODE:-}" ]; then
     printf '%s' "$HC_MODE"
     return 0
   fi
-  if f="$(harness_mode_file "$root")"; then
-    m="$(sed -n 's/^[[:space:]]*mode:[[:space:]]*\([a-z]*\).*/\1/p' "$f" 2>/dev/null | head -1)"
-  fi
+  m="$(harness_yml_value "$root" mode)"
   [ -n "$m" ] || m="normal"
   printf '%s' "$m"
 }
@@ -127,16 +236,190 @@ harness_mode() {
 
 # harness_auto_sync [root] -> on / off (未知の値はそのまま) を stdout。常に rc 0。
 harness_auto_sync() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" f v=""
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" v=""
   if [ -n "${HC_AUTO_SYNC:-}" ]; then
     printf '%s' "$HC_AUTO_SYNC"
     return 0
   fi
-  if f="$(harness_mode_file "$root")"; then
-    v="$(sed -n 's/^[[:space:]]*auto_sync:[[:space:]]*\([A-Za-z]*\).*/\1/p' "$f" 2>/dev/null | head -1)"
-  fi
+  v="$(harness_yml_value "$root" auto_sync)"
   [ -n "$v" ] || v="off"
   printf '%s' "$v"
+}
+
+# --- タスク管理の形 (tasks) ---------------------------------------------------
+# 台帳 (ledger) と GitHub Project (github-project) のどちらで回すかは、リポごとに
+# .claude/mode.yml の tasks: で**宣言する**。Project の有無・remote・gh の成否からは見分けない
+# (見分けに失敗して尋ねて止まる道を無くすため)。GraphQL を打つのは github-project のときだけ。
+
+# harness_yml_file_value <file> <キー> -> その file の <キー>: の値を stdout。無ければ空。常に rc 0。
+# 値の前後の空白と引用符 (" と ') と、行末のコメント (空白のあとの # から) を外す。
+harness_yml_file_value() {
+  local f="${1:-}" k="${2:-}"
+  [ -n "$k" ] && [ -f "$f" ] || return 0
+  sed -nE "s/^[[:space:]]*${k}:[[:space:]]*(.*)\$/\\1/p" "$f" 2>/dev/null | head -1 \
+    | sed -E 's/(^|[[:space:]]+)#.*$//; s/[[:space:]]+$//; s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/'
+}
+
+# harness_yml_value <root> <キー> -> <キー>: の値を stdout。無ければ空。常に rc 0。
+# 項目ごとに「パッケージ (最初に .claude/mode.yml を持つ dir) → toplevel → ホームの ~/.claude/mode.yml」の順で引く
+# (片方のファイルだけを読まない。env の上書きと既定は呼び出し側で扱う)。
+# ただし worktree・notify・nightly_ci は「toplevel → ホーム」だけ (_harness_yml_candidates)。
+harness_yml_value() {
+  local k="${2:-}" v="" p
+  [ -n "$k" ] || return 0
+  _harness_yml_candidates "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" "$k"
+  for p in "$_HY_PKG" "$_HY_TOP" "$_HY_HOME"; do
+    [ -n "$p" ] || continue
+    v="$(harness_yml_file_value "$p" "$k")"
+    [ -z "$v" ] || break
+  done
+  printf '%s' "$v"
+}
+
+# harness_tasks_form [root] -> ledger / github-project を stdout。常に rc 0。
+# 解決順は HC_TASKS (env) > mode.yml の tasks: > ledger。
+# 項目が無い・空・未知の値は ledger (台帳。1.x と同じ動き)。
+harness_tasks_form() {
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" v
+  v="${HC_TASKS:-}"
+  [ -n "$v" ] || v="$(harness_yml_value "$root" tasks)"
+  case "$v" in
+    github-project) printf 'github-project' ;;
+    *) printf 'ledger' ;;
+  esac
+  return 0
+}
+
+# harness_tasks_slug [root] -> origin の github.com の owner/repo から末尾の .git と / を外し、/ を - にした名前を stdout。
+# 2.x の控えの名前と同じ作り方。github.com 以外・remote 無しは空。常に rc 0。
+harness_tasks_slug() {
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" url
+  url="$(git -C "$root" remote get-url origin 2>/dev/null || true)"
+  case "$url" in
+    *github.com*) printf '%s' "$url" | sed -E 's#^.*github\.com[:/]##; s#\.git$##; s#/+$##; s#/#-#g' 2>/dev/null ;;
+  esac
+  return 0
+}
+
+# harness_tasks_migrate [root] -> プロジェクトの .claude/mode.yml に tasks: が無いときだけ、1 度だけ書き込む
+# (/hirai-lite:update の手順 2b)。tasks: はプロジェクト側にだけ書く (ホームには書かない。ホームの値は他のリポにも効くため)。
+# 2.x (hirai-lite-v2) の痕跡は、このリポの slug の控え (~/.claude/plugins/data/hirai-lite-v2-hirai-lite/
+# tasks-<slug>.json) だけで見る (機械全体で見ない。別のリポの控えで書かない)。
+#   控えの form が ghp                 -> github-project を書く
+#   控えが在り form が ghp 以外        -> ledger を書く。ただしプロジェクト側に mode.yml が無いときは書かない
+#                                         (ledger は既定と同じ。新しい .claude/ を作ると mode の書き込み先がそこへ移る)
+#   控えが無い                          -> 書かない
+# 出力は 1 行 (書いたら "tasks: <値> を <パス> に書きました (<理由>)"、書かなければ "tasks: 書きませんでした (<理由>)")。
+# プロジェクト側にすでに tasks: があれば何もしない (無出力・rc 0)。書けなかったら rc 1。以後は自動で見分けない。
+harness_tasks_migrate() {
+  local root cur f slug cache val why
+  root="$(harness_root "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  f="$root/.claude/mode.yml"
+  cur="$(harness_yml_file_value "$f" tasks)"
+  [ -n "$cur" ] || cur="$(harness_yml_file_value "$(harness_top "$root")/.claude/mode.yml" tasks)"
+  [ -z "$cur" ] || return 0
+  slug="$(harness_tasks_slug "$root")"
+  cache=""
+  [ -z "$slug" ] || cache="$HOME/.claude/plugins/data/hirai-lite-v2-hirai-lite/tasks-${slug}.json"
+  if [ -z "$cache" ] || [ ! -f "$cache" ]; then
+    printf 'tasks: 書きませんでした (2.x の Project の控えが無い。tasks: が無ければ ledger で動く。GitHub Project にするなら /hirai-lite:config の項目 8)\n'
+    return 0
+  fi
+  if grep -Eq '"form"[[:space:]]*:[[:space:]]*"ghp"' "$cache" 2>/dev/null; then
+    val="github-project"; why="2.x の Project の控え ($cache) が ghp のため"
+  else
+    val="ledger"; why="2.x の控え ($cache) が ghp ではないため"
+    if [ ! -f "$f" ]; then
+      printf 'tasks: 書きませんでした (ledger は既定と同じで、このリポに .claude/mode.yml が無い。新しく作らない)\n'
+      return 0
+    fi
+  fi
+  harness_yml_set "$f" tasks "$val" || return 1
+  printf 'tasks: %s を %s に書きました (%s)\n' "$val" "$f" "$why"
+}
+
+# harness_pm_install_dir [root] -> 足すプラグイン hirai-project-method の、このリポの行のうち版が最大の installPath を stdout。
+# 無ければ空 + rc 1 (python3 か installed_plugins.json が無いときも rc 1)。
+# このリポの enabledPlugins (settings.local.json [本体の checkout のものも見る] → settings.json → ~/.claude/settings.json の順) で false なら「無い」とみなす。
+# 「このリポの行」= scope が user・managed の行、または projectPath がこのリポと同じ git のリポの行。
+# 同じ git のリポかは `git rev-parse --git-common-dir` (両方) が同じかで見る。worktree W1 で project の範囲に入れた行は、
+# 本体の checkout・ほかの worktree からも同じリポとして当たる。projectPath が無い・git でないとき (消えた worktree など) だけ
+# root との前方一致に落とす。行の絞りはここ 1 か所 (hirai-task の path・更新の知らせ・/update の見分けが使う)。
+harness_pm_install_dir() {
+  local root f="${HOME:-}/.claude/plugins/installed_plugins.json" p common
+  root="$(harness_top "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  [ -f "$f" ] && command -v python3 >/dev/null 2>&1 || return 1
+  common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  p="$(python3 -I -c 'import json,os,re,subprocess,sys
+d = json.load(open(sys.argv[1]))
+root = os.path.realpath(sys.argv[3]).rstrip("/")
+common = os.path.realpath(sys.argv[4]) if sys.argv[4] else ""
+def gc(path):
+    try:
+        o = subprocess.run(["git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True, timeout=5)
+        return os.path.realpath(o.stdout.strip()) if o.returncode == 0 and o.stdout.strip() else ""
+    except Exception:
+        return ""
+def disabled():
+    # enabledPlugins で false なら「無い」とみなす。優先は local -> project -> user (最初に載っている値が決める)。
+    # settings.local.json は git-common-dir の親 (本体の checkout) のものを先に見る (worktree でも Claude Code は本体のを使う)。
+    main = os.path.dirname(common) if common and os.path.basename(common) == ".git" else ""
+    cands = ([os.path.join(main, ".claude", "settings.local.json")] if main else []) + [os.path.join(root, ".claude", "settings.local.json"), os.path.join(root, ".claude", "settings.json"), os.path.join(os.path.expanduser("~"), ".claude", "settings.json")]
+    for sp in cands:
+        try:
+            ep = json.load(open(sp)).get("enabledPlugins") or {}
+        except Exception:
+            continue
+        for k, v in ep.items():
+            if k.split("@", 1)[0] == sys.argv[2] and isinstance(v, bool):
+                return v is False
+    return False
+def mine(x):
+    if x.get("scope") in ("user", "managed"):
+        return True
+    pp = str(x.get("projectPath") or "").rstrip("/")
+    if not pp:
+        return False
+    g = gc(pp) if os.path.isdir(pp) else ""
+    if g and common:
+        return g == common
+    ppr = os.path.realpath(pp).rstrip("/")
+    return root == ppr or root.startswith(ppr + "/")
+rows = [] if disabled() else [x for k, v in d.get("plugins", {}).items() if k.split("@", 1)[0] == sys.argv[2] for x in v if x.get("installPath") and mine(x)]
+rows.sort(key=lambda x: [int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version", "0")).split("-", 1)[0])])
+print(rows[-1]["installPath"] if rows else "")' "$f" hirai-project-method "$root" "$common" 2>/dev/null)"
+  [ -n "$p" ] || return 1
+  printf '%s' "$p"
+}
+
+# harness_pm_task_bin [root] -> 足すプラグイン hirai-project-method の hirai-task の絶対 path を stdout。無ければ空 + rc 1。
+# hook と画面下では、プラグインの bin/ は PATH に入らない (Bash ツールだけに入る)。PATH に頼らず探す:
+#   1. harness_pm_install_dir (installed_plugins.json のこのリポの行の最大版) の bin/hirai-task
+#   2. python3 が無いとき・installed_plugins.json が無いときだけ ~/.claude/plugins/cache/hirai-lite/hirai-project-method/ の最大版
+#      (installed に行があるのに該当が無い = 外した・別のリポの install、のときは cache へ落ちない。入れ方を示して止まる側へ倒す)
+#   3. PATH の hirai-task
+harness_pm_task_bin() {
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" f="${HOME:-}/.claude/plugins/installed_plugins.json" p="" c
+  if [ -f "$f" ] && command -v python3 >/dev/null 2>&1; then
+    p="$(harness_pm_install_dir "$root" 2>/dev/null || true)"
+    if [ -n "$p" ] && [ -x "$p/bin/hirai-task" ]; then
+      printf '%s' "$p/bin/hirai-task"
+      return 0
+    fi
+  else
+    c="$(ls -d "${HOME:-}"/.claude/plugins/cache/hirai-lite/hirai-project-method/*/ 2>/dev/null | sort -V | tail -1)"
+    c="${c%/}"
+    if [ -n "$c" ] && [ -x "$c/bin/hirai-task" ]; then
+      printf '%s' "$c/bin/hirai-task"
+      return 0
+    fi
+  fi
+  c="$(command -v hirai-task 2>/dev/null || true)"
+  if [ -n "$c" ]; then
+    printf '%s' "$c"
+    return 0
+  fi
+  return 1
 }
 
 # harness_yml_set <file> <キー> <値> -> その 1 行だけを書き換える (他の行は 1 バイトも触らない)。
@@ -162,16 +445,18 @@ harness_yml_set() (
 # /add-rule の予算計算と /rules-audit の棚卸しが見る置き場。プロジェクト側を決め打ちすると、
 # 全プロジェクト共通 (/init user) に置いた利用者に対して「既存ルール 0 件」と誤判定する。
 
-# harness_rules_dir [root] -> ルールの置き場を stdout (末尾スラッシュなし、常に rc 0)。
+# harness_rules_dir [dir] -> ルールの置き場 (渡された dir に在ればそれ → harness_root → ホームの順。どこにも無ければ harness_root の下)を stdout (末尾スラッシュなし、常に rc 0)。
 # 両方に在る場合はプロジェクト側を返すが、それは二重ロード状態なので
 # scripts/scope-check.sh の警告に従って先に片方を消す (予算は 2 か所の合計で効いている)。
 harness_rules_dir() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" p
+  local d root p
+  d="$(_harness_abs "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  root="$(harness_root "$d")"
   if [ -n "${HARNESS_RULES_DIR:-}" ]; then
     printf '%s' "$HARNESS_RULES_DIR"
     return 0
   fi
-  for p in "$root/.claude/rules" "${HOME:+$HOME/.claude/rules}"; do
+  for p in "$d/.claude/rules" "$root/.claude/rules" "${HOME:+$HOME/.claude/rules}"; do
     [ -n "$p" ] || continue
     if [ -d "$p" ]; then
       printf '%s' "$p"

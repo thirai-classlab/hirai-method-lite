@@ -3,11 +3,12 @@
 このリポジトリは MIT License で配布している (`LICENSE`)。
 以下は第三者の著作物を同梱している部分で、それぞれの原ライセンスと著作権表示をここに保持する。
 
-## agents/tdd-guide.md, agents/code-reviewer.md, agents/security-reviewer.md
+## agents/tdd-guide.md
 
 - 出典: [everything-claude-code](https://github.com/affaan-m/everything-claude-code) の `agents/` (commit `1a50145`)
 - ライセンス: MIT License
-- 変更: `tdd-guide.md` と `security-reviewer.md` から、本プラグインに同梱していないスキルを指す参照 1 行ずつを削除した。`code-reviewer.md` は原文のまま。
+- 変更: 本プラグインに同梱していないスキルを指す参照 1 行を削除した。カバレッジの「80%+」4 か所を「導入先が決めた基準」に替えた（v2.7.0）。
+- 同じ出典の `code-reviewer.md` と `security-reviewer.md` も v2.6.0 まで同梱していたが、v2.7.0 で外した（Claude Code 組み込みの `/code-review`・`/simplify`・`/security-review` に置き換え）。
 
 ```
 MIT License

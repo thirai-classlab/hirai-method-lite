@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+# hirai-notify: Orca のコーディネーターへ、担当の会話の「問い」「完了」「停止」を知らせる。
+#
+#   hirai-notify question|done|stopped <file> <要約> [--dispatch-id <id>] [--to <run:id>]
+#   hirai-notify waiting <要約> [--subject <件名>] [--dispatch-id <id>] [--to <run:id>]
+#
+#   question : 決めてもらうことができた。<file> は単独で読める問い（決めること・案・帰結・推し）。
+#   done     : 終わった。<file> は報告。
+#   stopped  : 続けられないエラーで止まった。<file> は報告。
+#   waiting  : 権限の確認の画面などで止まっている（ファイル無し。hooks/notify-attention.sh が送る）。
+#              --type escalation・件名は --subject（既定「権限の確認で止まっています」）・本文は <導入先の root>｜<要約>。
+#
+# 送り方:
+#   Orca に立ち上げられた担当（--dispatch-id か環境変数 HIRAI_DISPATCH_ID で Dispatch の id を渡されたとき。
+#   id は Orca が担当の最初に差し込む前置きの文にある。Orca は id を環境変数では渡さない
+#   — `orca orchestration send --help` の「injected preambles include the correct --from value」）:
+#       question → orchestration send --type question
+#       done     → --type worker_done --outcome succeeded --report-path <file>
+#       stopped  → --type worker_done --outcome failed    --report-path <file>
+#     --to は省く（「From an active Dispatch, an omitted recipient defaults to its owning Run mailbox」）。
+#   立ち上げられていない会話（宛先を --to か環境変数 HIRAI_COORDINATOR で渡されたとき）:
+#       question → --type question --to <宛先>
+#       done|stopped → --type status --subject 完了|停止 --to <宛先>
+#
+# 宛先の決め方（上が先）: --dispatch-id > --to > 環境変数 HIRAI_DISPATCH_ID > HIRAI_COORDINATOR
+#   > 導入先の .claude/state/coordinator（1 行 `run:<id>`。担当が依頼文で宛先を渡されたら最初に書く。
+#     更新から 24 時間を過ぎたら使わない。done を送れたら消す）
+#   > どれも無く ORCA_TERMINAL_HANDLE があれば --to を省いて送る（Orca の active Dispatch では宛先省略が Run の受け口。届かなければ orca の stderr）。
+#
+# `.claude/mode.yml` の `notify: off`（既定）なら何もせず exit 0。env HC_NOTIFY が優先。
+# <file> は絶対 path に直して送る（無ければ exit 2）。--to と --dispatch-id の両方が引数にあれば --dispatch-id。引数は環境変数より先。
+# 送れなかったときは理由を stderr に出して exit 1（黙って捨てない）。
+# 送る操作は、検査の結果を見てから別の呼び出しで打つ（`;` `&&` `||` の分岐の後ろに繋げない）。
+set -uo pipefail
+
+usage() {
+  echo "usage: hirai-notify question|done|stopped <file> <要約> [--dispatch-id <id>] [--to <run:id>]" >&2
+  echo "       hirai-notify waiting <要約> [--subject <件名>] [--dispatch-id <id>] [--to <run:id>]" >&2
+}
+
+kind="${1:-}"; file=""; summary=""
+case "$kind" in
+  question|done|stopped)
+    file="${2:-}"; summary="${3:-}"
+    [ -n "$file" ] && [ -n "$summary" ] || { usage; exit 2; }
+    # 要約を忘れて次のオプションが要約の位置に来た形（値が空に展開された --dispatch-id など）は送らない
+    case "$file" in --*) usage; exit 2 ;; esac
+    case "$summary" in --*) usage; exit 2 ;; esac
+    shift 3 ;;
+  waiting)
+    summary="${2:-}"
+    [ -n "$summary" ] || { usage; exit 2; }
+    case "$summary" in --*) usage; exit 2 ;; esac
+    shift 2 ;;
+  *) usage; exit 2 ;;
+esac
+arg_to=""
+arg_dispatch=""
+arg_subject=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --subject)
+      [ "$kind" = "waiting" ] && [ $# -ge 2 ] && [ -n "$2" ] || { echo "hirai-notify: --subject は waiting だけで、値が要る" >&2; usage; exit 2; }
+      arg_subject="$2"; shift 2 ;;
+    --to|--dispatch-id)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "hirai-notify: $1 に値が無い" >&2; usage; exit 2; }
+      if [ "$1" = "--to" ]; then arg_to="$2"; else arg_dispatch="$2"; fi
+      shift 2 ;;
+    *) usage; exit 2 ;;
+  esac
+done
+# 引数が環境変数より先。引数どうしでは --dispatch-id を採る
+to=""; dispatch=""
+if [ -n "$arg_dispatch" ]; then
+  dispatch="$arg_dispatch"
+elif [ -n "$arg_to" ]; then
+  to="$arg_to"
+elif [ -n "${HIRAI_DISPATCH_ID:-}" ]; then
+  dispatch="$HIRAI_DISPATCH_ID"
+else
+  to="${HIRAI_COORDINATOR:-}"
+fi
+
+# notify の値: env HC_NOTIFY > プロジェクトの mode.yml > ホームの mode.yml > off
+# プロジェクトの root は harness_top "$PWD"（git のトップ。トップが HOME か HOME の祖先なら cwd のまま。開始時の表示・guard と同じ規則）
+lib="$(CDPATH= builtin cd -- "$(dirname "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && builtin pwd -P)/scripts/tasks-path.sh"
+notify="${HC_NOTIFY:-}"
+if [ -z "$notify" ] && [ -f "$lib" ]; then
+  notify="$( . "$lib" 2>/dev/null && harness_yml_value "$PWD" notify )" || notify=""
+fi
+[ "$notify" = "orca" ] || exit 0
+
+# top_of <dir> -> 控え・本文・後始末の root（harness_top。道具が無ければ git のトップ、git でなければ dir のまま）
+top_of() {
+  local t=""
+  [ ! -f "$lib" ] || t="$( . "$lib" 2>/dev/null && harness_top "$1" )" || t=""
+  [ -n "$t" ] || t="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" || t=""
+  printf '%s' "${t:-$1}"
+}
+
+# 宛先がまだ無いとき: 導入先の .claude/state/coordinator の 1 行目 > ORCA_TERMINAL_HANDLE があれば宛先を省いて送る
+omit_to=0
+coordinator_file=""
+COORDINATOR_TTL_MIN=1440
+if [ -z "$dispatch" ] && [ -z "$to" ]; then
+  # 控えは cwd の toplevel → CLAUDE_PROJECT_DIR の toplevel の順に探す（入れ子の worktree の subagent から打っても届く）
+  # 控えは更新から 24 時間（COORDINATOR_TTL_MIN 分）だけ使う。使い回した worktree の古い Run へ送らないため
+  for cdir in "$PWD" "${CLAUDE_PROJECT_DIR:-}"; do
+    [ -n "$cdir" ] && [ -d "$cdir" ] || continue
+    croot="$(top_of "$cdir")"
+    if [ -n "$(find "$croot/.claude/state/coordinator" -type f -mmin "-$COORDINATOR_TTL_MIN" 2>/dev/null)" ]; then
+      to="$(head -1 "$croot/.claude/state/coordinator" 2>/dev/null | tr -d '[:space:]')" || to=""
+      [ -z "$to" ] || { coordinator_file="$croot/.claude/state/coordinator"; break; }
+    fi
+  done
+  if [ -z "$to" ] && [ -n "${ORCA_TERMINAL_HANDLE:-}" ]; then
+    omit_to=1
+  fi
+fi
+
+if ! command -v orca >/dev/null 2>&1; then
+  echo "hirai-notify: orca コマンドが PATH に無い" >&2
+  exit 1
+fi
+
+# <file> は絶対 path にして渡す（コーディネーターは別の dir から読む）。無ければ引数の取り違えとして止める
+if [ "$kind" = "waiting" ]; then
+  wroot="$(top_of "$PWD")"
+  wbody="${wroot}｜${summary}"
+  wsubject="${arg_subject:-権限の確認で止まっています}"
+else
+  if [ ! -f "$file" ]; then
+    echo "hirai-notify: <file> が無い: ${file}（引数は <file> <要約> の順）" >&2
+    exit 2
+  fi
+  file="$(CDPATH= builtin cd -- "$(dirname "$file")" >/dev/null 2>&1 && builtin pwd -P)/$(basename "$file")"
+fi
+
+# 終わりの知らせに添える「消してよい worktree: N 本（うち退避が要る M 本）」（gh も使う。全体で NOTE_LIMIT_SEC 秒を超えたら「数えられなかった」と出す。
+# 0 本・読めないときは空。宛先が決まった後にだけ呼ぶ。超えたら process group ごと止める）
+NOTE_LIMIT_SEC=15
+worktree_note() {
+  local n evac
+  read -r n evac <<EOF_WT
+$(env -u HIRAI_WORKTREES_NO_GH python3 -I -c '
+import json, os, signal, subprocess, sys
+p = subprocess.Popen([sys.executable, sys.argv[1], "list", "--json"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+try:
+    out, _ = p.communicate(timeout=int(sys.argv[2]))
+except subprocess.TimeoutExpired:
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    print("timeout")
+    sys.exit(0)
+try:
+    ok = [r for r in json.loads(out) if r.get("verdict") == "消してよい"]
+except Exception:
+    sys.exit(0)
+print(len(ok), sum(1 for r in ok if r.get("evacuate")))
+' "$(dirname "${BASH_SOURCE[0]}")/hirai-worktrees" "$NOTE_LIMIT_SEC" 2>/dev/null)
+EOF_WT
+  if [ "$n" = "timeout" ]; then
+    printf '%s' "｜消してよい worktree: 数えられなかった（hirai-worktrees list で見る）"
+    return 0
+  fi
+  case "${n}${evac}" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$n" -gt 0 ] || return 0
+  printf '%s' "｜消してよい worktree: ${n} 本（うち退避が要る ${evac} 本。hirai-worktrees list で見る）"
+}
+
+# 終わりの知らせに添える「worktree の残り」（今いる worktree の未コミットと未 push を自分で数える。git でなければ空）
+# 未コミット: untracked は all（status.showUntrackedFiles=no の設定でも数える）。未 push: origin のどの branch にも無い commit の数（upstream の有無によらない）
+worktree_rest() {
+  local top dirty ahead
+  top="$(top_of "$PWD")"
+  [ -e "$top/.git" ] || return 0   # git でない（HOME の git の下も）
+  dirty="$(GIT_OPTIONAL_LOCKS=0 git -C "$top" status --porcelain --untracked-files=all 2>/dev/null | grep -vE '^.. "?(\.tmp|\.claude/state)(/|"|$)' | wc -l | tr -d '[:space:]')"
+  case "$dirty" in ''|*[!0-9]*) return 0 ;; esac
+  ahead="$(GIT_OPTIONAL_LOCKS=0 git -C "$top" rev-list --count HEAD --not --remotes=origin 2>/dev/null | tr -d '[:space:]')"
+  case "$ahead" in ''|*[!0-9]*) return 0 ;; esac
+  if [ "$dirty" -eq 0 ] && [ "$ahead" -eq 0 ]; then printf '%s' "｜worktree の残り: なし"; return 0; fi
+  printf '%s' "｜worktree の残り: 未コミット ${dirty} 件・未 push ${ahead} 件"
+}
+
+args=()
+if [ -n "$dispatch" ]; then
+  case "$kind" in
+    waiting)  args=(--type escalation --subject "$wsubject" --body "$wbody") ;;
+    question) args=(--type question --subject "$summary" --body "${file}｜${summary}") ;;
+    done)     args=(--type worker_done --outcome succeeded --report-path "$file" --subject "${summary}$(worktree_rest)$(worktree_note)") ;;
+    stopped)  args=(--type worker_done --outcome failed --report-path "$file" --subject "$summary") ;;
+  esac
+  args+=(--dispatch-id "$dispatch")
+elif [ -n "$to" ] || [ "$omit_to" -eq 1 ]; then
+  case "$kind" in
+    waiting)  args=(--type escalation --subject "$wsubject" --body "$wbody") ;;
+    question) args=(--type question --subject "$summary" --body "${file}｜${summary}") ;;
+    done)     args=(--type status --subject "完了: ${summary}" --body "${file}｜${summary}$(worktree_rest)$(worktree_note)") ;;
+    stopped)  args=(--type status --subject "停止: ${summary}" --body "${file}｜${summary}") ;;
+  esac
+  [ -z "$to" ] || args+=(--to "$to")
+else
+  echo "hirai-notify: 送り先が無い（--dispatch-id / HIRAI_DISPATCH_ID・--to / HIRAI_COORDINATOR・.claude/state/coordinator・ORCA_TERMINAL_HANDLE のどれも無い）" >&2
+  exit 1
+fi
+
+orca orchestration send "${args[@]}"
+rc=$?
+# 担当が終わった（done）ら宛先の控えを消す（次に同じ worktree を使う担当が、この Run へ送らないため）。送れたときだけ
+if [ "$rc" -eq 0 ] && [ "$kind" = "done" ]; then
+  [ -z "$coordinator_file" ] || rm -f "$coordinator_file" 2>/dev/null
+  croot_done="$(top_of "$PWD")"
+  rm -f "$croot_done/.claude/state/coordinator" 2>/dev/null
+fi
+exit "$rc"

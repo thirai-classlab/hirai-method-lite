@@ -23,20 +23,21 @@
 
 | ファイル | 内容 | 読むとき |
 |---|---|---|
-| [`approval-template.md`](approval-template.md) | **承認を求めるときの型（5 項目）**と記入例 3 つ、悪い例と良い例、使う場面の一覧 | 承認を求めるとき（ルール追加 / タスク / 設計 / 設定変更 / 元に戻せない操作） |
+| [`approval-template.md`](approval-template.md) | **人に頼むときの型（承認カード・判断カード・人の作業カード）**と記入例 5 つ、悪い例と良い例、使う場面の一覧 | 承認・判断・人の作業を頼むとき（着手 / ルール追加 / 設計 / 設定変更 / 元に戻せない操作 / 裁定 / 外部の手続き） |
+| `glossary.md`（足すプラグイン hirai-project-method の `docs/rules-reference/`） | **進め方の用語**（段・機能のまとまり・作業・8 つの状態・目印・カード）。`tasks: github-project` のリポだけ | 案件を知らない人がカードやボードを読むとき |
 | [`incidents.md`](incidents.md) | **このハーネスで起きた**事故の台帳。1 事故 = 1 行、再発回数つき | 事故が起きたとき / 2 回目かを判定するとき |
 | [`incidents-legacy.md`](incidents-legacy.md) | **前ハーネスで起きた**事故 33 件。参考資料で、判定には使わない | 過去に同種の事例があったか調べるとき |
 | [`subagent-operations.md`](subagent-operations.md) | 並列起動数の実測、委譲、共有ファイル競合、ファイル間契約、委譲先の検証 | subagent を立てる前 |
 | [`review-practice.md`](review-practice.md) | 偽収束、反復回数、誤報 CRITICAL の潰し方、指摘の集約、設計乖離 | レビューを回すとき / 収束を判断するとき |
 | [`design-process.md`](design-process.md) | 依存の実在確認、前提崩壊時の動き方、規範の書き方、計測値の検証 | draft を起こすとき / 規範を足すとき |
-| [`task-ledger.md`](task-ledger.md) | タスク構造、完了条件の書き方、一括計画、完了 commit | 台帳を触るとき |
+| [`task-ledger.md`](task-ledger.md) | ファイルに一覧表（台帳）を持つ形の記録。タスク構造、完了条件の書き方、一括計画、完了 commit。GitHub の形との区別つき | 台帳の形のリポで台帳を触るとき |
 | [`testing-practice.md`](testing-practice.md) | テストが嘘をつく典型、失敗の分類、並行性のテスト | テストを書く / 直すとき |
-| [`git-and-pr.md`](git-and-pr.md) | stacked PR、複合コマンド、PR 本文の渡し方 | PR を出すとき |
+| [`git-and-pr.md`](git-and-pr.md) | stacked PR、複合コマンド、PR 本文の渡し方、PR の本文の 9 節の型（§9） | PR を出すとき |
 | [`shell-pitfalls.md`](shell-pitfalls.md) | `set -e` の leak、`grep -c` の exit code、実行ビット、コマンド解決 | bash を書くとき |
 | [`plugin-development.md`](plugin-development.md) | manifest のキー、`validate` の限界、`${CLAUDE_PLUGIN_ROOT}`、更新経路 | プラグインを触るとき |
 | [`context-and-output.md`](context-and-output.md) | コンテキスト予算の実測、出力の形について user が求めたこと | 層構成を変えるとき / 出力形式を決めるとき |
 
-記録の大半は**前ハーネス (hirai-method) から 2026-08-27 に移入した実測と事故**である。前ハーネス固有の仕組み (hook / preset / 各種 guard) に依存する記述は、そのまま持ち込まず「前ハーネスの事例」と明示してある。**新ハーネスに機械強制はほとんど無い** — ここに書かれた対処は原則すべて指針であり、実際に止まるのは `settings.json` の `permissions` に登録された操作だけである。
+記録の大半は**前ハーネス (hirai-method) から 2026-08-27 に移入した実測と事故**である。前ハーネス固有の仕組み (hook / preset / 各種 guard) に依存する記述は、そのまま持ち込まず「前ハーネスの事例」と明示してある。**新ハーネスに機械強制はほとんど無い** — ここに書かれた対処は原則すべて指針であり、実際に止まるのは `settings.json` の `permissions` に登録された操作と、`worktree: block` のときの `worktree-guard`（`_meta.md` 条 5 の例外）だけである。
 
 ### 台帳を 2 つに分けている理由
 
