@@ -4765,7 +4765,7 @@ def cmd_today() -> int:
 
 
 def _print_removable_worktrees() -> None:
-    """after-merge の出力の末尾に「消してよい worktree: N 本」を 1 行足す（0 本・道具が無い・失敗なら出さない）。
+    """after-merge の出力の末尾に「消してよい worktree: N 本（うち退避が要る M 本）」を 1 行足す（0 本・道具が無い・失敗なら出さない）。
     判定は土台の bin/hirai-worktrees（消す操作は持たない）。"""
     tool = shutil.which('hirai-worktrees')
     if not tool:
@@ -4775,9 +4775,10 @@ def _print_removable_worktrees() -> None:
         rows = json.loads(proc.stdout) if proc.returncode == 0 else []
     except (OSError, subprocess.SubprocessError, ValueError):
         return
-    count = sum(1 for r in rows if isinstance(r, dict) and r.get('verdict') == '消してよい')
-    if count:
-        print(f'消してよい worktree: {count} 本（`hirai-worktrees list` で見る）')
+    ok = [r for r in rows if isinstance(r, dict) and r.get('verdict') == '消してよい']
+    if ok:
+        evac = sum(1 for r in ok if r.get('evacuate'))
+        print(f'消してよい worktree: {len(ok)} 本（うち退避が要る {evac} 本。`hirai-worktrees list` で見る）')
 
 
 def cmd_after_merge(pr_number: int) -> int:

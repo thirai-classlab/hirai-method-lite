@@ -8,7 +8,8 @@
 #
 # 呼び出し元: bin/hirai-task（refresh_board_counts が harness_ghp_refresh now、`hirai-task line` が
 # harness_ghp_line と harness_ghp_refresh_async background）。土台の session-start・statusline は
-# この関数を直接呼ばず、`hirai-task line` を PATH で呼ぶ。
+# この関数を直接呼ばず、installed_plugins.json から引いた絶対 path で `hirai-task line` を呼ぶ（hook の PATH に
+# プラグインの bin は無い）。
 
 # --- GHP (GitHub Project) の形 -------------------------------------------------
 # どの形で動くか (台帳か GitHub Project か) は、土台の `.claude/mode.yml` の `tasks:` が決める

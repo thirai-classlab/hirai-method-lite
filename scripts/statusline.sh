@@ -49,6 +49,14 @@ pct() {  # 使用率を整数 % + 色に。非数は "—"。0-100 に clamp。
   printf '%s%s%%%s' "$col" "$v" "$R"
 }
 
+# 共通ライブラリ (同じディレクトリ) を先に読み、root を git の toplevel に解く (サブディレクトリで開いても
+# mode.yml・台帳・更新の鍵が本体と同じ値になる)。解くのはここ 1 回だけ (毎回動くので git を二重に打たない)。
+# tasks-path.sh と statusline.sh はどちらもプラグイン所有で、/init と /update が対で入れ替える。
+[ -f "$here/tasks-path.sh" ] && . "$here/tasks-path.sh" 2>/dev/null || true
+if command -v harness_root >/dev/null 2>&1; then
+  root="$(harness_root "$root")"
+fi
+
 model="$(jqf '.model.display_name')"; [ -n "$model" ] || model="Claude"
 
 # --- context 使用率 ---------------------------------------------------------
@@ -81,9 +89,6 @@ branch="$(jqf '.workspace.repo.branch')"
 [ -n "$branch" ] || branch="$(git -C "$root" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 [ -n "$branch" ] || branch="-"
 
-# 共通ライブラリ (同じディレクトリ) を先に読む。進め方と台帳のパス解決はここに集約している。
-# tasks-path.sh と statusline.sh はどちらもプラグイン所有で、/init と /update が対で入れ替える。
-[ -f "$here/tasks-path.sh" ] && . "$here/tasks-path.sh" 2>/dev/null || true
 
 # mode: 解決順は harness_mode (env HC_MODE > プロジェクトの mode.yml > ホームの mode.yml > normal)。
 # SessionStart (hooks/session-start.sh) と /config も同じ関数を通す。ここで独自に解決しない。

@@ -13,8 +13,8 @@ disable-model-invocation: true
 `$CLAUDE_PLUGIN_ROOT` は空で渡ることがある。空・不在なら次の順で探す: `$CLAUDE_PLUGIN_ROOT` → `~/.claude/plugins/installed_plugins.json` のうち plugin 名が `hirai-lite` の行 (実際のエントリ名が変わったら、この行と `scripts/update-check.sh` の `HARNESS_ENTRY_NAME` を合わせる) の**版が最新の installPath** → `~/.claude/plugins/cache/hirai-lite/hirai-lite/<版>/` のうち**版が最新のもの**。退役した旧系列の行（`hirai-lite-v2`）と `marketplaces/hirai-lite` には落とさない。下の 1 行目を**素材行**と呼び、素材を読む bash ブロックの先頭に毎回そのまま置く (ブロックごとに新しいシェルで動くため、変数は持ち越されない)。
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
-ls -d "$P/rules" "$P/templates/settings.json" >/dev/null && echo "素材 $P (版 $(cat "$P/VERSION" 2>/dev/null))"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; ls -d "$P/rules" "$P/templates/settings.json" >/dev/null && echo "素材 $P (版 $(cat "$P/VERSION" 2>/dev/null))"
 { [ -d .claude/tasks ] || [ -d .claude/draft ] || [ -d .claude/rules-reference ]; } && echo "旧レイアウトあり (.claude/ の書類を /hirai-lite:update で docs/ へ移す)"; echo "台帳・draft・事故記録の置き場 docs (無ければ作る)"
 for d in .claude "$HOME/.claude"; do for t in rules settings.json mode.yml statusline.sh; do [ -e "$d/$t" ] && echo "既存 $d/$t"; done; done; for c in CLAUDE.md "$HOME/.claude/CLAUDE.md"; do [ -e "$c" ] && echo "既存 $c"; done; echo "(出ていないものは未配置)"
 for a in AGENTS.md .claude/AGENTS.md; do [ -e "$a" ] && echo "既存 $a (CLAUDE.md を置くと読まれなくなるので、置くときは先頭で @$a を読み込む)"; done; python3 -c 'import json,sys;s=json.load(open(sys.argv[1])).get("statusLine");print("ユーザー設定に statusLine あり: "+str(s.get("command",""))[:80]) if isinstance(s,dict) else None' "$HOME/.claude/settings.json" 2>/dev/null
@@ -24,7 +24,7 @@ CM=; [ "$SD" = .claude ] && CM=CLAUDE.md; [ -n "$SD" ] && [ "$SD" != .claude ] &
 if [ -n "$CM" ] && [ -f "$CM" ] && [ "$(grep -c '<[^<>]*>' "$CM")" -gt 0 ]; then echo "第 2 段階 (ヒアリング) へ: $CM にプレースホルダ $(grep -c '<[^<>]*>' "$CM") 行"; else echo "第 1 段階 (セットアップ) へ"; fi
 ```
 
-`ls -d` が失敗したら素材が見つかっていない。そこで止め、`/plugin` で入れ直してもらう。**この手順では書き込まない。** **`第 2 段階 (ヒアリング) へ` と出たら、手順 1〜9 を飛ばして手順 10 へ進む。** 判定条件は 3 つとも真であること: (1) 配置先 (`.claude/` か `~/.claude/`) に `rules` / `settings.json` / `mode.yml` / `statusline.sh` の 4 つが揃っている (2) その配置先に対応する `CLAUDE.md` がある (3) その `CLAUDE.md` に `<...>` 形式のプレースホルダが 1 行以上残っている。**プレースホルダが 0 行なら第 2 段階に入らない** (もう伺い済み)。そのときは第 1 段階を走らせ、手順 1 の「すでに一式が入っています」で終わる。
+`ls -d` が失敗したら素材が見つかっていない。そこで止め、`/plugin` で入れ直してもらう。**この手順では書き込まない。** 2 行目の `cd` でリポの root へ移る（サブディレクトリの `.claude` は読まれない）。**`第 2 段階 (ヒアリング) へ` と出たら、手順 1〜9 を飛ばして手順 10 へ進む。** 判定条件は 3 つとも真であること: (1) 配置先 (`.claude/` か `~/.claude/`) に `rules` / `settings.json` / `mode.yml` / `statusline.sh` の 4 つが揃っている (2) その配置先に対応する `CLAUDE.md` がある (3) その `CLAUDE.md` に `<...>` 形式のプレースホルダが 1 行以上残っている。**プレースホルダが 0 行なら第 2 段階に入らない** (もう伺い済み)。そのときは第 1 段階を走らせ、手順 1 の「すでに一式が入っています」で終わる。
 
 ## 1. 実行前に確認する（返事を待つ）
 
@@ -65,7 +65,7 @@ SCOPE=; D=.claude; [ "$SCOPE" = user ] && D="$HOME/.claude"; mkdir -p "$D"; echo
 
 ```bash
 SCOPE=; D=.claude; [ "$SCOPE" = user ] && D="$HOME/.claude"; mkdir -p "$D/rules"
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 for f in "$P"/rules/*.md; do d="$D/rules/$(basename "$f")"; if [ -e "$d" ]; then echo "kept   $d"; else cp "$f" "$d" && echo "placed $d"; fi; done
 for f in "$D"/rules/*.md; do sed -n '1,10p' "$f" | grep -q '^paths:' && echo "T1 $f" || echo "T0 $f"; done
 ```
@@ -87,7 +87,7 @@ mkdir -p "$D/rules-archive" && : > "$D/rules-archive/.gitkeep" && ls -a "$D/rule
 
 ```bash
 SCOPE=; D=.claude; [ "$SCOPE" = user ] && D="$HOME/.claude"; ULTRA=on; SL=on
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 cat "$P/templates/settings.json"   # 素材。差分提示の元にする
 if [ -e "$D/settings.json" ]; then echo "kept   $D/settings.json (下記手順で差分を提示する)"; else
   cp "$P/templates/settings.json" "$D/settings.json" && echo "placed $D/settings.json"
@@ -112,7 +112,7 @@ python3 -m json.tool "$D/settings.json" >/dev/null && echo "settings.json は妥
 
 ```bash
 SCOPE=; D=.claude; [ "$SCOPE" = user ] && D="$HOME/.claude"; MODE=normal
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 . "$P/scripts/tasks-path.sh"
 if [ "$SCOPE" = user ]; then MF="$HOME/.claude/mode.yml"; else MF="$(harness_mode_write_file "$PWD")"; fi
 mkdir -p "$(dirname "$MF")"
@@ -134,7 +134,7 @@ bash "$D/statusline.sh" </dev/null
 台帳 / 設計メモ / 事故記録は**プロジェクトごとの中身**なので、`user` 指定時は作らない。**置き場は常に `docs/`** で、無ければ作る (`docs/tasks/` `docs/draft/` `docs/rules-reference/` の 3 つ)。承認の型 (`docs/rules-reference/approval-template.md`) だけは**プロジェクトに依存しない参照資料**だが、各コマンドのポインタが**プロジェクト相対の `docs/rules-reference/`** を指すため、置き場はここに揃える（`user` 指定時は `docs/` を作らないので置かない。ポインタの 2 段目「プラグイン同梱の同名ファイル」で解決する）。ただし**旧レイアウト (`.claude/tasks/` などが残っている環境) では、ここでは何も作らず `/hirai-lite:update` の移行手順 (手順 2) に回す**。
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 SCOPE=; if [ "$SCOPE" = user ]; then echo "skip 台帳 / 設計メモ / 記録帳 (全プロジェクト共通には作らない)"; elif ls -d .claude/tasks .claude/draft .claude/rules-reference 2>/dev/null | grep -q .; then echo "skip 旧レイアウト — .claude/ の書類を /hirai-lite:update で docs/ へ移してから作る"
 else BASE=docs; mkdir -p "$BASE/tasks" "$BASE/draft" "$BASE/rules-reference"; : > "$BASE/draft/.gitkeep"
 . "$P/scripts/tasks-path.sh"  # 台帳の 2 ファイルは tasks: が ledger のときだけ作る (github-project のリポには作らない)
@@ -154,7 +154,7 @@ fi
 同じルールがプロジェクト側とホーム側の両方にあると、同じ文章が 2 回読み込まれて容量を無駄に使う。**引数に関わらず毎回**実行する。引数の順番は固定。
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 bash "$P/scripts/scope-check.sh" .claude "$HOME/.claude"
 ```
 

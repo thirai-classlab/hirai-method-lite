@@ -49,21 +49,24 @@ fi
 trunc() { printf '%s' "$1" | cut -c1-"$2"; }
 
 # 先頭のコマンド名だけ（先頭の VAR=値 は VAR=… にして読み進める）。値・引数は送らない。
-# 代入の値・先頭の語が $( ・バッククォート・括弧を含む / 括弧で始まるときは、中身を読まずに空を返す（呼ぶ側は道具の名前だけ送る）。
+# 代入の語は、値が 1 語で閉じる "…"・'…'、または区切り（; & | < > ( ) { } 空白）・\・$・バッククォート・引用符を含まない並びのときだけ読む。
+# それ以外（空白を含む引用・\＋空白・$'…'・$( ・&& 区切りなし）は中身を読まずに空を返す（呼ぶ側は道具の名前だけ送る）。
 # コマンド名は ^[A-Za-z0-9_./-]+$ に当たる語だけ（当たらなければ空）
 cmd_head() {
   printf '%s' "$1" | LC_ALL=C awk '
-  function unsafe(w) { return (w ~ /[(`{]/ || w ~ /\$\(/) }
+  function safe_value(v,   q) {
+    q = substr(v, 1, 1)
+    if (q == "\"") return (length(v) >= 2 && substr(v, length(v), 1) == "\"" && substr(v, 2, length(v) - 2) !~ /["\\$`]/)
+    if (q == "\047") return (length(v) >= 2 && substr(v, length(v), 1) == "\047" && substr(v, 2, length(v) - 2) !~ /\047/)
+    return (v !~ /[;&|<>(){}`$"\\\047]/)
+  }
   {
     out = ""
     for (i = 1; i <= NF && i <= 8; i++) {
       w = $i
-      if (unsafe(w)) { exit }
       if (w ~ /^[A-Za-z_][A-Za-z0-9_]*=/) {
-        v = w; sub(/^[^=]*=/, "", v); q = substr(v, 1, 1)
-        if ((q == "\"" || q == "\047") && (length(v) < 2 || substr(v, length(v), 1) != q)) {
-          while (i < NF) { i++; if (unsafe($i)) exit; if (substr($i, length($i), 1) == q) break }
-        }
+        v = w; sub(/^[^=]*=/, "", v)
+        if (!safe_value(v)) exit
         sub(/=.*/, "=…", w); out = out (out == "" ? "" : " ") w; continue
       }
       sub(/.*\//, "", w)

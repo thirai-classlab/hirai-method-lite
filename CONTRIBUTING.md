@@ -9,9 +9,9 @@
 |---|---|---|
 | `hirai-lite`（土台） | `"./"`（リポの root） | `VERSION`・`.claude-plugin/plugin.json` と同じ |
 | `hirai-project-method`（足すプラグイン） | `./plugins/hirai-project-method` | `plugins/hirai-project-method/VERSION`・その `.claude-plugin/plugin.json` と同じ |
-| `hirai-lite-v2`（退役） | github・`ref: v2` | 2.9.0 のまま動かさない。description は「退役。hirai-lite 3.0.0 と hirai-project-method へ移る」 |
+| `hirai-lite-v2`（退役） | url（https）・`ref: v2` | 2.9.0 のまま動かさない。description は「退役。hirai-lite 3.0.0 と hirai-project-method へ移る」 |
 
-利用者が `/plugin marketplace update hirai-lite` → `/plugin update hirai-lite@hirai-lite` を実行すると受け取るのは
+利用者が `/plugin marketplace update hirai-lite` → 端末で `claude plugin update hirai-lite@hirai-lite --scope <入れた範囲>`（画面なら `/plugin` → Installed → Update now） を実行すると受け取るのは
 **その時点の `main`** です。2.x（`v2` ブランチ）は凍結し、新しい版を出しません（entry 名を残すのは、2.x の利用者に
 退役の案内を出すためです。同じ entry 名を 2 つ持つと `claude plugin validate` が `Duplicate plugin name` で落ちるので、
 entry 名は系列ごとに分けてあります）。

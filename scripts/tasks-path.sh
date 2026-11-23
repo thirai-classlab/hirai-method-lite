@@ -22,14 +22,31 @@
 # file-top に set -e / set -o pipefail を書かない。source 元の shell flags を汚染し、
 # パイプ先の早期終了で呼び出し元ごと落ちる事故を防ぐため (関数内で局所化する)。
 
-# harness_tasks_file [root] -> 台帳パスを stdout、無ければ空 + rc 1
+# harness_root [dir] -> dir を含む git の toplevel を stdout。git でなければ dir のまま。常に rc 0。
+# .claude/mode.yml を読む・書く関数は全部これを通す (サブディレクトリの .claude/mode.yml は読まない。
+# worktree-guard・hirai-notify・orca-context と同じ root)。dir 直下に .git があれば toplevel なので
+# git を打たない (解いた root を渡し直しても 2 回目は git を呼ばない)。
+harness_root() {
+  local d="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" t
+  if [ -e "$d/.git" ]; then
+    printf '%s' "${d%/}"
+    return 0
+  fi
+  t="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$t" ]; then printf '%s' "$t"; else printf '%s' "$d"; fi
+  return 0
+}
+
+# harness_tasks_file [dir] -> 台帳パスを stdout、無ければ空 + rc 1
+# 渡された dir に既にあればそれ、無ければ harness_root の下で探す。
 harness_tasks_file() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" p
+  local d="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" r p
   if [ -n "${HARNESS_TASKS_FILE:-}" ]; then
     printf '%s' "$HARNESS_TASKS_FILE"
     return 0
   fi
-  for p in "$root/docs/tasks/list.md" "$root/.claude/tasks/list.md"; do
+  r="$(harness_root "$d")"
+  for p in "$d/docs/tasks/list.md" "$d/.claude/tasks/list.md" "$r/docs/tasks/list.md" "$r/.claude/tasks/list.md"; do
     if [ -f "$p" ]; then
       printf '%s' "$p"
       return 0
@@ -38,39 +55,42 @@ harness_tasks_file() {
   return 1
 }
 
-# harness_draft_dir [root] -> 設計 draft の置き場を stdout (末尾スラッシュなし)
+# harness_draft_dir [dir] -> 設計 draft の置き場を stdout (末尾スラッシュなし)
+# 既にある dir (渡された dir → harness_root の順)。無ければ harness_root の下の作るべき場所。
 harness_draft_dir() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" p
+  local d="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" r p
   if [ -n "${HARNESS_DRAFT_DIR:-}" ]; then
     printf '%s' "$HARNESS_DRAFT_DIR"
     return 0
   fi
-  for p in "$root/docs/draft" "$root/.claude/draft"; do
+  r="$(harness_root "$d")"
+  for p in "$d/docs/draft" "$d/.claude/draft" "$r/docs/draft" "$r/.claude/draft"; do
     if [ -d "$p" ]; then
       printf '%s' "$p"
       return 0
     fi
   done
-  if [ -d "$root/docs" ]; then printf '%s' "$root/docs/draft"; else printf '%s' "$root/.claude/draft"; fi
+  if [ -d "$r/docs" ]; then printf '%s' "$r/docs/draft"; else printf '%s' "$r/.claude/draft"; fi
 }
 
-# harness_incidents_file [root] -> 事故記録 (T2) のパスを stdout
+# harness_incidents_file [dir] -> 事故記録 (T2) のパスを stdout
 harness_incidents_file() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" p
+  local d="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" r p
   if [ -n "${HARNESS_INCIDENTS_FILE:-}" ]; then
     printf '%s' "$HARNESS_INCIDENTS_FILE"
     return 0
   fi
-  for p in "$root/docs/rules-reference/incidents.md" "$root/.claude/rules-reference/incidents.md"; do
+  r="$(harness_root "$d")"
+  for p in "$d/docs/rules-reference/incidents.md" "$d/.claude/rules-reference/incidents.md" "$r/docs/rules-reference/incidents.md" "$r/.claude/rules-reference/incidents.md"; do
     if [ -f "$p" ]; then
       printf '%s' "$p"
       return 0
     fi
   done
-  if [ -d "$root/docs" ]; then
-    printf '%s' "$root/docs/rules-reference/incidents.md"
+  if [ -d "$r/docs" ]; then
+    printf '%s' "$r/docs/rules-reference/incidents.md"
   else
-    printf '%s' "$root/.claude/rules-reference/incidents.md"
+    printf '%s' "$r/.claude/rules-reference/incidents.md"
   fi
 }
 
@@ -81,7 +101,8 @@ harness_incidents_file() {
 # harness_mode_file [root] -> すでに在る mode.yml のパスを stdout。
 # プロジェクト側 → ホーム側の順で探し、どちらにも無ければ空 + rc 1。
 harness_mode_file() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" p
+  local root p
+  root="$(harness_root "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
   for p in "$root/.claude/mode.yml" "${HOME:+$HOME/.claude/mode.yml}"; do
     [ -n "$p" ] || continue
     if [ -f "$p" ]; then
@@ -96,7 +117,8 @@ harness_mode_file() {
 # **すでに在る側に書く。** 両方に無いときだけプロジェクト側に作る。
 # (ホーム側に置いた人のプロジェクトへ mode.yml を新設すると、ホーム側を黙って覆い隠す)
 harness_mode_write_file() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" p
+  local root p
+  root="$(harness_root "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
   if p="$(harness_mode_file "$root")"; then
     printf '%s' "$p"
     return 0
@@ -155,8 +177,9 @@ harness_yml_file_value() {
 # 項目ごとに「プロジェクトの .claude/mode.yml → ホームの ~/.claude/mode.yml」の順で引く
 # (片方のファイルだけを読まない。env の上書きと既定は呼び出し側で扱う)。
 harness_yml_value() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" k="${2:-}" v="" p
+  local root k="${2:-}" v="" p
   [ -n "$k" ] || return 0
+  root="$(harness_root "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
   for p in "$root/.claude/mode.yml" "${HOME:+$HOME/.claude/mode.yml}"; do
     [ -n "$p" ] || continue
     v="$(harness_yml_file_value "$p" "$k")"
@@ -201,7 +224,8 @@ harness_tasks_slug() {
 # 出力は 1 行 (書いたら "tasks: <値> を <パス> に書きました (<理由>)"、書かなければ "tasks: 書きませんでした (<理由>)")。
 # プロジェクト側にすでに tasks: があれば何もしない (無出力・rc 0)。書けなかったら rc 1。以後は自動で見分けない。
 harness_tasks_migrate() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" cur f slug cache val why
+  local root cur f slug cache val why
+  root="$(harness_root "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
   f="$root/.claude/mode.yml"
   cur="$(harness_yml_file_value "$f" tasks)"
   [ -z "$cur" ] || return 0
@@ -227,12 +251,14 @@ harness_tasks_migrate() {
 
 # harness_pm_install_dir [root] -> 足すプラグイン hirai-project-method の、このリポの行のうち版が最大の installPath を stdout。
 # 無ければ空 + rc 1 (python3 か installed_plugins.json が無いときも rc 1)。
+# このリポの enabledPlugins (settings.local.json → settings.json → ~/.claude/settings.json の順) で false なら「無い」とみなす。
 # 「このリポの行」= scope が user・managed の行、または projectPath がこのリポと同じ git のリポの行。
 # 同じ git のリポかは `git rev-parse --git-common-dir` (両方) が同じかで見る。worktree W1 で project の範囲に入れた行は、
 # 本体の checkout・ほかの worktree からも同じリポとして当たる。projectPath が無い・git でないとき (消えた worktree など) だけ
 # root との前方一致に落とす。行の絞りはここ 1 か所 (hirai-task の path・更新の知らせ・/update の見分けが使う)。
 harness_pm_install_dir() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" f="${HOME:-}/.claude/plugins/installed_plugins.json" p common
+  local root f="${HOME:-}/.claude/plugins/installed_plugins.json" p common
+  root="$(harness_root "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
   [ -f "$f" ] && command -v python3 >/dev/null 2>&1 || return 1
   common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
   p="$(python3 -c 'import json,os,re,subprocess,sys
@@ -245,6 +271,17 @@ def gc(path):
         return os.path.realpath(o.stdout.strip()) if o.returncode == 0 and o.stdout.strip() else ""
     except Exception:
         return ""
+def disabled():
+    # enabledPlugins で false なら「無い」とみなす。優先は local -> project -> user (最初に載っている値が決める)。
+    for sp in (os.path.join(root, ".claude", "settings.local.json"), os.path.join(root, ".claude", "settings.json"), os.path.join(os.path.expanduser("~"), ".claude", "settings.json")):
+        try:
+            ep = json.load(open(sp)).get("enabledPlugins") or {}
+        except Exception:
+            continue
+        for k, v in ep.items():
+            if k.split("@", 1)[0] == sys.argv[2] and isinstance(v, bool):
+                return v is False
+    return False
 def mine(x):
     if x.get("scope") in ("user", "managed"):
         return True
@@ -256,8 +293,8 @@ def mine(x):
         return g == common
     ppr = os.path.realpath(pp).rstrip("/")
     return root == ppr or root.startswith(ppr + "/")
-rows = [x for k, v in d.get("plugins", {}).items() if k.split("@", 1)[0] == sys.argv[2] for x in v if x.get("installPath") and mine(x)]
-rows.sort(key=lambda x: [int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version", "0")))])
+rows = [] if disabled() else [x for k, v in d.get("plugins", {}).items() if k.split("@", 1)[0] == sys.argv[2] for x in v if x.get("installPath") and mine(x)]
+rows.sort(key=lambda x: [int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version", "0")).split("-", 1)[0])])
 print(rows[-1]["installPath"] if rows else "")' "$f" hirai-project-method "$root" "$common" 2>/dev/null)"
   [ -n "$p" ] || return 1
   printf '%s' "$p"
@@ -320,7 +357,8 @@ harness_yml_set() (
 # 両方に在る場合はプロジェクト側を返すが、それは二重ロード状態なので
 # scripts/scope-check.sh の警告に従って先に片方を消す (予算は 2 か所の合計で効いている)。
 harness_rules_dir() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" p
+  local root p
+  root="$(harness_root "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
   if [ -n "${HARNESS_RULES_DIR:-}" ]; then
     printf '%s' "$HARNESS_RULES_DIR"
     return 0

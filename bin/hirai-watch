@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 # hirai-watch: 担当の会話の「止まり」（API エラーで手番が終わった・問い合わせの途中で更新が止まった）を、会話の記録から見つける。
 #
-#   hirai-watch [--minutes N] [--orca] [<worktree の path> ...]
+#   hirai-watch [--minutes N] [--wait-hours N] [--orca] [<worktree の path> ...]
 #
 #   各 worktree の記録の dir（~/.claude/projects/<path の / と . を - にした名前>/）のうち最新の .jsonl を読み、
 #   次のどちらかなら「止まり」として 1 行ずつ出す。1 件でもあれば exit 1、無ければ何も出さず exit 0。
 #     (a) 最後の会話の行（user・assistant・system の turn_duration）が isApiErrorMessage の assistant か、その直後の turn_duration
 #     (b) 最後の行が api-request か、最後の会話の行が user（tool_result を含む）で、記録の更新が N 分（既定 15）より前
-#   stop_reason が end_turn の assistant で終わっている会話は、何分たっていても出さない（普通の待ち）。
+#   「待ち」: 最後の会話の行が stop_reason end_turn の assistant（または直後の turn_duration）で、記録の更新が --wait-hours N（既定 4）
+#   より前で、最後の手番に「orca orchestration send の --type question」「hirai-notify question／waiting」の Bash の呼び出しがあるか、
+#   最後の assistant の本文に「承認」があるとき、「<path>: 待ち（N 時間）」を出す（本文は出さない）。上の止まりとは別に数える。
+#   それ以外の end_turn で終わった会話は、何分たっていても出さない（普通の待ち）。
 #   記録の dir が無い worktree は「記録が無い」と出すだけで、止まりに数えない。
 #   --orca: `orca worktree list --json` から、今のリポ（git remote origin の slug）と同じ projectId の worktree を全部見る。
 #           orca が無ければ exit 2。path も --orca も無ければ、cwd の git のトップを見る。
+#   exit code: 止まりが 1 件でもあれば 1／待ちだけなら 3／どちらも無ければ 0（使い方の誤りは 2）。
 #   秘密を含みうる本文は出さない（API エラーの文の先頭 80 字だけ）。読み取りだけで、何も書き換えない。
 # 回し方の例: 10 分ごとに `hirai-watch --orca --minutes 15` を回し、exit 1 のときだけ出力を見て、止まった担当の端末に「続けて」を送る。
+# 待ち（exit 3）には「続けて」を送らない。問いの中身（担当の最後の手番）を見て、答えるか承認するかを決める。
 import json
 import os
 import re
@@ -21,12 +26,14 @@ import sys
 import time
 
 DEFAULT_MINUTES = 15
+DEFAULT_WAIT_HOURS = 4
+ASK_COMMAND = re.compile(r"orca\s+orchestration\s+send\b.*--type\s+question|hirai-notify\s+(question|waiting)\b", re.S)
 HEAD_CHARS = 80
 TAIL_BYTES = 2 * 1024 * 1024
 
 
 def usage():
-    sys.stderr.write("usage: hirai-watch [--minutes N] [--orca] [<worktree の path> ...]\n")
+    sys.stderr.write("usage: hirai-watch [--minutes N] [--wait-hours N] [--orca] [<worktree の path> ...]\n")
     sys.exit(2)
 
 
@@ -96,7 +103,52 @@ def head_text(r):
     return c[:HEAD_CHARS]
 
 
-def judge(fp, mtime, minutes):
+def is_prompt(r):
+    """人（またはコーディネーター）の入力の行。tool_result だけの user は含まない。"""
+    if r.get("type") != "user":
+        return False
+    c = (r.get("message") or {}).get("content")
+    if isinstance(c, str):
+        return True
+    return isinstance(c, list) and any(isinstance(x, dict) and x.get("type") != "tool_result" for x in c)
+
+
+def blocks(r):
+    c = (r.get("message") or {}).get("content")
+    return [x for x in c if isinstance(x, dict)] if isinstance(c, list) else []
+
+
+def asks_for_answer(conv):
+    """最後の手番に問い・待ちの知らせの Bash があるか、最後の assistant の本文に「承認」があるか。"""
+    start = 0
+    for i, r in enumerate(conv):
+        if is_prompt(r):
+            start = i
+    turn = conv[start:]
+    for r in turn:
+        if r.get("type") != "assistant":
+            continue
+        for b in blocks(r):
+            cmd = (b.get("input") or {}).get("command") if b.get("type") == "tool_use" and b.get("name") == "Bash" else None
+            if isinstance(cmd, str) and ASK_COMMAND.search(cmd):
+                return True
+    last_assistant = [r for r in turn if r.get("type") == "assistant"]
+    if last_assistant:
+        text = " ".join(b.get("text", "") for b in blocks(last_assistant[-1]) if b.get("type") == "text")
+        return "承認" in text
+    return False
+
+
+def ended_turn(conv):
+    """最後の会話の行が end_turn の assistant（または直後の turn_duration）か。"""
+    last = conv[-1]
+    if last.get("type") == "system" and len(conv) >= 2:
+        last = conv[-2]
+    return last.get("type") == "assistant" and (last.get("message") or {}).get("stop_reason") == "end_turn"
+
+
+def judge(fp, mtime, minutes, wait_hours):
+    """(種類, 文)。種類は "stall" か "wait"。何も無ければ None。"""
     rows = read_rows(fp)
     conv = [r for r in rows if is_conv(r)]
     if not rows or not conv:
@@ -110,12 +162,12 @@ def judge(fp, mtime, minutes):
         if prev.get("type") == "assistant" and prev.get("isApiErrorMessage"):
             err = prev
     if err is not None:
-        return "API エラーで止まった（%s・%s）" % (err.get("timestamp", "時刻不明"), head_text(err) or "本文なし")
+        return "stall", "API エラーで止まった（%s・%s）" % (err.get("timestamp", "時刻不明"), head_text(err) or "本文なし")
     age = (time.time() - mtime) / 60.0
-    if age < minutes:
-        return None
-    if rows[-1].get("type") == "api-request" or last.get("type") == "user":
-        return "問い合わせの途中で %d 分止まっている" % int(age)
+    if age >= minutes and (rows[-1].get("type") == "api-request" or last.get("type") == "user"):
+        return "stall", "問い合わせの途中で %d 分止まっている" % int(age)
+    if age >= wait_hours * 60 and ended_turn(conv) and asks_for_answer(conv):
+        return "wait", "待ち（%d 時間）" % int(age // 60)
     return None
 
 
@@ -153,6 +205,7 @@ def orca_paths():
 
 def main(argv):
     minutes = DEFAULT_MINUTES
+    wait_hours = DEFAULT_WAIT_HOURS
     use_orca = False
     paths = []
     i = 0
@@ -162,6 +215,11 @@ def main(argv):
             if i + 1 >= len(argv) or not argv[i + 1].isdigit():
                 usage()
             minutes = int(argv[i + 1])
+            i += 2
+        elif a == "--wait-hours":
+            if i + 1 >= len(argv) or not argv[i + 1].isdigit():
+                usage()
+            wait_hours = int(argv[i + 1])
             i += 2
         elif a == "--orca":
             use_orca = True
@@ -179,17 +237,19 @@ def main(argv):
         except (OSError, subprocess.CalledProcessError):
             top = os.getcwd()
         paths = [top]
-    stalled = 0
+    stalled = waiting = 0
     for p in dict.fromkeys(paths):
         rec = latest_record(p)
         if rec is None:
             print("%s: 記録が無い" % p)
             continue
-        msg = judge(rec[0], rec[1], minutes)
-        if msg:
-            stalled += 1
+        found = judge(rec[0], rec[1], minutes, wait_hours)
+        if found:
+            kind, msg = found
+            stalled += kind == "stall"
+            waiting += kind == "wait"
             print("%s: %s" % (p, msg))
-    sys.exit(1 if stalled else 0)
+    sys.exit(1 if stalled else 3 if waiting else 0)
 
 
 main(sys.argv[1:])

@@ -89,7 +89,8 @@ claude --plugin-dir <dir> plugin details <name>
 
 ```
 /plugin marketplace update    # marketplace のメタデータを取り直す
-/plugin update                # インストール済みプラグインを更新する
+# 端末で: claude plugin update <plugin>@<marketplace> --scope <入れた範囲>
+# 画面なら /plugin → Installed → Update now（`/plugin update` という会話のコマンドは無く、メニューが開くだけ）
 ```
 
 **どう対処するか**: プラグインを配布側として直したら、利用側に「上の 2 コマンドを叩く必要がある」ことを明示的に伝える。直したことと届いたことは別。自動化したい利用者には、**自前で実装せず** `/plugin` → Marketplaces → **Enable auto-update**（または `settings.json` の `extraKnownMarketplaces.<name>.autoUpdate: true`）を案内する。有効にすると、Claude Code が起動後の背景で（最大 10 分の遅延を挟んで）一覧と本体を更新し、反映は `/reload-plugins` か次回起動から。

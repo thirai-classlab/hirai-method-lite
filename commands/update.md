@@ -22,8 +22,8 @@ disable-model-invocation: true
 ## 手順 0: 現在の版と rules の控えを取る
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
-echo "更新前の版 $(cat "$P/VERSION" 2>/dev/null || echo 不明)  (素材 $P)"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; echo "更新前の版 $(cat "$P/VERSION" 2>/dev/null || echo 不明)  (素材 $P)"
 B="${TMPDIR:-/tmp}/claude-harness-lite/rules-backup-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$B"
 [ -d .claude/rules ]         && cp -R .claude/rules         "$B/rules.project" && echo "控えを作成 (コピー) .claude/rules → $B/rules.project"
 [ -d "$HOME/.claude/rules" ] && cp -R "$HOME/.claude/rules" "$B/rules.home"    && echo "控えを作成 (コピー) ~/.claude/rules → $B/rules.home"
@@ -38,19 +38,19 @@ ls -d .claude/rules "$HOME/.claude/rules" 2>/dev/null; true   # 元が残って�
 
 ```
 /plugin marketplace update hirai-lite
-/plugin update hirai-lite@hirai-lite
-/plugin update hirai-project-method@hirai-lite
+claude plugin update hirai-lite@hirai-lite --scope <入れた範囲>
+claude plugin update hirai-project-method@hirai-lite --scope <入れた範囲>
 ```
 
-- **3 行とも必要（3 行目は足すプラグインが入っているときだけ）。** 1 行目は配布元の控えを取り直すだけで、これを飛ばすと 2 行目以降は古い控えを見て「最新です」と答える。足すプラグインは土台と版が別なので、2 行目だけでは上がらない。足すプラグインがこのリポで読み込まれていなければ 3 行目は打たない（見分けは、プラグインの `scripts/tasks-path.sh` を読み込んで `harness_pm_task_bin "$PWD"` が path を返すか。`claude plugin list` はどのリポの行も同じ並びで出るので見分けに使わない）。
-- **2.x（`hirai-lite-v2`）から移るとき**は、更新ではなく入れ替え。**この順で進める**（`hirai-lite-v2` を先に uninstall すると、2.x の控え `~/.claude/plugins/data/hirai-lite-v2-hirai-lite/` が消え、手順 2b が GitHub Project の形を見つけられず `tasks:` を書かない。`tasks:` と `enabledPlugins` を commit して既定の branch に入れる前に uninstall すると、同じリポのほかの worktree・clone は `ledger` のまま、`hirai-lite-v2: true` のまま戻れず、hirai-lite が 1 つも読み込まれない）:
-  0. **install・disable・uninstall は、2.x の行の `projectPath` と同じ場所（worktree ではなく本体の checkout）で打つ。** 場所は `~/.claude/plugins/installed_plugins.json` の `hirai-lite-v2@hirai-lite` の行の `projectPath` で確かめ、`pwd` がそれと違えば、そこへ `cd` して Claude Code を開き直してから始める（worktree で project の範囲に入れると、行の `projectPath` が消えうる worktree になり、2.x 側の uninstall が通らず、worktree を消すと本体も読み込めなくなる）
+- **3 行とも必要（3 行目は足すプラグインが入っているときだけ）。** 1 行目は会話の中で打つ。2・3 行目は**端末で打つ**（`/plugin update …` という会話のコマンドは無く、打つと `/plugin` のメニューが開くだけで更新されない）。画面で行うなら `/plugin` → Installed → Update now。1 行目は配布元の控えを取り直すだけで、これを飛ばすと 2 行目以降は古い控えを見て「最新です」と答える。足すプラグインは土台と版が別なので、2 行目だけでは上がらない。足すプラグインがこのリポで読み込まれていなければ 3 行目は打たない（見分けは、プラグインの `scripts/tasks-path.sh` を読み込んで `harness_pm_task_bin "$PWD"` が path を返すか。`claude plugin list` はどのリポの行も同じ並びで出るので見分けに使わない）。
+- **2.x（`hirai-lite-v2`）から移るとき**は、更新ではなく入れ替え。**この順で進める**（`hirai-lite-v2` を先に uninstall すると、2.x の控え `~/.claude/plugins/data/hirai-lite-v2-hirai-lite/` が消え、手順 2b が GitHub Project の形を見つけられず `tasks:` を書かない。下の手順 3 の commit を既定の branch に入れて各 worktree が取り込む前に uninstall すると、同じリポのほかの worktree・clone は `ledger` のまま、`hirai-lite-v2: true` のまま戻れず、hirai-lite が 1 つも読み込まれない）:
+  0. **install・disable・uninstall は、2.x の行の `projectPath` と同じ場所（worktree ではなく本体の checkout）で打つ。** 場所は `~/.claude/plugins/installed_plugins.json` の `hirai-lite-v2@hirai-lite` の行のうち、**このリポの行（`git rev-parse --git-common-dir` が同じ行）の** `projectPath`（user の範囲の行は `projectPath` を持たず、どこで打ってもよい。このリポの行が 2 本あれば 1 本ずつ打つ）。`pwd` がそれと違えば、そこへ `cd` して Claude Code を開き直してから始める（worktree で project の範囲に入れると、行の `projectPath` が消えうる worktree になり、2.x 側の uninstall が通らず、worktree を消すと本体も読み込めなくなる）。**`worktree: block` のリポでは、install・disable・uninstall は本体で打ち、commit だけ Orca の worktree で行う**（本体での `git commit` は worktree-guard が止める）
   1. `/plugin marketplace update hirai-lite` → `/plugin install hirai-lite@hirai-lite`（Project で回すリポは `hirai-project-method@hirai-lite` も）
   2. `/plugin disable hirai-lite-v2@hirai-lite`（**v2 が入っている範囲で**。`--scope` は省いてよい。disable は 2.x の控えを消さない）→ Claude Code を開き直し、開始時の 1 行に `hirai-lite v3.0.0` が出ることを確かめる（出なければ 2.x のまま動いている。先へ進まない）
-  3. `/hirai-lite:update`（手順 2b が 2.x の控えから `tasks:` を `.claude/mode.yml` に書く）→ **`tasks:` の 1 行と、`.claude/settings.json` の `enabledPlugins`（`hirai-lite-v2@hirai-lite` を `hirai-lite@hirai-lite`、と `hirai-project-method@hirai-lite` へ書き換えたもの）を 1 つの commit にして既定の branch に入れる**。開いている worktree が既定の branch を取り込んだことを確かめる（`git worktree list` の各 worktree で `git log -1 -- .claude/settings.json` が同じ commit を指す）
-  4. **そのあとで** `/plugin uninstall hirai-lite-v2@hirai-lite`
+  3. `/hirai-lite:update`（手順 2b が 2.x の控えから `tasks:` を `.claude/mode.yml` に書く）→ **次を 1 つの commit にして既定の branch に入れる**: `.claude/mode.yml` の `tasks:` の 1 行、手順 4 で `updated` と出た写し（`.claude/statusline.sh`・`.claude/tasks-path.sh`・`.claude/context-usage.sh`。git に入っているリポだけ。入れ替えないと、ほかの worktree の画面下が古い写しのまま古い件数を出し続ける）、2.x の行が **project の範囲**のときだけ `.claude/settings.json` の `enabledPlugins`（`hirai-lite-v2@hirai-lite` を `hirai-lite@hirai-lite`、と `hirai-project-method@hirai-lite` へ書き換えたもの）。local・user の範囲では `settings.json` は無いので触らない（local の `settings.local.json` は git に入らない）。**既定の branch に入れる前に**、ほかの人と clone で `claude plugin install hirai-lite@hirai-lite --scope project`（GitHub Project のリポは `hirai-project-method@hirai-lite` も）を打ってもらう。commit は有効にするだけで入れはしないので、入れる操作は人ごと・clone ごとに要る。取り込みの確かめ: 開いている各 worktree の `.claude/mode.yml` に `tasks:` がある（project の範囲なら `.claude/settings.json` の `enabledPlugins` も 3.0.0 の名前になっている）
+  4. **そのあとで** 端末なら `claude plugin uninstall hirai-lite-v2@hirai-lite --scope <v2 の範囲>`（画面なら `/plugin uninstall hirai-lite-v2@hirai-lite`）。**user の範囲で入れたときは、2.x を使う全部のリポで手順 3 まで済ませてから uninstall する**（控えは機械に 1 つで、uninstall すると全リポ分が消える。控えの一覧: `ls ~/.claude/plugins/data/hirai-lite-v2-hirai-lite/`）
 - 入れ替えは**再起動で反映される**。Claude Code を開き直してから次へ進む。commands / hooks / agents / MCP サーバー定義はこの入れ替えで新しくなる。導入先の `.claude/` は手順 2〜4 で扱う。
-- ターミナルから `claude plugin update` を使う場合、**scope の既定は `user`**。入れた範囲が違うと `Plugin "hirai-lite" is not installed at scope user` で失敗するので `--scope local` / `--scope project` を付ける (どの範囲に入っているかは `claude plugin list` の `Scope:` 行)。画面の中から `/plugin` で実行する場合は指定不要。
+- 端末の `claude plugin update` は **scope の既定が `user`**。入れた範囲が違うと `Plugin "hirai-lite" is not installed at scope user` で失敗するので、`--scope local` / `--scope project` を付ける (どの範囲に入っているかは `claude plugin list` の `Scope:` 行)。画面の `/plugin` → Installed → Update now は範囲の指定が要らない。
 
 ## 手順 2: 書類を docs/ へ移す（旧レイアウトのときだけ）
 
@@ -82,7 +82,7 @@ done
 ### 2-2. 移す
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 [ -n "${ZSH_VERSION:-}" ] && setopt null_glob; moved=""; kept=""   # zsh は一致しない glob でコマンドごと落ちる
 mv1() {  # mv1 <移動元> <移動先>: 移動先に在れば移さずに控える (上書きしない)
   [ -e "$1" ] || return 0
@@ -115,12 +115,12 @@ bash "$P/scripts/scope-check.sh" .claude "$HOME/.claude" .
 
 3.0.0 から、やること管理の形は**プロジェクトの** `.claude/mode.yml` の `tasks:`（`ledger` か `github-project`）が決め、自動では見分けない。`tasks:`・`worktree:`・`notify:` はプロジェクト側にだけ書く（ホームの `~/.claude/mode.yml` には書かない。ホームの値は他のリポにも効くため）。プロジェクト側に `tasks:` が無いときだけ、ここで 1 度だけ書く。2.x（`hirai-lite-v2`）の痕跡は**このリポの slug の控え**（`~/.claude/plugins/data/hirai-lite-v2-hirai-lite/tasks-<owner>-<repo>.json`）だけで見る（機械全体では見ない。別のリポの控えや `installed_plugins.json` の行では書かない）。控えの `form` が `ghp` なら `github-project`。控えが在って `ghp` でないなら `ledger`（既定と同じ値なので、**プロジェクト側に `mode.yml` が無いときは書かない**。書くと新しい `.claude/` ができ、以後の mode の書き込み先がそこへ移る）。控えが無いときは書かない（`tasks:` が無ければ `ledger` として動く。GitHub Project で回すなら `/hirai-lite:config` の項目 8 で選ぶよう 1 行で案内する）。手順 3 の `/hirai-lite:init` が台帳（`list.md`・`parking-lot.md`）を作るかをこの値で決めるので、**手順 3 より前に回す**。
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 . "$P/scripts/tasks-path.sh"
-if [ -n "$(harness_yml_file_value .claude/mode.yml tasks)" ]; then echo "tasks: 設定済み"; else harness_tasks_migrate "$PWD"; fi; echo "tasks: $(harness_tasks_form "$PWD")"
+if [ -n "$(harness_yml_file_value "$(harness_root "$PWD")/.claude/mode.yml" tasks)" ]; then echo "tasks: 設定済み"; else harness_tasks_migrate "$PWD"; fi; echo "tasks: $(harness_tasks_form "$PWD")"
 ```
 
-- 出た行（`tasks: <値> を <パス> に書きました (<理由>)`・`tasks: 設定済み`・`tasks: 書きませんでした (<理由>)`）を、手順 6 の報告に 1 行そのまま入れる。**`書きました` が出たときは、続けて 1 行「`.claude/mode.yml` の `tasks:` の 1 行と `.claude/settings.json` の `enabledPlugins` を 1 つの commit にして既定の branch に入れてください（入れるまで、ほかの worktree・clone は `ledger` で動き、`hirai-lite-v2: true` のままだと hirai-lite が読み込まれません。2.x を uninstall するのもそのあと、開いている worktree が取り込んでからです）」を報告に入れる。** `github-project` が書かれたのに `harness_pm_task_bin` が空なら `/plugin install hirai-project-method@hirai-lite` を 1 行案内する。`ledger` が書かれたが実は Project で回しているリポは、`/hirai-lite:config` の項目 8 で `github-project` に直す。
+- 出た行（`tasks: <値> を <パス> に書きました (<理由>)`・`tasks: 設定済み`・`tasks: 書きませんでした (<理由>)`）を、手順 6 の報告に 1 行そのまま入れる。**`書きました` が出たときは、続けて 1 行「`.claude/mode.yml` の `tasks:`、手順 4 で `updated` と出た写し（`.claude/statusline.sh`・`tasks-path.sh`・`context-usage.sh`）、2.x の行が project の範囲のときだけ `.claude/settings.json` の `enabledPlugins` を 1 つの commit にして既定の branch に入れてください（入れる前に、ほかの人と clone で `claude plugin install hirai-lite@hirai-lite --scope project` を打ってもらいます。入れるまで、ほかの worktree・clone は `ledger` で動きます。2.x を uninstall するのもそのあと、開いている各 worktree が取り込んでからです。user の範囲で入れたときは、2.x を使う全部のリポで手順 3 まで済ませてからです）」を報告に入れる。** `github-project` が書かれたのに `harness_pm_task_bin` が空なら `/plugin install hirai-project-method@hirai-lite` を 1 行案内する。`ledger` が書かれたが実は Project で回しているリポは、`/hirai-lite:config` の項目 8 で `github-project` に直す。
 
 ## 手順 3: rules を再配置する
 
@@ -132,7 +132,7 @@ if [ -n "$(harness_yml_file_value .claude/mode.yml tasks)" ]; then echo "tasks: 
 **置いていない場所に新しく作らない。** プロジェクト側とホーム側の両方を見て、**すでに在るものだけ**を入れ替える（片方に決め打ちすると、`/init user` で入れた人はホーム側が古いまま残り、使われないファイルがプロジェクト側に増える）。入れ替えそのものは共通ライブラリの `harness_sync_owned_scripts` 1 本に集約してある（下の block は `bash -c` で包む。Bash ツールが zsh のとき、関数の中の変数の単語分割が bash と違って 3 本とも黙って飛ばされたため）（セッション冒頭の自動入れ替えと**同じ関数**を通す。手順書と自動処理で作法が離れないようにするため）。`force` を渡すと、設定に関係なく必ず実行し、1 件ずつ作業ログを出す。
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 bash -c '. "$1/scripts/update-check.sh"; harness_sync_owned_scripts "$1" "$2" force' _ "$P" "$PWD"   # zsh の Bash ツールでも同じに動かすため bash -c で包む
 for D in .claude/rules "$HOME/.claude/rules"; do for f in "$P"/rules/*.md; do b="${f##*/}"; [ -f "$D/$b" ] && ! cmp -s "$f" "$D/$b" && echo "rules 配布版と違う: $D/$b"; done; done
 for f in approval-template.md; do [ -d docs/rules-reference ] && [ ! -e "docs/rules-reference/$f" ] && cp "$P/docs/rules-reference/$f" docs/rules-reference/ && echo "placed docs/rules-reference/$f"; done; V="$(head -n 1 "$P/docs/rules-reference/approval-template.md")"; [ -e docs/rules-reference/approval-template.md ] && ! grep -qxF "$V" docs/rules-reference/approval-template.md && ! grep -q 'approval-template: keep' docs/rules-reference/approval-template.md && echo "outdated docs/rules-reference/approval-template.md"; true
@@ -148,14 +148,14 @@ done
 ## 手順 5: 版が上がったことを検証する
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 cat "$P/VERSION"
 bash "$P/tests/smoke.sh"
 git status --short
 ```
 
 - `VERSION` が手順 0 で控えた値より新しくなっていること。smoke が全 case PASS / exit 0 であること（FAIL が出たら更新を止め、内容を報告する）。`git status --short` に `CLAUDE.md` `docs/` `.claude/rules/` の変更が出ていないこと。
-  版が変わらない場合は、既に最新か、`/plugin update` の後に再起動していない。`claude plugin list` で導入済みの版を確認する。
+  版が変わらない場合は、既に最新か、`claude plugin update` の後に再起動していない。`claude plugin list` で導入済みの版を確認する。
 
 ## 手順 6: 利用者へ報告する
 
@@ -174,7 +174,7 @@ bash の出力は作業ログであって報告ではない。**最後に必ず�
 ✅ statusLine（画面下部の情報表示）のスクリプトを最新版にしました
    変更されていたため、元の内容を .claude/statusline.sh.bak に保存しました
 ✅ タスク一覧の置き場所を調べるスクリプトと、context（会話の入れ物）の使用率を出すスクリプトを最新版にしました
-✅ タスク管理の形（tasks:）: <手順 2b の出力の 1 行>。書いたときは「.claude/mode.yml の tasks: を commit して既定の branch に入れてください」まで書く
+✅ タスク管理の形（tasks:）: <手順 2b の出力の 1 行>。書いたときは「.claude/mode.yml の tasks:、手順 4 で updated と出た写し（.claude/statusline.sh・tasks-path.sh・context-usage.sh）、2.x の行が project の範囲のときだけ .claude/settings.json の enabledPlugins を 1 つの commit にして既定の branch に入れてください（入れる前に、ほかの人と clone で claude plugin install hirai-lite@hirai-lite --scope project を打ってもらいます）」まで書く
 ✅ ルール・設定・mode（進め方）の設定・タスク一覧はそのままにしました（あなたが育てたものなので触りません）
 ✅ 自己チェック 10 項目すべて問題なしでした
 
@@ -203,7 +203,7 @@ SessionStart で `[harness] 更新あり vX → vY (/hirai-lite:update で適用
 **通知が出ないことは「最新である」ことの証明にはならない**（実測で確認済み）。入れた直後の 1 セッション目（表示に使うのは前回の取得結果なので、比べる相手が無い）と、前回の取得から 24 時間の間（その後に新版が出ても次の取得まで気づかない）は必ず沈黙する。いますぐ確かめるには:
 
 ```bash
-P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")))]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
+P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 curl -fsSL https://raw.githubusercontent.com/thirai-classlab/hirai-method-lite/main/VERSION     # 公開されている最新版
 cat "$P/VERSION"                                                                              # いま入っている版
 ```
@@ -215,6 +215,6 @@ cat "$P/VERSION"                                                                
 - `cat "$P/VERSION"` が更新前より新しい semver を返す（`$P` は素材行で解決した値。環境変数を直に書いた行は空振りする）。
 - 手順 0 の控えが `${TMPDIR:-/tmp}/claude-harness-lite/rules-backup-*/` にあり、**元の `rules/` も残っている**（コピーであって移動ではない）。
 - 手順 2 のあと、`ls .claude/tasks .claude/draft .claude/rules-reference 2>/dev/null` が**移さなかったもの以外は何も返さない**（移した分は `docs/` 側に在り、`git status --short` で `R` (rename) か 削除 + 追加 として見える）。移行が不要だった場合は最初から何も返さない。
-- 手順 2b のあと、プロジェクトの `.claude/mode.yml` の `tasks:` が `ledger` か `github-project` の 1 行になっている（このリポの 2.x の控えが無い・`ledger` で `mode.yml` が無い、で書かなかったときを除く）。書いたときは、その 1 行を commit して既定の branch に入れるよう報告に書いてある。`harness_tasks_form "$PWD"` はどちらの場合も `ledger` か `github-project` を返す。
+- 手順 2b のあと、プロジェクトの `.claude/mode.yml` の `tasks:` が `ledger` か `github-project` の 1 行になっている（このリポの 2.x の控えが無い・`ledger` で `mode.yml` が無い、で書かなかったときを除く）。書いたときは、`tasks:` の 1 行・手順 4 で `updated` と出た写し・2.x の行が project の範囲のときだけ `settings.json` の `enabledPlugins` を 1 つの commit にして既定の branch に入れるよう（入れる前にほかの人と clone で `claude plugin install hirai-lite@hirai-lite --scope project` を打ってもらうことも）報告に書いてある。`harness_tasks_form "$PWD"` はどちらの場合も `ledger` か `github-project` を返す。
 - 手順 4 で `same` / `updated` と出た `$D`（プロジェクト側 / ホーム側のうち実際に置いてある方）について、`cmp -s "$P/scripts/statusline.sh" "$D/statusline.sh"` と `cmp -s "$P/scripts/tasks-path.sh" "$D/tasks-path.sh"` と `cmp -s "$P/scripts/context-usage.sh" "$D/context-usage.sh"` が 3 つとも exit 0。 `docs/rules-reference/` がある環境では `ls docs/rules-reference/approval-template.md` も exit 0（元から在ったものは、承認を得て置き換えた承認の型を除き、中身が変わっていない）。
 - `bash "$D/statusline.sh" </dev/null` が 2 行出力する（1 行目 = いまの状態 / 2 行目 = 設定リンク）。`bash "$P/tests/smoke.sh"` が exit 0 で、`git status --short` に `CLAUDE.md` `.claude/rules/` の変更と、`docs/` の変更（承認を得て置き換えた `approval-template.md` とその `.bak` を除く）が出ていない。

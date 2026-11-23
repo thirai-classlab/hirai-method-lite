@@ -137,6 +137,7 @@ resolve_path() {
 # -C -c --git-dir --work-tree を読み、bash -c 'sh -c' eval の中は SUB として返す。
 scan_commits() {
   LC_ALL=C awk '
+  function emit_sub(t) { if (t != "") { gsub(/\n/, RS_, t); print "SUB" US t } }
   function flush_word() { if (inword) { nt++; tok[nt] = word; word = ""; inword = 0 } }
   function end_seg() { flush_word(); if (nt > 0) analyze(); nt = 0 }
   function base_of(s) { sub(/.*\//, "", s); return s }
@@ -219,19 +220,45 @@ scan_commits() {
       if (t == hd || e == 0) { hd = ""; return }
     }
   }
-  # p が "(" を指すとき（$( の直後）、対応する ")" まで読み飛ばす。中の引用符・入れ子の $( ・heredoc の本文を数える。p は ")" へ進む
-  function skip_subst(   depth, c) {
-    depth = 1
+  # p が算術の開きの "(" を指すとき（$(( の最初の ( か (( の最初の (）、対応する ")" まで括弧を数えて読み飛ばす。
+  # 算術の中の << は heredoc でなくシフトなので読まない。p は最後の ")" へ進む
+  function skip_arith(   ar, d) {
+    ar = 1
+    while (p < n) {
+      p++; d = substr(buf, p, 1)
+      if (d == "(") ar++
+      else if (d == ")") { ar--; if (ar == 0) return }
+    }
+  }
+  # p が "(" を指すとき（$( の直後）、対応する ")" まで読み飛ばす。中の引用符・入れ子の $( ・heredoc の本文を数える。p は ")" へ進む。
+  # 読み飛ばした中身は lastsub に残す（呼ぶ側が SUB として調べる）
+  function skip_subst(   depth, c, s0, pv) {
+    depth = 1; s0 = p + 1
+    if (substr(buf, p + 1, 1) == "(") { skip_arith(); lastsub = ""; return }
     while (p < n) {
       p++; c = substr(buf, p, 1)
       if (c == "\\") { p++; continue }
       if (c == "\047") { while (p < n) { p++; if (substr(buf, p, 1) == "\047") break } continue }
       if (c == "\"") { skip_dq(); continue }
+      if (c == "$" && substr(buf, p + 1, 1) == "\047") { skip_ansi(); continue }
       if (c == "$" && substr(buf, p + 1, 1) == "(") { p++; skip_subst(); continue }
+      if (c == "#") {
+        pv = substr(buf, p - 1, 1)
+        if (pv == " " || pv == "\t" || pv == "\n" || pv == ";" || pv == "&" || pv == "|" || pv == "(") { while (p < n && substr(buf, p + 1, 1) != "\n") p++; continue }
+      }
       if (c == "(") depth++
-      else if (c == ")") { depth--; if (depth == 0) return }
+      else if (c == ")") { depth--; if (depth == 0) { lastsub = substr(buf, s0, p - s0); return } }
       else if (c == "<" && substr(buf, p + 1, 1) == "<") try_heredoc()
       else if (c == "\n" && hd != "") skip_body()
+    }
+  }
+  # p が $ を指し次が \047 のとき（$'...'）、閉じの \047 まで読み飛ばす。\ の次の 1 字は閉じでない。p は閉じの \047 へ進む
+  function skip_ansi(   d) {
+    p++
+    while (p < n) {
+      p++; d = substr(buf, p, 1)
+      if (d == "\\") { p++; continue }
+      if (d == "\047") return
     }
   }
   # p が開きの " を指すとき、閉じの " まで読み飛ばす（中の $( ) も読む）。p は閉じの " へ進む
@@ -257,7 +284,7 @@ scan_commits() {
           if (d == "\n") { p++ }
           else if (d == "\"" || d == "\\" || d == "$" || d == "`") { word = word d; p++ }
           else word = word c
-        } else if (c == "$" && substr(buf, p + 1, 1) == "(") { word = word "$("; p++; skip_subst() }
+        } else if (c == "$" && substr(buf, p + 1, 1) == "(") { word = word "$("; p++; lastsub = ""; skip_subst(); emit_sub(lastsub) }
         else word = word c
         continue
       }
@@ -268,10 +295,11 @@ scan_commits() {
         if (d != "\n") { word = word d; inword = 1 }
       }
       else if (c == "$" && substr(buf, p + 1, 2) == "((") {
-        ar = 0; p++
-        while (p < n) { p++; d = substr(buf, p, 1); if (d == "(") ar++; else if (d == ")") { ar--; if (ar == 0) break } }
+        p++; skip_arith()
         word = word "0"; inword = 1
       }
+      else if (c == "$" && substr(buf, p + 1, 1) == "\047") { skip_ansi(); word = word "x"; inword = 1 }
+      else if (c == "(" && !inword && substr(buf, p + 1, 1) == "(" && (nt == 0 || tok[nt] ~ /^(if|while|until|then|do|else|elif|!)$/)) { skip_arith(); end_seg() }
       else if (c == "#" && !inword) { while (p < n && substr(buf, p + 1, 1) != "\n") p++ }
       else if (c == "<" && substr(buf, p + 1, 1) == "<") { flush_word(); try_heredoc() }
       else if (c == "\n") { end_seg(); if (hd != "") skip_body() }
@@ -283,16 +311,36 @@ scan_commits() {
   }'
 }
 
+# outer_ignored <リポの toplevel> [<toplevel からの相対 path>] -> rc 0 なら、そのリポを含む外側のリポが、その場所を
+# 無視している（.gitignore・.tmp/・.claude/state/）。.tmp/ に作った worktree・clone は外側の git に入らないので止めない
+outer_ignored() {
+  local top="$1" sub="${2:-}" parent otop oprefix rel
+  parent="$(dirname "$top")"
+  otop="$(git -C "$parent" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ -n "$otop" ] || return 1
+  oprefix="$(git -C "$parent" rev-parse --show-prefix 2>/dev/null)" || return 1
+  rel="${oprefix}$(basename "$top")"
+  [ -z "$sub" ] || rel="${rel}/${sub}"
+  case "$rel" in
+    .tmp|.tmp/*|.claude/state|.claude/state/*) return 0 ;;
+  esac
+  git -C "$otop" check-ignore -q -- "$rel" 2>/dev/null
+}
+
 # check_commit <-C の列> <git-dir> <work-tree> <基の dir> <既定の dir>
 check_commit() {
   local cdl="$1" gdir="$2" wtree="$3" base="$4" dflt="$5" dir top c a oldifs
   dir="$dflt"
+  local dirset=0
   if [ -n "$wtree" ]; then
     dir="$(abs_path "$wtree" "$base")" || return 0
+    dirset=1
   elif [ -n "$gdir" ]; then
     a="$(abs_path "$gdir" "$base")" || return 0
-    case "$a" in */.git) dir="$(dirname "$a")" ;; esac
+    case "$a" in */.git) dir="$(dirname "$a")"; dirset=1 ;; esac
   fi
+  # git は -C を cwd から解く。既定の dir（CLAUDE_PROJECT_DIR）は -C も --work-tree も --git-dir も無いときだけ使う
+  [ -n "$cdl" ] && [ "$dirset" -eq 0 ] && dir="$base"
   if [ -n "$cdl" ]; then
     oldifs="$IFS"; IFS=$'\035'
     for c in $cdl; do
@@ -307,6 +355,7 @@ check_commit() {
   [ -n "$top" ] || return 0
   [ "$(repo_mode "$top")" = "block" ] || return 0
   in_orca_wt "$top" && return 0
+  outer_ignored "$top" && return 0
   deny "Orca の worktree でない会話からの git commit（${top}）は止めています。"
 }
 
@@ -351,6 +400,7 @@ case "$tool" in
       .tmp|.tmp/*|.claude/state|.claude/state/*) exit 0 ;;  # .gitignore に無くても止めない（設計 §6）
     esac
     in_orca_wt "$top" && exit 0
+    outer_ignored "$top" "$rel" && exit 0
     # 無視されるファイルは git に入らないので止めない。
     if [ -n "$rel" ] && git -C "$top" check-ignore -q -- "$rel" 2>/dev/null; then
       exit 0

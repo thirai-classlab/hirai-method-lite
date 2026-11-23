@@ -43,10 +43,14 @@ case "$kind" in
   question|done|stopped)
     file="${2:-}"; summary="${3:-}"
     [ -n "$file" ] && [ -n "$summary" ] || { usage; exit 2; }
+    # 要約を忘れて次のオプションが要約の位置に来た形（値が空に展開された --dispatch-id など）は送らない
+    case "$file" in --*) usage; exit 2 ;; esac
+    case "$summary" in --*) usage; exit 2 ;; esac
     shift 3 ;;
   waiting)
     summary="${2:-}"
     [ -n "$summary" ] || { usage; exit 2; }
+    case "$summary" in --*) usage; exit 2 ;; esac
     shift 2 ;;
   *) usage; exit 2 ;;
 esac
@@ -92,14 +96,20 @@ fi
 
 # 宛先がまだ無いとき: 導入先の .claude/state/coordinator の 1 行目 > ORCA_TERMINAL_HANDLE があれば宛先を省いて送る
 omit_to=0
+coordinator_file=""
 COORDINATOR_TTL_MIN=1440
 if [ -z "$dispatch" ] && [ -z "$to" ]; then
-  croot="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" || croot=""
-  [ -n "$croot" ] || croot="$PWD"
+  # 控えは cwd の toplevel → CLAUDE_PROJECT_DIR の toplevel の順に探す（入れ子の worktree の subagent から打っても届く）
   # 控えは更新から 24 時間（COORDINATOR_TTL_MIN 分）だけ使う。使い回した worktree の古い Run へ送らないため
-  if [ -n "$(find "$croot/.claude/state/coordinator" -type f -mmin "-$COORDINATOR_TTL_MIN" 2>/dev/null)" ]; then
-    to="$(head -1 "$croot/.claude/state/coordinator" 2>/dev/null | tr -d '[:space:]')" || to=""
-  fi
+  for cdir in "$PWD" "${CLAUDE_PROJECT_DIR:-}"; do
+    [ -n "$cdir" ] && [ -d "$cdir" ] || continue
+    croot="$(git -C "$cdir" rev-parse --show-toplevel 2>/dev/null)" || croot=""
+    [ -n "$croot" ] || croot="$cdir"
+    if [ -n "$(find "$croot/.claude/state/coordinator" -type f -mmin "-$COORDINATOR_TTL_MIN" 2>/dev/null)" ]; then
+      to="$(head -1 "$croot/.claude/state/coordinator" 2>/dev/null | tr -d '[:space:]')" || to=""
+      [ -z "$to" ] || { coordinator_file="$croot/.claude/state/coordinator"; break; }
+    fi
+  done
   if [ -z "$to" ] && [ -n "${ORCA_TERMINAL_HANDLE:-}" ]; then
     omit_to=1
   fi
@@ -123,15 +133,33 @@ else
   file="$(cd "$(dirname "$file")" && pwd -P)/$(basename "$file")"
 fi
 
-# 終わりの知らせに添える「消してよい worktree: N 本」（gh は使わない。0 本・読めないときは空。宛先が決まった後にだけ呼ぶ）
+# 終わりの知らせに添える「消してよい worktree: N 本（うち退避が要る M 本）」（gh は使わない。0 本・読めないときは空。宛先が決まった後にだけ呼ぶ）
 worktree_note() {
-  local n
-  n="$(HIRAI_WORKTREES_NO_GH=1 python3 "$(dirname "${BASH_SOURCE[0]}")/hirai-worktrees" list --json 2>/dev/null \
-       | python3 -c 'import json,sys; print(sum(1 for r in json.load(sys.stdin) if r.get("verdict") == "消してよい"))' 2>/dev/null)" || n=""
-  case "$n" in
-    ''|*[!0-9]*|0) ;;
-    *) printf '%s' "｜消してよい worktree: ${n} 本（hirai-worktrees list で見る）" ;;
-  esac
+  local n evac
+  read -r n evac <<EOF_WT
+$(HIRAI_WORKTREES_NO_GH=1 python3 "$(dirname "${BASH_SOURCE[0]}")/hirai-worktrees" list --json 2>/dev/null \
+   | python3 -c 'import json,sys; ok=[r for r in json.load(sys.stdin) if r.get("verdict") == "消してよい"]; print(len(ok), sum(1 for r in ok if r.get("evacuate")))' 2>/dev/null)
+EOF_WT
+  case "${n}${evac}" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$n" -gt 0 ] || return 0
+  printf '%s' "｜消してよい worktree: ${n} 本（うち退避が要る ${evac} 本。hirai-worktrees list で見る）"
+}
+
+# 終わりの知らせに添える「worktree の残り」（今いる worktree の未コミットと未 push を自分で数える。git でなければ空）
+worktree_rest() {
+  local top dirty ahead
+  top="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" || return 0
+  [ -n "$top" ] || return 0
+  dirty="$(GIT_OPTIONAL_LOCKS=0 git -C "$top" status --porcelain 2>/dev/null | wc -l | tr -d '[:space:]')"
+  case "$dirty" in ''|*[!0-9]*) return 0 ;; esac
+  if GIT_OPTIONAL_LOCKS=0 git -C "$top" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+    ahead="$(GIT_OPTIONAL_LOCKS=0 git -C "$top" rev-list --count '@{u}..HEAD' 2>/dev/null | tr -d '[:space:]')"
+    case "$ahead" in ''|*[!0-9]*) return 0 ;; esac
+    if [ "$dirty" -eq 0 ] && [ "$ahead" -eq 0 ]; then printf '%s' "｜worktree の残り: なし"; return 0; fi
+    printf '%s' "｜worktree の残り: 未コミット ${dirty} 件・未 push ${ahead} 件"
+  else
+    printf '%s' "｜worktree の残り: 未コミット ${dirty} 件・未 push upstream なし"
+  fi
 }
 
 args=()
@@ -139,7 +167,7 @@ if [ -n "$dispatch" ]; then
   case "$kind" in
     waiting)  args=(--type escalation --subject "$wsubject" --body "$wbody") ;;
     question) args=(--type question --subject "$summary" --body "${file}｜${summary}") ;;
-    done)     args=(--type worker_done --outcome succeeded --report-path "$file" --subject "${summary}$(worktree_note)") ;;
+    done)     args=(--type worker_done --outcome succeeded --report-path "$file" --subject "${summary}$(worktree_rest)$(worktree_note)") ;;
     stopped)  args=(--type worker_done --outcome failed --report-path "$file" --subject "$summary") ;;
   esac
   args+=(--dispatch-id "$dispatch")
@@ -147,7 +175,7 @@ elif [ -n "$to" ] || [ "$omit_to" -eq 1 ]; then
   case "$kind" in
     waiting)  args=(--type escalation --subject "$wsubject" --body "$wbody") ;;
     question) args=(--type question --subject "$summary" --body "${file}｜${summary}") ;;
-    done)     args=(--type status --subject "完了: ${summary}" --body "${file}｜${summary}$(worktree_note)") ;;
+    done)     args=(--type status --subject "完了: ${summary}" --body "${file}｜${summary}$(worktree_rest)$(worktree_note)") ;;
     stopped)  args=(--type status --subject "停止: ${summary}" --body "${file}｜${summary}") ;;
   esac
   [ -z "$to" ] || args+=(--to "$to")
@@ -160,6 +188,7 @@ orca orchestration send "${args[@]}"
 rc=$?
 # 担当が終わった（done）ら宛先の控えを消す（次に同じ worktree を使う担当が、この Run へ送らないため）。送れたときだけ
 if [ "$rc" -eq 0 ] && [ "$kind" = "done" ]; then
+  [ -z "$coordinator_file" ] || rm -f "$coordinator_file" 2>/dev/null
   croot_done="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" || croot_done="$PWD"
   rm -f "$croot_done/.claude/state/coordinator" 2>/dev/null
 fi

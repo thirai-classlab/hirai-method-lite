@@ -67,6 +67,6 @@ case "$wt" in
 esac
 
 if [ "$notify" = "orca" ]; then
-  echo "[harness] notify: orca — 決めてもらうことができたら問いを .tmp/ に単独で読める形で書き、hirai-notify question <絶対 path> <要約> を送ってその手番を終える。終わったら done <報告の絶対 path> <要約>、続けられないエラーは stopped <報告の絶対 path> <要約>（宛先は --dispatch-id（前置きの Dispatch の id）> --to > 環境変数。依頼文で宛先を渡されたら最初に .claude/state/coordinator へ 1 行 run:<id> で書く。24 時間で失効し、done で消える）。送る操作は検査の結果を見てから別の呼び出しで打つ。API エラーで手番が終わったときは StopFailure の hook が自動で知らせる"
+  echo "[harness] notify: orca — 決めてもらうことができたら問いを .tmp/ に単独で読める形で書き、hirai-notify question <絶対 path> <要約> を送ってその手番を終える。終わったら done <報告の絶対 path> <要約>（終わる前に、報告の頭に worktree の残りの作業（なし／あり: 内容）を書く。done は残りの数も要約に足す）、続けられないエラーは stopped <報告の絶対 path> <要約>（宛先は --dispatch-id（前置きの Dispatch の id）> --to > 環境変数。依頼文で宛先を渡されたら最初に .claude/state/coordinator へ 1 行 run:<id> で書く。24 時間で失効し、done で消える）。送る操作は検査の結果を見てから別の呼び出しで打つ。API エラーで手番が終わったときは StopFailure の hook が自動で知らせる"
 fi
 exit 0

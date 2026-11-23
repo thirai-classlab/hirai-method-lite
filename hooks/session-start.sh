@@ -5,7 +5,7 @@
 #
 # パス解決は 2 段構え。
 #   plugin_root : $CLAUDE_PLUGIN_ROOT > このスクリプトの 1 つ上 ($BASH_SOURCE 起点)
-#   root        : $CLAUDE_PROJECT_DIR > $PWD   (導入先リポジトリ = ユーザーの資産)
+#   root        : $CLAUDE_PROJECT_DIR > $PWD を harness_root で git の toplevel に解いたもの (導入先リポジトリ = ユーザーの資産)
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || here="."
@@ -22,6 +22,12 @@ fi
 if [ -f "$plugin_root/scripts/tasks-path.sh" ]; then
   # shellcheck source=../scripts/tasks-path.sh
   . "$plugin_root/scripts/tasks-path.sh" 2>/dev/null || true
+fi
+
+# root は git の toplevel に解く (サブディレクトリで開いても、mode.yml・台帳・更新の鍵が本体と同じ値になる)。
+# 解くのはここ 1 回だけ。以降の関数は解いた root を受け取り、git を打ち直さない。
+if command -v harness_root >/dev/null 2>&1; then
+  root="$(harness_root "$root")"
 fi
 
 # --- mode: 解決順は harness_mode (env HC_MODE > プロジェクト > ホーム > normal) ---

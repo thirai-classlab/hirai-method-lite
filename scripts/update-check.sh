@@ -46,7 +46,7 @@ d = json.load(open(sys.argv[1]))
 rows = [x for k, v in d.get("plugins", {}).items() if k.split("@", 1)[0] == sys.argv[2]
         for x in v if x.get("installPath")]
 rows.sort(key=lambda x: [int(n) if n.isdigit() else 0
-                          for n in re.split(r"[.]", str(x.get("version", "0")))])
+                          for n in re.split(r"[.]", str(x.get("version", "0")).split("-", 1)[0])])
 print(rows[-1]["installPath"] if rows else "")' "$f" "$entry" 2>/dev/null)" || return 1
   [ -n "$p" ] || return 1
   printf '%s' "$p"
@@ -271,10 +271,12 @@ harness_update_flag_sync() (
 # 切り替え)、そちらが起動後に背景で済ませる。hook から `claude plugin update` を叩くのは
 # 二重実装なうえ、セッション開始を通信で待たせることになるので行わない。
 
-# harness_sync_stamp_file [plugin_root] -> 前回入れ替えた版を控えるパスを stdout (作成はしない)
+# harness_sync_stamp_file [plugin_root] [project_root] -> 前回入れ替えた版を控えるパスを stdout (作成はしない)
+# 鍵は plugin_root と project_root の両方 (update-available の鍵と同じ作り)。plugin_root だけだと、版が変わって
+# 最初に開いた 1 リポだけが入れ替わり、同じ版の本体を使うほかのリポ・worktree は「版が同じ」と見て抜ける。
 harness_sync_stamp_file() (
   set -uo pipefail
-  printf '%s/synced' "$(harness_update_cache_dir "${1:-}")"
+  printf '%s/synced-%s' "$(harness_update_cache_dir "${1:-}")" "$(harness_update_flag_key "${2:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
 )
 
 # harness_sync_owned_scripts <plugin_root> <project_root> [force]
@@ -299,7 +301,7 @@ harness_sync_owned_scripts() (
       *) return 0 ;;
     esac
     [ -n "$cur" ] || return 0
-    stamp="$(harness_sync_stamp_file "$plug")"
+    stamp="$(harness_sync_stamp_file "$plug" "$root")"
     [ -f "$stamp" ] && prev="$(head -1 "$stamp" 2>/dev/null | tr -d '\r\n')"
     # 版が同じ = やることなし。比較も I/O もせずに抜ける。
     [ "$prev" = "$cur" ] && return 0
@@ -340,7 +342,7 @@ harness_sync_owned_scripts() (
   done
 
   if [ "$force" != "force" ]; then
-    stamp="$(harness_sync_stamp_file "$plug")"
+    stamp="$(harness_sync_stamp_file "$plug" "$root")"
     mkdir -p "${stamp%/*}" 2>/dev/null && printf '%s' "$cur" > "$stamp" 2>/dev/null
     [ "$(( n + placed ))" -gt 0 ] || return 0
     printf '[harness] v%s に合わせてスクリプト %s 件を入れ替えました' "$cur" "$(( n + placed ))"

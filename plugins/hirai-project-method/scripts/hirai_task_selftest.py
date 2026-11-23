@@ -58,8 +58,9 @@ def _base_plugin_root() -> str:
         with open(os.path.expanduser('~/.claude/plugins/installed_plugins.json'), encoding='utf-8') as f:
             entries = json.load(f).get('plugins', {}).get('hirai-lite@hirai-lite', [])
         # 版が最大の行を先にする（古い 1.x の行が先に並んでいても、その approval-template.md を読まない）。
+        # 「-」から後ろ（commit の接尾。3.0.2-8713c5b11005 など）は落としてから比べる。
         entries = sorted(entries, key=lambda e: [int(n) if n.isdigit() else 0
-                                                 for n in re.split(r'[.]', str(e.get('version', '0')))],
+                                                 for n in re.split(r'[.]', str(e.get('version', '0')).split('-', 1)[0])],
                          reverse=True)
         candidates += [e.get('installPath', '') for e in entries]
     except (OSError, ValueError, AttributeError):
@@ -8013,9 +8014,12 @@ def main() -> int:
                     os.environ['PATH'] = saved_path
                 return out.getvalue()
 
-            rows = json.dumps([{'verdict': '消してよい'}, {'verdict': '残す'}, {'verdict': '消してよい'}], ensure_ascii=False)
+            rows = json.dumps([{'verdict': '消してよい', 'evacuate': []},
+                               {'verdict': '残す', 'evacuate': [{'dir': '.tmp', 'count': 3}]},
+                               {'verdict': '消してよい', 'evacuate': [{'dir': '.tmp', 'count': 3}]}], ensure_ascii=False)
             text = tail(rows)
-            assert text.rstrip('\n').splitlines()[-1] == '消してよい worktree: 2 本（`hirai-worktrees list` で見る）', repr(text)
+            want = '消してよい worktree: 2 本（うち退避が要る 1 本。`hirai-worktrees list` で見る）'
+            assert text.rstrip('\n').splitlines()[-1] == want, repr(text)
             assert '消してよい worktree' not in tail(json.dumps([{'verdict': '残す'}])), '0 本なのに出した'
             assert '消してよい worktree' not in tail(None), '道具が無いのに出した'
             assert '消してよい worktree' not in tail(rows, rc=2), '道具が失敗したのに出した'
