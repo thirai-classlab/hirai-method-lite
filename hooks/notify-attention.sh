@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Notification(permission_prompt) と PermissionDenied の hook: 権限の確認の画面で止まった・auto mode の分類器が止めた、
-# ことを Orca のコーディネーターへ知らせる（担当の会話はユーザーが画面を見に行くまで止まったままになるため）。
+# Notification(permission_prompt)・PermissionDenied・StopFailure の hook: 権限の確認の画面で止まった・auto mode の分類器が止めた・
+# API エラー（時間切れ等）で手番が終わった、ことを Orca のコーディネーターへ知らせる（担当の会話はユーザーが画面を見に行くまで止まったままになるため）。
 #
 # `.claude/mode.yml` の `notify: orca`（env HC_NOTIFY が優先）のときだけ bin/hirai-notify waiting を呼ぶ。
 # 判断は変えない: 標準出力に何も出さず常に exit 0。送れなかったときは stderr に 1 行だけ。
 # 同じ会話から 1 分に 2 通以上送らない（最後に送った時刻を ${CLAUDE_PLUGIN_DATA} か <root>/.claude/state/ に置く）。
+# StopFailure は件名に error の種類、本文に last_assistant_message の先頭 80 字だけを送る。
 # tool_input の中身は送らない（秘密を含みうる）。Bash のコマンドは先頭 60 字まで。
 # 入力を読む道具（jq か python3）が無いときは何もしない。
 set -uo pipefail
@@ -13,10 +14,10 @@ plugin_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"
 input="$(cat 2>/dev/null)" || input=""
 [ -n "$input" ] || exit 0
 
-# fields: event / ntype / message / tool / cmd / reason / cwd / session を 1 行ずつ（改行は空白に）
+# fields: event / ntype / message / tool / cmd / reason / cwd / session / error / last_assistant_message を 1 行ずつ（改行は空白に）
 fields=""
 if command -v jq >/dev/null 2>&1; then
-  fields="$(printf '%s' "$input" | jq -r '[.hook_event_name, .notification_type, .message, .tool_name, (.tool_input.command // ""), .reason, .cwd, .session_id] | map((. // "") | tostring | gsub("[\r\n]+"; " ")) | .[]' 2>/dev/null)" || fields=""
+  fields="$(printf '%s' "$input" | jq -r '[.hook_event_name, .notification_type, .message, .tool_name, (.tool_input.command // ""), .reason, .cwd, .session_id, .error, .last_assistant_message] | map((. // "") | tostring | gsub("[\r\n]+"; " ")) | .[]' 2>/dev/null)" || fields=""
 elif command -v python3 >/dev/null 2>&1; then
   fields="$(printf '%s' "$input" | python3 -c '
 import json,re,sys
@@ -24,12 +25,12 @@ try: d=json.load(sys.stdin)
 except Exception: sys.exit(1)
 ti=d.get("tool_input")
 cmd=ti.get("command","") if isinstance(ti,dict) else ""
-for v in [d.get("hook_event_name"),d.get("notification_type"),d.get("message"),d.get("tool_name"),cmd,d.get("reason"),d.get("cwd"),d.get("session_id")]:
+for v in [d.get("hook_event_name"),d.get("notification_type"),d.get("message"),d.get("tool_name"),cmd,d.get("reason"),d.get("cwd"),d.get("session_id"),d.get("error"),d.get("last_assistant_message")]:
     print(re.sub(r"[\r\n]+"," ","" if v is None else str(v)))
 ' 2>/dev/null)" || fields=""
 fi
 [ -n "$fields" ] || exit 0
-{ IFS= read -r event; IFS= read -r ntype; IFS= read -r message; IFS= read -r tool; IFS= read -r cmd; IFS= read -r reason; IFS= read -r cwd; IFS= read -r session; } <<EOF2
+{ IFS= read -r event; IFS= read -r ntype; IFS= read -r message; IFS= read -r tool; IFS= read -r cmd; IFS= read -r reason; IFS= read -r cwd; IFS= read -r session; IFS= read -r apierr; IFS= read -r lastmsg; } <<EOF2
 $fields
 EOF2
 
@@ -56,6 +57,9 @@ case "$event" in
     what="${tool:-不明のツール}"
     [ -z "$cmd" ] || what="${what} $(trunc "$cmd" 60)"
     summary="${what}｜$(trunc "${reason:-理由なし}" 200)" ;;
+  StopFailure)
+    subject="API エラーで止まりました（${apierr:-unknown}）"
+    summary="$(trunc "${lastmsg:-本文なし}" 80)" ;;
   *) exit 0 ;;
 esac
 

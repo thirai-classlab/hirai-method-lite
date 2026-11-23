@@ -2117,6 +2117,18 @@ JSONEOF
   NA_TO= na_run orca "{\"hook_event_name\":\"PermissionDenied\",\"tool_name\":\"Edit\",\"reason\":\"r\",\"cwd\":\"$nrepo\",\"session_id\":\"s4\"}"
   { [ "$na_rc" -eq 0 ] && [ ! -s "$na_out" ] && [ "$(grep -c . "$na_err")" -eq 1 ]; } \
     || nb="$nb [notify-attention: 送れないときは stderr 1 行・出力なし・exit 0] exit=${na_rc} stderr 行=$(grep -c . "$na_err") 出力=$(wc -c < "$na_out")"
+  # StopFailure (API エラーで手番が終わった): 件名「API エラーで止まりました（<error>）」・本文 <root>｜<本文の先頭 80 字> を 1 通・同じ会話の 1 分以内の 2 通目は送らない・notify off は送らない
+  local j_sf
+  j_sf="{\"hook_event_name\":\"StopFailure\",\"error\":\"server_error\",\"last_assistant_message\":\"Request timed out\",\"cwd\":\"$nrepo\",\"session_id\":\"sf1\"}"
+  na_run off "$j_sf"
+  { [ "$na_rc" -eq 0 ] && [ ! -s "$nlog" ] && [ ! -s "$na_out" ]; } || nb="$nb [notify-attention: StopFailure で notify off が送った] 記録=[$(cat "$nlog")]"
+  na_run orca "$j_sf"
+  nline="$(cat "$nlog")"
+  { [ "$na_rc" -eq 0 ] && [ ! -s "$na_out" ] && [ "$(grep -c . "$nlog")" -eq 1 ] && printf '%s' "$nline" | grep -qF -- '--type escalation' \
+      && printf '%s' "$nline" | grep -qF -- 'API エラーで止まりました（server_error）' && printf '%s' "$nline" | grep -qF -- "${nroot}｜Request timed out"; } \
+    || nb="$nb [notify-attention: StopFailure が 1 通] exit=${na_rc} 記録=[${nline}]"
+  na_run orca "$j_sf"
+  { [ "$na_rc" -eq 0 ] && [ ! -s "$nlog" ] && [ ! -s "$na_out" ]; } || nb="$nb [notify-attention: StopFailure の 1 分以内の 2 通目を送った] 記録=[$(cat "$nlog")]"
   printf 'notify: off\n' > "$nrepo/.claude/mode.yml"
   nrun done ../../.tmp-q.md 要約H --to run:R1
   { [ "$nrc" -eq 0 ] && [ ! -s "$nlog" ]; } || nb="$nb [notify: off] exit=${nrc} 送った: $(cat "$nlog")"
@@ -2159,6 +2171,90 @@ JSONEOF
   [ "$pa_rc" -eq 2 ] || pa_bad="$pa_bad [PR 番号が数字でない] exit=${pa_rc} (期待 2)"
   rm -rf "$pw"
   [ -z "$pa_bad" ] || nb="$nb hirai-pr-asset:${pa_bad}"
+
+  # (g-5) hirai-watch: 偽の記録 5 場合 (API エラー終わり=出す・api-request 古い=出す・api-request 新しい=出さない・user 終わり古い=出す・end_turn 古い=出さない)
+  # と 記録の dir 無し (「記録が無い」・止まりに数えず exit 0)・--orca (偽の orca・別リポと archived は見ない・orca 無しは exit 2)・/bin/bash でなく python3 の実行。
+  local wb wb_bad="" wb_rc wb_out
+  wb="$(mktemp -d)"; mkdir -p "$wb/cfg/projects" "$wb/home" "$wb/obin" "$wb/repo"
+  # wb_mk <path> <touch -t の値 or 空> -> 標準入力を <path> の記録 (dir 名は / と . を - にしたもの) にする
+  wb_mk() {
+    local d="$wb/cfg/projects/$(printf '%s' "$1" | sed 's#[/.]#-#g')"
+    mkdir -p "$d"; cat > "$d/s.jsonl"; [ -z "${2:-}" ] || touch -t "$2" "$d/s.jsonl"; return 0
+  }
+  wb_mk /w/a <<'WE'
+{"type":"user","message":{"content":"hi"}}
+{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-11-23T01:00:00Z","message":{"content":[{"type":"text","text":"Request timed out"}]}}
+{"type":"system","subtype":"turn_duration"}
+WE
+  wb_mk /w/b 202601010000 <<'WE'
+{"type":"user","message":{"content":"hi"}}
+{"type":"api-request"}
+WE
+  wb_mk /w/c <<'WE'
+{"type":"user","message":{"content":"hi"}}
+{"type":"api-request"}
+WE
+  wb_mk /w/d 202601010000 <<'WE'
+{"type":"assistant","message":{"stop_reason":"tool_use","content":[]}}
+{"type":"user","message":{"content":[{"type":"tool_result"}]}}
+WE
+  wb_mk /w/e 202601010000 <<'WE'
+{"type":"user","message":{"content":"hi"}}
+{"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"ok"}]}}
+WE
+  wb_mk /w/x <<'WE'
+{"type":"assistant","isApiErrorMessage":true,"message":{"content":[{"type":"text","text":"Request timed out"}]}}
+WE
+  # wb_run <引数...> -> exit は wb_rc、標準出力は wb_out (標準エラーは混ぜる)
+  wb_run() {
+    wb_out="$( cd "$wb/repo" && env -i HOME="$wb/home" PATH="${WB_PATH:-/usr/bin:/bin}" CLAUDE_CONFIG_DIR="$wb/cfg" LANG=en_US.UTF-8 \
+      /usr/bin/python3 "$ROOT/bin/hirai-watch" "$@" 2>&1 )"
+    wb_rc=$?
+  }
+  wb_run /w/a
+  { [ "$wb_rc" -eq 1 ] && printf '%s' "$wb_out" | grep -qF 'API エラーで止まった' && printf '%s' "$wb_out" | grep -qF 'Request timed out'; } || wb_bad="$wb_bad [API エラーで終わり] exit=${wb_rc} 出力=[${wb_out}]"
+  wb_run /w/b
+  { [ "$wb_rc" -eq 1 ] && printf '%s' "$wb_out" | grep -qF '問い合わせの途中で'; } || wb_bad="$wb_bad [api-request のまま古い] exit=${wb_rc} 出力=[${wb_out}]"
+  wb_run /w/c
+  { [ "$wb_rc" -eq 0 ] && [ -z "$wb_out" ]; } || wb_bad="$wb_bad [api-request のまま新しい (止まりでない)] exit=${wb_rc} 出力=[${wb_out}]"
+  wb_run /w/d
+  { [ "$wb_rc" -eq 1 ] && printf '%s' "$wb_out" | grep -qF '問い合わせの途中で'; } || wb_bad="$wb_bad [tool_result の user で終わって古い] exit=${wb_rc} 出力=[${wb_out}]"
+  wb_run /w/e
+  { [ "$wb_rc" -eq 0 ] && [ -z "$wb_out" ]; } || wb_bad="$wb_bad [end_turn で終わって古い (普通の待ち)] exit=${wb_rc} 出力=[${wb_out}]"
+  wb_run --minutes 100000000 /w/b
+  { [ "$wb_rc" -eq 0 ] && [ -z "$wb_out" ]; } || wb_bad="$wb_bad [--minutes を大きくしても出した] exit=${wb_rc}"
+  wb_run /w/none
+  { [ "$wb_rc" -eq 0 ] && printf '%s' "$wb_out" | grep -qF '記録が無い'; } || wb_bad="$wb_bad [記録の dir が無い] exit=${wb_rc} 出力=[${wb_out}] (期待 記録が無い・exit 0)"
+  wb_run /w/e /w/none /w/a
+  { [ "$wb_rc" -eq 1 ] && [ "$(printf '%s\n' "$wb_out" | grep -c .)" -eq 2 ]; } || wb_bad="$wb_bad [複数 path で a だけが止まり] exit=${wb_rc} 出力=[${wb_out}]"
+  # --orca: 偽の orca が 同じ repo の /w/a・/w/e と 別 repo の /w/x と archived の /w/b を返す。cwd の origin が o/r
+  git -C "$wb/repo" init -q 2>/dev/null; git -C "$wb/repo" remote add origin git@github.com:o/r.git 2>/dev/null
+  cat > "$wb/obin/orca" <<'WE'
+#!/bin/sh
+echo '{"result":{"worktrees":[{"path":"/w/a","projectId":"github:o/r"},{"path":"/w/e","projectId":"github:o/r"},{"path":"/w/x","projectId":"github:other/r"},{"path":"/w/b","projectId":"github:o/r","isArchived":true}]}}'
+WE
+  chmod +x "$wb/obin/orca"
+  WB_PATH="$wb/obin:/usr/bin:/bin" wb_run --orca
+  { [ "$wb_rc" -eq 1 ] && printf '%s' "$wb_out" | grep -qF '/w/a: ' && ! printf '%s' "$wb_out" | grep -qF '/w/x' && ! printf '%s' "$wb_out" | grep -qF '/w/b'; } \
+    || wb_bad="$wb_bad [--orca は同じ repo の worktree だけを見て、別 repo と archived は見ない] exit=${wb_rc} 出力=[${wb_out}]"
+  wb_run --orca
+  { [ "$wb_rc" -eq 2 ] && [ -n "$wb_out" ]; } || wb_bad="$wb_bad [orca が無い --orca] exit=${wb_rc} (期待 2 と理由)"
+  wb_run --bogus
+  [ "$wb_rc" -eq 2 ] || wb_bad="$wb_bad [知らない引数] exit=${wb_rc} (期待 2)"
+  rm -rf "$wb"
+  [ -z "$wb_bad" ] || nb="$nb hirai-watch:${wb_bad}"
+
+  # (g-6) PR の雛形: mermaid の例は HTML の注の中だけにある。注を除いた可視部に出ると PR の本文に描かれてしまう
+  # (注の中に -- と > を続けた矢印を書くと注が途中で閉じ、例の残りが可視部に出る。例は = の太い矢印で書く。可視部に ``` と ==> も無いことを見る)
+  python3 - "$ROOT/templates/pull_request_template.md" <<'PYEOF' || nb="$nb [pull_request_template: mermaid の例が注の中に無い か 注を除いた可視部に出ている]"
+import re, sys
+t = open(sys.argv[1], encoding="utf-8").read()
+visible = re.sub(r"<!--.*?-->", "", t, flags=re.S)
+if any(w in visible for w in ("mermaid", "flowchart", "```", "==>")):
+    sys.exit(1)
+if not re.search(r"<!--.*?```mermaid.*?-->", t, flags=re.S):
+    sys.exit(1)
+PYEOF
 
   rm -rf "$nw"
   [ -z "$nb" ] || pr_bad="$pr_bad hirai-notify・notify-attention・hirai-pr-asset:${nb}"
