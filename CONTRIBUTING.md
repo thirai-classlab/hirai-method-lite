@@ -23,7 +23,7 @@ entry 名は系列ごとに分けてあります）。
 
 タグは版ごとに付けます。土台は `hirai-lite--v<版>`、足すプラグインは `hirai-project-method--v<版>`（公式の依存の仕組みが、
 相対 path のプラグインの版を `<plugin-name>--v<version>` の tag で見るため。[dependencies](https://code.claude.com/docs/en/plugins/dependencies)）。
-足すプラグインを入れた人には、依存の範囲に合う最大の tag の版の土台が届きます（[依存の解き方](https://code.claude.com/docs/en/plugins/dependencies.md)）。**版ごとに必ず tag を打ちます**（打ち忘れると、足すプラグインを入れた人の土台が古い tag の版に留まりえます。github のカタログでの実機の確かめは未実施）。土台だけを入れた人に届くのは `main` の中身です。
+足すプラグインを入れた人には、依存の範囲に合う最大の tag の版の土台が届きます（[依存の解き方](https://code.claude.com/docs/en/plugins/dependencies.md)）。**版ごとに必ず tag を打ちます**（打ち忘れると、足すプラグインを入れた人の土台が古い tag の版に留まりえます。tag が 1 本も無いうちは `main` の中身が入ります — 2026-11-23 に手元の git source で、tag の有無で差が無いことを実測。github のカタログでは未実施）。土台だけを入れた人に届くのは `main` の中身です。
 
 そのため次を守ります。
 

@@ -8,7 +8,7 @@
 /plugin install hirai-project-method@hirai-lite
 ```
 
-土台の hirai-lite（3.0.0 以上）が依存として一緒に入る。**1.x が入っている範囲では、先に `/plugin marketplace update hirai-lite` → 端末で `claude plugin update hirai-lite@hirai-lite --scope <入れた範囲>`（画面なら `/plugin` → Installed → Update now） で土台を 3.0.0 に上げる**（1.16.0 のままだと、上の install は依存の版で断られる）。**2.x（`hirai-lite-v2`）が入っている範囲では、足すプラグインだけを先に入れない**（開始時の表示とコマンドは 2.9.0 のままで、`/hirai-lite:board` と `/hirai-project-method:board` が並ぶ）。土台の README「1.x・2.x から 3.0.0 へ移る」の表の順（disable まで）を先に行う。そのうえで、導入先の `.claude/mode.yml` に次を書く。形は自動では見分けない。
+土台の hirai-lite（3.0.0 以上）が依存として一緒に入る。**1.x が入っている範囲では、先に `/plugin marketplace update hirai-lite` → 端末で `claude plugin update hirai-lite@hirai-lite --scope <入れた範囲>`（画面なら `/plugin` → Installed → Update now） で土台を 3.0.0 に上げる**（1.16.0 のままだと、上の install は依存の版で断られる。行は残るが読み込まれないだけで、土台を上げて開き直すと入れ直さなくても読み込まれる）。**2.x（`hirai-lite-v2`）が入っている範囲では、足すプラグインだけを先に入れない**（開始時の表示とコマンドは 2.9.0 のままで、`/hirai-lite:board` と `/hirai-project-method:board` が並ぶ）。土台の README「1.x・2.x から 3.0.0 へ移る」の表の順（disable まで）を先に行う。そのうえで、導入先の `.claude/mode.yml` に次を書く。形は自動では見分けない。
 
 ```yaml
 tasks: github-project
