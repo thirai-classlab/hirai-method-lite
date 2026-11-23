@@ -184,7 +184,7 @@ bash の出力は作業ログであって報告ではない。**最後に必ず�
 
 - 移行が起きなかった場合（すでに `docs/` を使っている / `.claude/` に書類が無い）は、**書類の置き場の行を丸ごと省く**。移した件数とパスは手順 2 の実測値に差し替える（行数は 2-1 で控えた値）。
 - **移さなかったものがあれば必ず 1 行足す**（消していないこと・どちらを残すか決めてほしいことを伝える）。例: `⚠️ .claude/tasks/list.md は移していません。docs/tasks/list.md が既にあり、上書きすると中身が消えるためです。いまは両方残っています。読まれるのは docs/ 側です。中身を見比べて、残すほうを教えてください。`
-- 手順 3 で `placed .github/pull_request_template.md` と出たときだけ 1 行足す: `✅ PR の本文の雛形を置きました → .github/pull_request_template.md（以後このリポの PR すべてに効きます）`。手順 4 で `placed docs/rules-reference/approval-template.md` と出たときだけ 1 行足す: `✅ 承認をお願いするときの型を置きました → docs/rules-reference/approval-template.md`。型を置き換えたなら `✅ 承認の型を承認カードに替えました（元の写しは approval-template.md.bak）`。`scope-check.sh` が警告を出していたら、報告の末尾にその全文をそのまま貼る。途中で止まったら同じ調子で「何が起きたか」「どうすればよいか」「ここまでにやったこと」を書く。
+- 手順 3 で `placed .github/pull_request_template.md` と出たときだけ 1 行足す: `✅ PR の本文の雛形を置きました → .github/pull_request_template.md（以後このリポの PR の本文の型です。画面で開くときは自動で入り、`gh pr create` では写して `--body-file` で渡します）`。手順 4 で `placed docs/rules-reference/approval-template.md` と出たときだけ 1 行足す: `✅ 承認をお願いするときの型を置きました → docs/rules-reference/approval-template.md`。型を置き換えたなら `✅ 承認の型を承認カードに替えました（元の写しは approval-template.md.bak）`。`scope-check.sh` が警告を出していたら、報告の末尾にその全文をそのまま貼る。途中で止まったら同じ調子で「何が起きたか」「どうすればよいか」「ここまでにやったこと」を書く。
 
 ## 手動でやらずに済ませたいとき（既定は無効）
 

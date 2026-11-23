@@ -3177,6 +3177,21 @@ if any(w in visible for w in ("mermaid", "flowchart", "```", "==>")):
 if not re.search(r"<!--.*?```mermaid.*?-->", t, flags=re.S):
     sys.exit(1)
 PYEOF
+  # (g-7) PR の雛形は 4 種別の名前・頭の 4 行・必須の節・小見出し 4 つをこの順で持つ
+  python3 - "$ROOT/templates/pull_request_template.md" <<'PYEOF' || nb="$nb [pull_request_template: 種別 4 つ・頭の 4 行・必須の節・小見出しが欠けるか順が違う]"
+import re, sys
+t = open(sys.argv[1], encoding="utf-8").read()
+visible = re.sub(r"<!--.*?-->", "", t, flags=re.S)
+kinds = ("見える変更", "見えない変更", "設計・決定の文書", "release")
+want = ["## 何のため・どう解決するか", "### 困っていること", "### 目的", "### どう解決するか", "### 採らなかった案", "## 何が変わるか",
+        "## 基本設計の全体像のどこが変わるか", "## 壊れうる所と戻し方", "## テストの結果", "## 進み具合", "## 承認カード", "## 対応する issue"]
+lines = [x.rstrip() for x in visible.splitlines() if x.strip()]
+head = [x.split(":")[0] for x in lines[:4]]
+if [x for x in lines if x.startswith("#")] != want or head != ["種別", "利用者への影響", "決めてほしいこと", "task"] or lines[4] != want[0]:
+    sys.exit(1)
+if "<!--" in visible or any("\n- %s:" % k not in t for k in kinds):
+    sys.exit(1)
+PYEOF
 
   rm -rf "$nw"
   [ -z "$nb" ] || pr_bad="$pr_bad hirai-notify・notify-attention・hirai-pr-asset:${nb}"

@@ -147,7 +147,7 @@ ls "$BASE/rules-reference/incidents.md" "$BASE/rules-reference/approval-template
 fi
 ```
 
-`docs/` が新しくできたかどうかを手元に控える (手順 9 の報告で 1 行使う)。`skip 旧レイアウト` と出たときは、手順 9 の報告で書類の行を出さず、代わりに `/hirai-lite:update` を案内する 1 行を書く。 **PR の本文の雛形**（`templates/pull_request_template.md`・9 節）は、導入先に `pull_request_template.md` がリポ直下・`docs/`・`.github/` のどこにも無いときだけ `.github/pull_request_template.md` へ置く。あれば 1 バイトも触らない（`kept`）。`user` 指定時は置かない。置いたときは手順 9 の報告で 1 行足す（`✅ PR の本文の雛形を置きました → .github/pull_request_template.md`。画面のキャプチャを載せる道具は `hirai-pr-asset`）。
+`docs/` が新しくできたかどうかを手元に控える (手順 9 の報告で 1 行使う)。`skip 旧レイアウト` と出たときは、手順 9 の報告で書類の行を出さず、代わりに `/hirai-lite:update` を案内する 1 行を書く。 **PR の本文の雛形**（`templates/pull_request_template.md`・4 種別）は、導入先に `pull_request_template.md` がリポ直下・`docs/`・`.github/` のどこにも無いときだけ `.github/pull_request_template.md` へ置く。あれば 1 バイトも触らない（`kept`）。`user` 指定時は置かない。置いたときは手順 9 の報告で 1 行足す（`✅ PR の本文の雛形を置きました → .github/pull_request_template.md`。画面のキャプチャを載せる道具は `hirai-pr-asset`）。
 
 ## 8. 二重ロードを調べる
 

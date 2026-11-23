@@ -7131,6 +7131,20 @@ def main() -> int:
             _wave_hold_rows_flags_missing_command_line,
         )
 
+        def _design_pr_by_marker_or_kind() -> None:
+            # 設計の PR は、本文の印か「種別: 設計・決定の文書」の行で見分ける（文の中の語だけでは数えない）。
+            for body, want in (
+                (f'<!-- {gh_task.DESIGN_PR_MARKER} -->\n本文', True),
+                ('種別: 設計・決定の文書\n利用者への影響: NONE\n', True),
+                ('<!-- x -->\n\n種別：「設計・決定の文書」\n', True),
+                ('種別: 見えない変更\n\n設計・決定の文書 の直しを含む\n', False),
+                ('- 設計・決定の文書: 設計・ADR の PR\n\n種別:\n', False),
+                ('', False),
+            ):
+                assert gh_task.is_design_pr(body) is want, f'{body!r} の見分けが {want} でない'
+
+        t('設計の PR は、本文の印か「種別: 設計・決定の文書」の行で見分ける', _design_pr_by_marker_or_kind)
+
         def _merged_designs_follow_the_default_branch() -> None:
             # 既定の branch が stg のとき、stg へ merge した設計 PR を拾う（rmp-app の #873）。
             import contextlib

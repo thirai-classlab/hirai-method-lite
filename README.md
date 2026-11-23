@@ -178,7 +178,7 @@ GitHub Project でやることを回すリポだけが入れます。
 
 ### PR の本文と画面のキャプチャ
 
-PR の本文は 9 節（ひとことで → 課題 → 解決の方針 → 何が変わるか → 読む順 → 実装の要点 → 確かめたこと → 承認カード・決めてほしいこと → 対応する issue）で、課題から実装へ抽象から具体の順に書きます。雛形は `templates/pull_request_template.md` で、`/hirai-lite:init` が導入先の `.github/pull_request_template.md` に**無ければ**置きます（あれば触りません）。「解決の方針」と「何が変わるか」では、流れ・つながり・前後の違いを、文の前に mermaid の図で全体像として置きます（flowchart・sequenceDiagram・stateDiagram・erDiagram。図は文の代わりではありません。GitHub は PR の本文の mermaid を描きます。雛形に例が 1 つ、注の中にあります）。背景と各節の書き方は `docs/rules-reference/git-and-pr.md` の §9、規範は `rules/code.md` の「PR」の節です。画面を変えた PR は、前後のキャプチャを `hirai-pr-asset <PR 番号> <png ...>` で branch `pr-assets` に置き、出た Markdown の 1 行を「何が変わるか」に貼ります（作業ツリーの branch は動かしません。押し先は git の remote から引き、読めないと exit 1）。
+PR の本文は 4 種別（見える変更 / 見えない変更 / 設計・決定の文書 / release）の型で書きます。頭の 4 行（種別・利用者への影響・決めてほしいこと・task）のすぐ下に「何のため・どう解決するか」（困っていること・目的・どう解決するか・採らなかった案。前 → 後の mermaid の図 1 枚）を置き、何が変わるか → 基本設計の全体像のどこが変わるか（図とリンクだけ）→ 壊れうる所と戻し方 → テスト、と抽象から具体の順に書きます。雛形は `templates/pull_request_template.md` で、`/hirai-lite:init` が導入先の `.github/pull_request_template.md` に**無ければ**置きます（あれば触りません）。背景と各節の書き方は `docs/rules-reference/git-and-pr.md` の §9、規範は `rules/code.md` の「PR」の節です。画面を変えた PR は前後のキャプチャを、画面が変わる設計の PR はこれからの見た目の絵を、`hirai-pr-asset <PR 番号> <png ...>` で branch `pr-assets` に置き、出た Markdown の 1 行を「何が変わるか」に貼ります（作業ツリーの branch は動かしません。押し先は git の remote から引き、読めないと exit 1）。
 
 ## やること管理（GitHub Project）・コンソール・スマートフォン
 
@@ -603,7 +603,7 @@ claude plugins install mattpocock-skills
 | `hooks/` | `hooks.json` + SessionStart 1 本（`session-start.sh`）と UserPromptSubmit 2 本（`loop-reminder.sh` / `context-budget.sh`）は context を足すだけで、操作は止めない。PreToolUse 1 本（`worktree-guard.sh`）は `worktree: block` のときだけ Edit・Write・NotebookEdit と `git commit` を止める（MCP の書き込みの道具は止めない。条 5 の例外。既定の `off` では何もしない）。Notification・PermissionDenied・StopFailure に結ぶ 1 本（`notify-attention.sh`）は `notify: orca` のときだけコーディネーターへ知らせる（判断は変えない） |
 | `rules/` | **プラグインは読まない。** `/init` が配置先の `.claude/rules/` へ配る素材 |
 | `scripts/` | hook / statusline が source する共通ライブラリ（パス解決 `tasks-path.sh` / context 使用率 `context-usage.sh` / 更新検知 `update-check.sh`）+ `/init` の二重ロード検査 |
-| `templates/` | `settings.json` / `mode.yml` / `CLAUDE.md` / draft / `pull_request_template.md`（PR の本文の 9 節。`/init` が導入先の `.github/` に、無ければ置く）の雛形（`CLAUDE.md` は `/init` が導入先へ置く。プラグイン直下に置くと `validate --strict` が警告するため `templates/` に置いている） |
+| `templates/` | `settings.json` / `mode.yml` / `CLAUDE.md` / draft / `pull_request_template.md`（PR の本文の 4 種別の型。`/init` が導入先の `.github/` に、無ければ置く）の雛形（`CLAUDE.md` は `/init` が導入先へ置く。プラグイン直下に置くと `validate --strict` が警告するため `templates/` に置いている） |
 | `tests/smoke.sh` | 自己検証 10 case（予算監査を含む。hook 5 / skill 3 / case 10 の上限も case 6 が見る。command は数だけ出す）。足すプラグインは `plugins/hirai-project-method/tests/smoke.sh` が別に見る |
 | `CHANGELOG.md` | 版ごとの変更点。v0.6.0 以前の既知の不具合もここに記録 |
 | `CONTRIBUTING.md` | 開発の進め方。**3.0.0 から `main` 1 本で配る**（土台 `hirai-lite` と足すプラグイン `hirai-project-method`。退役した 2.x の `v2` は凍結） |

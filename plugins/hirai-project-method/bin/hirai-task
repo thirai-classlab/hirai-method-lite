@@ -177,7 +177,7 @@ memos / today / after-merge）:
       ・wave-holds: OPEN の wave だけを見る。子孫が 1 件以上あり、子の条件は満たしたが、
         本文に「出る条件のコマンド」の行が無い wave（子孫 0 件の新しい wave は
         「満たした」に数えない。「- 出る条件のコマンド: なし（人の判断）」の行を持つ wave は出さない）
-      ・merged-designs: 既定の branch（`GET repos/{REPO}` の default_branch）へ merge された、本文に DESIGN_PR_MARKER の印がある PR のうち、
+      ・merged-designs: 既定の branch（`GET repos/{REPO}` の default_branch）へ merge された、本文に DESIGN_PR_MARKER の印か「種別: 設計・決定の文書」の行がある PR のうち、
         gh-merged-designs-since.json の since 以降のもの（簡易版。「起票済みか」までは
         判定しない。診断のための一覧であり、判断は人が行う）
       ・no-issue の merge: 直近 7 日に `no-issue` ラベルで merge された PR を「N 件: #a・#b」の
@@ -322,6 +322,7 @@ _EXIT_LINE_RE = re.compile(r'^- 出る条件のコマンド: exit 0', re.MULTILI
 # この行を持つ wave は wave-holds に出さず、「出た」とも数えない（後続は止めたまま）。
 _HUMAN_JUDGMENT_LINE_RE = re.compile(r'^- 出る条件のコマンド: なし（人の判断）', re.MULTILINE)
 DESIGN_PR_MARKER = 'pr-template-design-v1'  # 設計 PR の本文の印（PR の雛形に置く）。
+DESIGN_PR_KIND_RE = re.compile(r'^\s*種別\s*[:：]\s*「?設計・決定の文書」?\s*$', re.M)  # 土台の PR の雛形（v2）の種別の行
 
 # False にすると align・close-parents・today の完了書き込みは
 # 一覧だけを出す（selftest が「書かない側」を見るために切り替える）。
@@ -4582,11 +4583,15 @@ def fetch_closed_prs() -> list[dict]:
     return prs if isinstance(prs, list) else []
 
 
+def is_design_pr(body: str) -> bool:
+    """設計の PR か（本文の印、または「種別: 設計・決定の文書」の行）。"""
+    return DESIGN_PR_MARKER in body or DESIGN_PR_KIND_RE.search(body) is not None
+
+
 def merged_design_rows(
     since: str | None, prs: list[dict] | None = None,
 ) -> tuple[list[dict], str]:
-    """merged-designs: 既定の branch へ merge された、本文に DESIGN_PR_MARKER の印が
-    ある PR のうち since 以降のもの。簡易版（直近の closed PR 100 件までを見る。
+    """merged-designs: 既定の branch へ merge された設計の PR（is_design_pr）のうち since 以降のもの。簡易版（直近の closed PR 100 件までを見る。
     「起票済みか」までは判定しない。診断のための一覧で、判断は人が行う）。
     prs を渡せば読み済みの一覧を使い、渡さなければここで 1 回読む。"""
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -4598,7 +4603,7 @@ def merged_design_rows(
         merged_at = pr.get('merged_at')
         if not merged_at or merged_at < query_since:
             continue
-        if DESIGN_PR_MARKER in (pr.get('body') or ''):
+        if is_design_pr(pr.get('body') or ''):
             rows.append({'number': pr['number'], 'title': pr.get('title', '')})
     return rows, now.strftime('%Y-%m-%dT%H:%M:%SZ')
 
