@@ -317,16 +317,14 @@ def judge(row, default, ctx, cache_gh):
     rwt = real(wt)
     conds, reasons = {}, []
 
-    code, out = git(["-c", "status.showUntrackedFiles=normal", "status", "--porcelain", "--ignored", "-z",
+    # 安い条件を先に見る。--ignored 付きの git status と gh は、安い条件が全部通った worktree にだけ打つ
+    code, out = git(["-c", "status.showUntrackedFiles=normal", "status", "--porcelain", "-z",
                      "--untracked-files=normal"], wt)
-    ignored = []
     if code != 0:
         conds["clean"] = False
         reasons.append("作業の有無を読めない（git status が失敗）")
     else:
-        entries = status_entries(out)
-        dirty = [e for e in entries if not e.startswith("!! ")]
-        ignored = [e[3:] for e in entries if e.startswith("!! ")]
+        dirty = status_entries(out)
         conds["clean"] = not dirty
         if dirty:
             reasons.append("作業がある（未コミット %d 件）" % len(dirty))
@@ -373,24 +371,12 @@ def judge(row, default, ctx, cache_gh):
     if not row["branch"]:
         reasons.append("detached（branch が無い）")
 
-    # 7 取り込み済み
+    # 7・8 の安い側（既定の branch への取り込み・upstream）。gh はこの後、安い条件が全部通ったときだけ
     merged_local = in_default(wt, default)
     if default is None:
         reasons.append("既定の branch を決められない（origin/HEAD が無い）")
-    gh_note = ""
-    if merged_local:
-        conds["merged"] = True
-    else:
-        g = pr_merged(wt, row["head"], cache_gh)
-        conds["merged"] = g is True
-        if g is not True:
-            if g is None:
-                gh_note = "（gh 未確認）"
-            reasons.append("取り込み済みでない" + gh_note)
-
-    # 8 中身が origin にある
-    up_ok = False
     has_up = False
+    up_ok = False
     if row["branch"]:
         c, up = git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], wt)
         has_up = c == 0 and bool(up.strip())
@@ -398,12 +384,34 @@ def judge(row, default, ctx, cache_gh):
             has_up = False  # 既定の branch を追うだけの作りたては、upstream が無いのと同じ
     if has_up:
         c2, out = git(["rev-list", "--count", "@{u}.."], wt)
-        n = out.strip()
-        up_ok = c2 == 0 and n == "0"
+        up_ok = c2 == 0 and out.strip() == "0"
+    cheap_ok = all(conds.get(k) is True for k in ("clean", "no_nested", "process", "terminal", "outer_idle", "branch"))
+    g = None
+    gh_asked = cheap_ok and not (merged_local and up_ok)
+    if gh_asked:
+        g = pr_merged(wt, row["head"], cache_gh)
+
+    # 7 取り込み済み
+    gh_note = ""
+    if merged_local:
+        conds["merged"] = True
+    elif not gh_asked:
+        conds["merged"] = None  # 安い条件で残すと決まったので PR は引いていない
+        reasons.append("取り込み 未確認（ほかの条件で残す）")
+    else:
+        conds["merged"] = g is True
+        if g is not True:
+            if g is None:
+                gh_note = "（gh 未確認）"
+            reasons.append("取り込み済みでない" + gh_note)
+
+    # 8 中身が origin にある
     if up_ok:
         conds["pushed"] = True
+    elif not gh_asked:
+        conds["pushed"] = None
+        reasons.append("origin にあるか 未確認（ほかの条件で残す）")
     else:
-        g = pr_merged(wt, row["head"], cache_gh)
         conds["pushed"] = g is True
         if g is not True:
             if not has_up:
@@ -413,7 +421,17 @@ def judge(row, default, ctx, cache_gh):
 
     keys = ("clean", "no_nested", "process", "terminal", "outer_idle", "branch", "merged", "pushed")
     ok = all(conds[k] is True for k in keys)
-    evac = evacuation(wt, ignored, ctx["all_paths"]) if ok else []
+    evac = []
+    if ok:
+        code, out = git(["-c", "status.showUntrackedFiles=normal", "status", "--porcelain", "--ignored", "-z",
+                         "--untracked-files=normal"], wt)
+        if code != 0:
+            conds["clean"] = False
+            reasons.append("作業の有無を読めない（git status が失敗）")
+            ok = False
+        else:
+            ignored = [e[3:] for e in status_entries(out) if e.startswith("!! ")]
+            evac = evacuation(wt, ignored, ctx["all_paths"])
     return ok, conds, reasons, evac
 
 

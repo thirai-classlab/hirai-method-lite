@@ -11,6 +11,10 @@ ROOT="${CLAUDE_PLUGIN_ROOT:-}"
 if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then ROOT="$(cd "$here/.." && pwd)"; fi
 HOOKS="$ROOT/hooks"
 FAILED=0
+R6_SKIP_FILE="$(mktemp)"   # HARNESS_SMOKE_QUICK=1 で飛ばした壊した複製の本数（r6_suite は $( ) の中で動くのでファイルに足す）
+
+# mkt -> 実体の path (pwd -P) にした使い捨ての dir。macOS の /var → /private/var の違いで、実体を返す script の出力と期待値が食い違わない
+mkt() { local d; d="$(mktemp -d)" && CDPATH= builtin cd -- "$d" >/dev/null 2>&1 && builtin pwd -P; }
 
 # T0 (常時ロード = frontmatter に paths: を持たない rule) に居てよいファイルの許可リスト。
 # 層を変える (T0 昇格 / T1 降格) ときはここを更新する。
@@ -114,7 +118,7 @@ r6_must_fail() {
 #   D cwd が CLAUDE_PROJECT_DIR と違っても、画面下が会話のリポで hirai-task line を引く
 r6_update_checks() {
   local s h td M W1 W2 O X o c tb
-  s="$(mktemp -d)"; r6_scratch "$s" "$@" || { echo "FAIL 壊す式が効かない: $1"; rm -rf "$s"; return; }
+  s="$(mkt)"; r6_scratch "$s" "$@" || { echo "FAIL 壊す式が効かない: $1"; rm -rf "$s"; return; }
   h="$s/home"; td="$s/td"; M="$s/M"; W1="$s/W1"; W2="$s/W2"; O="$s/O"; X="$s/X"
   mkdir -p "$h/.claude/plugins" "$td" "$M"
   local r
@@ -199,14 +203,36 @@ r6_update_checks() {
   local h2; mkdir -p "$s/h2/proj/sub"; h2="$(cd "$s/h2" && pwd -P)"; git init -q "$h2" 2>/dev/null   # HOME 自身が git（手順 0 の判定行は pwd -P の toplevel と比べるので実体の path）
   o="$(rr "$h2/proj/sub" 'harness_root "$PWD"; echo; harness_top "$PWD"' "$h2")"
   [ "$o" = "$h2/proj/sub"$'\n'"$h2/proj/sub" ] || echo "FAIL E-home-git HOME が git のとき root・top が dir のままでない: [$o]"
-  # 手順 0 の判定行 (commands/init.md・update.md): サブディレクトリでだけ「ここはリポのサブディレクトリ」と出る
+  # E3 (fix9) mode:・tasks:・auto_sync: は「パッケージ (mode.yml を持つ dir) → toplevel → ホーム」を項目ごとに引く。settings.json だけ・rules だけの dir は toplevel の値
+  mkdir -p "$M/apps/web/.claude" "$M/apps/rules/.claude/rules"; printf '{}\n' > "$M/apps/web/.claude/settings.json"
+  printf 'mode: loop\ntasks: github-project\nworktree: block\n' > "$M/.claude/mode.yml"
+  local sd
+  for sd in apps/web apps/rules; do
+    o="$(rr "$M/$sd" 'unset HC_TASKS; harness_mode "$PWD"; echo; harness_tasks_form "$PWD"')"
+    [ "$o" = loop$'\n'github-project ] || echo "FAIL E-subdir-settings-only $sd (settings.json だけ・rules だけ) で mode・tasks が toplevel の値 (loop・github-project) にならない: [$o]"
+  done
+  printf 'mode: normal\nworktree: block\n' > "$M/.claude/mode.yml"
+  # E4 zsh の chpwd が標準出力に書いても、path を返す関数 (harness_mode_write_file) の出力が崩れない
+  if command -v zsh >/dev/null 2>&1; then
+    local zp zc
+    zp="$(cd "$M/apps/api" && env HOME="$h" zsh -c ". \"$s/scripts/tasks-path.sh\"; harness_mode_write_file \"\$PWD\"" 2>&1)"
+    zc="$(cd "$M/apps/api" && env HOME="$h" zsh -c "chpwd() { echo JUNK; }; . \"$s/scripts/tasks-path.sh\"; harness_mode_write_file \"\$PWD\"" 2>&1)"
+    { [ -n "$zp" ] && [ "$zp" = "$zc" ]; } || echo "FAIL E-chpwd zsh の chpwd が標準出力に書くと harness_mode_write_file の path が崩れる: 通常 [$zp]・chpwd 付き [$zc]"
+  fi
+  # E5 HOME が symlink で、実体の HOME が git のとき、root は HOME に解けず dir のまま
+  local hl="$s/hl"; mkdir -p "$hl/real/work/bare"; git init -q "$hl/real" 2>/dev/null; ln -s "$hl/real" "$hl/link" 2>/dev/null
+  hl="$(cd "$hl" && pwd -P)"
+  o="$(rr "$hl/link/work/bare" 'harness_root "$PWD"' "$hl/link")"
+  [ "$o" = "$hl/real/work/bare" ] || echo "FAIL E-home-symlink HOME が symlink のとき root が HOME (実体) に解けた。dir のままのはず (期待 $hl/real/work/bare): [$o]"
+  # 手順 0 の判定行 (commands/init.md・update.md): サブディレクトリと .claude/state/ だけの dir でだけ「ここはリポのサブディレクトリ」と出る
   local cmdf st0 where hh
+  mkdir -p "$M/docs/pp/.claude/state"   # .claude/state/ だけを持つ dir
   for cmdf in init update; do
-    st0="$(grep -m1 '^T="$(git rev-parse --show-toplevel' "$s/commands/$cmdf.md" | sed 's/\(echo "ここはリポのサブディレクトリ[^"]*"\).*$/\1/')"
+    st0="$(grep -m1 '^\. "\$P/scripts/tasks-path.sh"' "$s/commands/$cmdf.md" | sed 's/\(echo "ここはリポのサブディレクトリ[^"]*"\).*$/\1/')"
     [ -n "$st0" ] || { echo "FAIL E-step0-line $cmdf.md に手順 0 の判定行が無い"; continue; }
-    for where in "$M/apps/api/src:出る" "$M/packages/app:出ない" "$M:出ない" "$h2/proj/sub:出ない"; do
+    for where in "$M/apps/api/src:出る" "$M/docs/pp:出る" "$M/packages/app:出ない" "$M:出ない" "$h2/proj/sub:出ない"; do
       hh="$h"; case "$where" in "$h2"/*) hh="$h2" ;; esac
-      o="$(cd "${where%%:*}" && env HOME="$hh" bash -c "$st0" 2>/dev/null)"
+      o="$(cd "${where%%:*}" && env HOME="$hh" P="$s" bash -c "$st0" 2>/dev/null)"
       case "${where##*:}:$o" in 出る:*サブディレクトリ*|出ない:) : ;; *) echo "FAIL E-step0-line $cmdf.md の判定行が ${where%%:*} で ${where##*:} のはずが [$o]" ;; esac
     done
   done
@@ -248,7 +274,7 @@ r6_update_checks() {
 
 # r6_guard_checks [<rel> <sed>] -> worktree-guard.sh (入れ子・heredoc・日本語・大小・別 worktree)・orca-context.sh (サブディレクトリ表示・guard と同じ判定)
 r6_guard_checks() {
-  local s; s="$(mktemp -d)"; r6_scratch "$s" "$@" || { echo "FAIL 壊す式が効かない: $1"; rm -rf "$s"; return; }
+  local s; s="$(mkt)"; r6_scratch "$s" "$@" || { echo "FAIL 壊す式が効かない: $1"; rm -rf "$s"; return; }
   cat > "$s/guard-test.sh" <<'R6GUARD'
 G="$1"
 W0="$(cd "$(dirname "$0")" && pwd -P)"
@@ -368,6 +394,16 @@ git commit -m x' | chk DENY "utf8-delim-$l" LANG=$l LC_ALL=$l
 
 - <<重要>> の印を外す"' | chk DENY "utf8-dq-$l" LANG=$l LC_ALL=$l
 done
+# ~/.claude が git・HOME が git・.tmp の clone の中の worktree は止めない (HC_WORKTREE=block でも)
+mkdir -p "$T/hm/.claude/projects/x" "$T/hm/Desktop"; git init -q "$T/hm/.claude"; git init -q "$T/hm"
+ed "$T/hm/.claude/projects/x/m.md" | chk ALLOW home-claude-git-edit HC_WORKTREE=block HOME="$T/hm"
+bs "$T/hm" "git -C $T/hm/.claude commit -am x" | chk ALLOW home-claude-git-commit HC_WORKTREE=block HOME="$T/hm"
+ed "$T/hm/Desktop/x.md" | chk ALLOW home-git-edit HC_WORKTREE=block HOME="$T/hm"
+ed "$T/P/sub/f.txt" | chk DENY block-control-with-home HC_WORKTREE=block HOME="$T/hm"
+CL="$T/P/.tmp/clone"; git -C "$CL" -c user.email=a@b -c user.name=a commit -q --allow-empty -m i; mkdir -p "$CL/.claude/worktrees"
+git -C "$CL" worktree add -q "$CL/.claude/worktrees/agent-z" -b z
+ed "$CL/.claude/worktrees/agent-z/b.txt" | chk ALLOW tmp-clone-worktree-edit HC_WORKTREE=block
+bs "$T/P" "git -C $CL/.claude/worktrees/agent-z commit -am x" | chk ALLOW tmp-clone-worktree-commit HC_WORKTREE=block
 exit $fail
 R6GUARD
   cat > "$s/ctx-test.sh" <<'R6CTX'
@@ -383,6 +419,9 @@ chk main-warns 'worktree: block' CLAUDE_PROJECT_DIR="$T/P"
 out="$(env CLAUDE_PROJECT_DIR="$T/W" ORCA_WORKTREE_ID=repo::$T/W bash "$C")"; [ -z "$out" ] && echo "ok   worktree silent" || { echo "FAIL ctx-worktree-silent: $out"; fail=1; }
 out="$(env CLAUDE_PROJECT_DIR="$T/P/.claude/worktrees/agent-1" ORCA_WORKTREE_ID=repo::$T/W bash "$C")"; [ -z "$out" ] && echo "ok   nested silent" || { echo "FAIL ctx-nested-silent (guard と判定が違う): $out"; fail=1; }
 out="$(env CLAUDE_PROJECT_DIR="$T/W3" ORCA_WORKTREE_ID=repo::$T/W bash "$C")"; [ -n "$out" ] && echo "ok   other worktree warns" || { echo "FAIL ctx-other-worktree-warns"; fail=1; }
+# guard が止めない場所 (.tmp の clone・HOME が git) では「止まります」と言わない
+out="$(env CLAUDE_PROJECT_DIR="$T/P/.tmp/clone" HC_WORKTREE=block bash "$C" 2>&1 </dev/null)"; [ -z "$out" ] && echo "ok   tmp-clone silent" || { echo "FAIL ctx-tmp-clone-silent (guard と判定が違う): $out"; fail=1; }
+out="$(env CLAUDE_PROJECT_DIR="$T/hm/Desktop" HOME="$T/hm" HC_WORKTREE=block bash "$C" 2>&1 </dev/null)"; [ -z "$out" ] && echo "ok   home-git silent" || { echo "FAIL ctx-home-git-silent (guard と判定が違う): $out"; fail=1; }
 exit $fail
 R6CTX
   ( cd "$s" && env -u CLAUDE_PROJECT_DIR -u ORCA_WORKTREE_ID bash guard-test.sh "$s/hooks/worktree-guard.sh" 2>&1 | grep '^FAIL' )
@@ -392,7 +431,7 @@ R6CTX
 
 # r6_notify_checks [<rel> <sed>] -> notify-attention.sh の秘密の伏せ (代入・コマンド置換・括弧)・hirai-notify の coordinator の期限と done で消える
 r6_notify_checks() {
-  local s; s="$(mktemp -d)"; r6_scratch "$s" "$@" || { echo "FAIL 壊す式が効かない: $1"; rm -rf "$s"; return; }
+  local s; s="$(mkt)"; r6_scratch "$s" "$@" || { echo "FAIL 壊す式が効かない: $1"; rm -rf "$s"; return; }
   cat > "$s/notify-test.sh" <<'R6NOTIFY'
 H="$1"; N="$2"
 T="$(cd "$(dirname "$0")" && pwd -P)/nt"
@@ -447,7 +486,7 @@ grep -q -- '--to run:NEST' "$T/log" || echo "FAIL notify-nested-coordinator 入�
 # 要約・ファイルの位置に -- 始まりが来たら送らず exit 2
 : > "$T/log"; env HC_NOTIFY=orca PATH="$T/bin:$PATH" FAKE_LOG="$T/log" HIRAI_COORDINATOR=run:C bash "$N" question rep.md --dispatch-id >/dev/null 2>&1; rc=$?
 { [ "$rc" -eq 2 ] && [ ! -s "$T/log" ]; } || echo "FAIL notify-dashdash-summary -- 始まりの要約を送った rc=$rc log=$(cat "$T/log")"
-# done の本文に「worktree の残り」(upstream が無ければ upstream なし・push 済みで clean なら なし・未コミットがあれば件数)
+# done の本文に「worktree の残り」(push 済みで clean なら なし・それ以外は「未コミット N 件・未 push M 件」。未 push は origin のどの branch にも無い commit の数)
 git init -q --bare "$T/O.git"; git clone -q "$T/O.git" "$T/C" 2>/dev/null
 ( cd "$T/C" && git -c user.email=a@b -c user.name=a commit -q --allow-empty -m i && git push -q -u origin HEAD 2>/dev/null )
 echo r > "$T/rep2.md"
@@ -464,6 +503,16 @@ git -C "$T/N2" commit -q --allow-empty -m g; git -C "$T/N2" push -q origin HEAD:
 rest "$T/N2" | grep -q 'worktree の残り: なし' || echo "FAIL notify-rest-pushed-elsewhere 別名で push 済み（upstream は origin/main のまま）なのに未 push と出た: $(rest "$T/N2")"
 echo n > "$T/N2/new.txt"; git -C "$T/N2" config status.showUntrackedFiles no
 rest "$T/N2" | grep -q 'worktree の残り: 未コミット 1 件・未 push 0 件' || echo "FAIL notify-rest-untracked-normal showUntrackedFiles=no でも未追跡を数えるはず: $(rest "$T/N2")"
+# 未コミットの数に .tmp/・.claude/state/ の行を入れない（報告と控えは作業の成果ではない）
+mkdir -p "$T/N2/.tmp" "$T/N2/.claude/state"; echo r > "$T/N2/.tmp/rr.md"; echo run:C > "$T/N2/.claude/state/coordinator"
+rest "$T/N2" | grep -q 'worktree の残り: 未コミット 1 件・未 push 0 件' || echo "FAIL notify-rest-excludes-tmp .tmp/・.claude/state/ の行まで未コミットに数えた: $(rest "$T/N2")"
+# CDPATH が相対 path に当たる環境でも、本文は 1 行で絶対 path (cd が dir を標準出力に書かない)
+: > "$T/log"; ( cd "$T/N2" && env HC_NOTIFY=orca PATH="$T/bin:$PATH" FAKE_LOG="$T/log" HIRAI_COORDINATOR=run:C CDPATH=. bash "$N" done .tmp/rr.md d >/dev/null 2>&1 )
+{ [ "$(grep -c -- '--body' "$T/log")" = 1 ] && grep -qF -- "--body $T/N2/.tmp/rr.md｜" "$T/log"; } || echo "FAIL notify-cdpath-relative-file CDPATH=. で本文が 1 行の絶対 path にならない: $(cat "$T/log")"
+# python3 は -I で呼ぶ（cwd の json.py を読み込まない）
+mkdir -p "$T/pyc"; printf 'open(%s, "w").write("x")\n' "\"$T/pymark\"" > "$T/pyc/json.py"; rm -f "$T/pymark"; echo run:C > "$T/N2/.claude/state/coordinator"
+( cd "$T/pyc" && env HC_NOTIFY=orca PATH="$T/bin:$PATH" FAKE_LOG="$T/log" HIRAI_COORDINATOR=run:C bash "$N" done "$T/N2/.tmp/rr.md" d >/dev/null 2>&1 )
+[ ! -e "$T/pymark" ] || echo "FAIL notify-python-isolated 作業ディレクトリの json.py を python3 が読み込んだ (-I が無い)"
 exit 0
 R6NOTIFY
   ( cd "$s" && bash notify-test.sh "$s/hooks/notify-attention.sh" "$s/bin/hirai-notify" 2>&1 | grep '^FAIL' )
@@ -474,13 +523,14 @@ R6NOTIFY
 # 「消してよい」は 8 条件（作業なし・入れ子なし・プロセスなし・端末なし・外側が使用中でない・branch あり・取り込み済み・origin にある）が
 # 全部そろったものだけ。欠けるもの・読めないものは理由つきで「残す」。消す操作は持たない。
 r6_worktrees_checks() {
-  local s; s="$(mktemp -d)"; r6_scratch "$s" "$@" || { echo "FAIL 壊す式が効かない: $1"; rm -rf "$s"; return; }
+  local s; s="$(mkt)"; r6_scratch "$s" "$@" || { echo "FAIL 壊す式が効かない: $1"; rm -rf "$s"; return; }
   local fb="$s/fakebin" M="$s/main" g="git -C" o b rc pth lsofp procpid
   pth="$fb:/usr/bin:/bin"; lsofp="$(command -v lsof 2>/dev/null)"; [ -z "$lsofp" ] || pth="$pth:$(dirname "$lsofp")"
   mkdir -p "$fb"
   # 偽の gh: $FAKE_PRS の行「<sha> <head の sha か same>」にある commit だけ MERGED の PR を返す。FAKE_GH_FAIL=1 なら失敗
   cat > "$fb/gh" <<'GHX'
 #!/usr/bin/env bash
+printf '%s\n' "$PWD" >> "$(dirname "$0")/../gh.log"
 [ "${FAKE_GH_FAIL:-}" = 1 ] && exit 1
 case "$*" in *"/commits/"*"/pulls"*) ;; *) exit 1 ;; esac
 all="$*"; sha="${all##*/commits/}"; sha="${sha%%/*}"
@@ -562,6 +612,12 @@ for k, word in (("fresh", "upstream が無い"), ("track", "upstream が無い")
     if not has(k, word):
         print("FAIL wt-reason-%s 「残す」の理由に「%s」が無い: %s" % (k, word, got.get(k, {}).get("reasons")))
 ' 2>&1
+  # 安い条件で残す worktree には gh を打たない（呼び出しの記録は偽の gh が cwd を残す）。全部通る worktree (prw) には打つ
+  local gl; gl="$(cat "$s/gh.log" 2>/dev/null)"
+  for b in dirty term termid proc det outer unt outert/.tmp/inner2; do
+    printf '%s\n' "$gl" | grep -qxF "$s/$b" && echo "FAIL wt-gh-cheap 安い条件で残す worktree ($b) に gh を打った"
+  done
+  printf '%s\n' "$gl" | grep -qxF "$s/prw" || echo "FAIL wt-gh-cheap 安い条件が全部通る worktree (prw) に gh を打っていない（記録: $(printf '%s' "$gl" | tr '\n' ' ')）"
   # 打った会話自身の worktree（親のプロセスの cwd がある worktree）は、別の dir から打っても「今いる worktree」で対象外
   o="$(cd "$s/own" && env PATH="$pth" FAKE_ORCA="$s/orca.json" FAKE_PRS="$s/prs" bash -c "cd '$M' && python3 '$s/bin/hirai-worktrees' list --json; :" 2>&1)"
   printf '%s' "$o" | python3 -c '
@@ -615,7 +671,7 @@ if rows.get("prw") != "残す" or rows.get("ok") != "消してよい":
     printf 'import time\ntime.sleep(8)\n' > "$s/bin2/hirai-worktrees"; rm -f "$s/send.log"
     local t0=$SECONDS
     ( cd "$M" && env PATH="$pth" FAKE_ORCA="$s/orca.json" HIRAI_COORDINATOR=run:x bash "$s/bin2/hirai-notify" done "$s/rep.md" "終わり" ) >/dev/null 2>&1; rc=$?
-    { [ $((SECONDS - t0)) -lt 6 ] && [ "$rc" -eq 0 ] && [ -s "$s/send.log" ] && ! grep -q '消してよい worktree' "$s/send.log"; } || echo "FAIL wt-notify-limit 上限を超えても止まらない・1 行が残る・送信が止まった (${rc}・$((SECONDS - t0)) 秒): $(tr '\n' ' ' < "$s/send.log" 2>/dev/null)"
+    { [ $((SECONDS - t0)) -lt 6 ] && [ "$rc" -eq 0 ] && [ -s "$s/send.log" ] && grep -qF '消してよい worktree: 数えられなかった（hirai-worktrees list で見る）' "$s/send.log" && ! grep -q '消してよい worktree: [0-9]' "$s/send.log"; } || echo "FAIL wt-notify-limit 上限を超えても止まらない・「数えられなかった」が出ない・送信が止まった (${rc}・$((SECONDS - t0)) 秒): $(tr '\n' ' ' < "$s/send.log" 2>/dev/null)"
   fi
   r6_watch_checks "$s"
   rm -rf "$s"
@@ -678,14 +734,17 @@ D-statusline-root|scripts/statusline.sh|s/HIRAI_TASK_ROOT="\$root" //
 C-joined|scripts/update-check.sh|s/^  harness_update_pm_notice "\$root" "\${2:-}"$/  :/
 E-subdir-tasks|scripts/tasks-path.sh|s/if \[ -e "\$cur\/.git" \]; then _HR_TOP/if false; then _HR_TOP/
 E-subdir-first|scripts/tasks-path.sh|s/if \[ -z "\$_HR_FIRST" \] \&\& {/if false \&\& {/
-E-subdir-first-mode|scripts/tasks-path.sh|s/^  if \[ -n "\$_HR_FIRST" \]; then printf/  if false; then printf/
+E-subdir-first-mode|scripts/tasks-path.sh|s/^  \[ -z "\$pkg" \] || printf .%s\\n. "\$pkg\/.claude\/mode.yml"$/  :/
 E-subdir-state|scripts/tasks-path.sh|s/for p in "\$d\/.claude\/state" "\$r\/.claude\/state"; do/for p in "$r\/.claude\/state"; do/
 E-subdir-nomarker|scripts/tasks-path.sh|s/elif \[ -n "\$_HR_TOP" \]; then printf/elif false; then printf/
 E-subdir-state-pkg|scripts/tasks-path.sh|s/^  r="\$(harness_root "\$d")"$/  r="$d"/
-E-top-worktree|scripts/tasks-path.sh|s/worktree|notify|nightly_ci) root=/zzz) root=/
+E-top-worktree|scripts/tasks-path.sh|s/worktree|notify|nightly_ci) pkg=""/zzz) pkg=""/
 E-home-git|scripts/tasks-path.sh|s/^      _HR_TOP=""$/      :/
-E-step0-line|commands/init.md|s/ \&\& \[ ! -d "\$PWD\/.claude" \]//
-E-step0-line|commands/update.md|s/ \&\& \[ ! -d "\$PWD\/.claude" \]//
+E-step0-line|commands/init.md|s/\[ "\$R" != "\$(builtin pwd -P)" \]/[ "$R" != "$(builtin pwd -P)" ] \&\& [ ! -d "$PWD\/.claude" ]/
+E-step0-line|commands/update.md|s/\[ "\$R" != "\$(builtin pwd -P)" \]/[ "$R" != "$(builtin pwd -P)" ] \&\& [ ! -d "$PWD\/.claude" ]/
+E-subdir-settings-only|scripts/tasks-path.sh|s/^  pkg="\$_HR_PKG"$/  pkg="$_HR_FIRST"/;s/^  \[ "\$top" = "\$pkg" \] || printf/  [ -n "$pkg" ] || printf/
+E-chpwd|scripts/tasks-path.sh|s/CDPATH= builtin cd -- "\$1" >\/dev\/null 2>&1 \&\& builtin pwd -P/cd "$1" \&\& pwd/
+E-home-symlink|scripts/tasks-path.sh|s/h="\$(_harness_phys "\$h" 2>\/dev\/null || printf .%s. "\$h")"; //
 H-disabled-main-local|scripts/tasks-path.sh|s/ if main else \[\]) +/ if False else []) +/
 F-suffix-update-check|scripts/update-check.sh|s/\.split("-", 1)\[0\]//
 F-suffix-tasks-path|scripts/tasks-path.sh|s/\.split("-", 1)\[0\]//
@@ -712,6 +771,11 @@ guard-outer-gitignored|hooks/worktree-guard.sh|s/^  return 1$/  git -C "$otop" c
 guard-tmp-clone-commit|hooks/worktree-guard.sh|s/outer_ignored "\$top" \&\& return 0/:/
 guard-tmp-clone-edit|hooks/worktree-guard.sh|s/outer_ignored "\$top" "\$rel" \&\& exit 0/:/
 ctx-subdir-shows-block|scripts/orca-context.sh|s/rev-parse --show-toplevel/rev-parse --show-cdup/
+ctx-tmp-clone-silent|scripts/orca-context.sh|s/ || outer_ignored "\$root"//
+guard-home-claude-git-edit|hooks/worktree-guard.sh|s/under_home_claude "\$abs" \&\& exit 0/:/
+guard-home-claude-git-commit|hooks/worktree-guard.sh|s/under_home_claude "\$(phys "\$dir")" \&\& return 0/:/
+guard-home-git-edit|hooks/worktree-guard.sh|s/home_scope "\$top" \&\& exit 0/:/
+guard-tmp-clone-worktree-edit|hooks/worktree-guard.sh|s/^    cur="\$otop"$/    return 1/
 X
       ;;
     notify)
@@ -724,8 +788,11 @@ notify-dashdash-summary|bin/hirai-notify|s/case "\$summary" in --\*) usage; exit
 notify-rest-none|bin/hirai-notify|s/worktree の残り: なし/worktree の残り: X/
 notify-rest-no-upstream|bin/hirai-notify|s/rev-list --count HEAD --not --remotes=origin/rev-list --count @{u}..HEAD/
 notify-rest-pushed-elsewhere|bin/hirai-notify|s/rev-list --count HEAD --not --remotes=origin/rev-list --count @{u}..HEAD/
-notify-rest-untracked-normal|bin/hirai-notify|s/status --porcelain --untracked-files=normal/status --porcelain/
+notify-rest-untracked-normal|bin/hirai-notify|s/status --porcelain --untracked-files=all/status --porcelain/
 notify-assign|hooks/notify-attention.sh|s/if (!safe_value(v)) exit/if (0) exit/
+notify-rest-excludes-tmp|bin/hirai-notify|s# | grep -vE '[^']*'##
+notify-cdpath-relative-file|bin/hirai-notify|s/CDPATH= builtin cd -- "\$(dirname "\$file")" >\/dev\/null 2>&1 \&\& builtin pwd -P/cd "$(dirname "$file")" \&\& pwd -P/
+notify-python-isolated|bin/hirai-notify|s/python3 -I -c/python3 -c/
 X
       ;;
     worktrees)
@@ -746,6 +813,7 @@ wt-notify-note|bin/hirai-notify|s/消してよい worktree:/X:/
 wt-notify-note|bin/hirai-notify|s/env -u HIRAI_WORKTREES_NO_GH python3/env HIRAI_WORKTREES_NO_GH=1 python3/
 wt-notify-limit-15|bin/hirai-notify|s/^NOTE_LIMIT_SEC=15$/NOTE_LIMIT_SEC=600/
 wt-notify-limit|bin/hirai-notify|s/timeout=int(sys.argv\[2\])/timeout=None/
+wt-gh-cheap|bin/hirai-worktrees|s/^    cheap_ok = all(.*$/    cheap_ok = True/
 wt-track|bin/hirai-worktrees|s/if has_up and default is not None and up.strip() == default:/if False:/
 wt-jp|bin/hirai-worktrees|s/"--ignored", "-z",/"--ignored",/
 wt-outb|bin/hirai-worktrees|s/if d not in WALK_SKIP_DIRS and/if d not in REGENERABLE_DIRS and/
@@ -765,6 +833,8 @@ X
 r6_suite() {
   local fn="r6_$1_checks" out tag rel ex
   out="$($fn 2>&1)"; [ -z "$out" ] || printf '%s\n' "$out"
+  # HARNESS_SMOKE_QUICK=1 は壊した複製の確かめを飛ばす（直した形の確かめは回す）。飛ばした本数は最後に 1 行出す
+  if [ "${HARNESS_SMOKE_QUICK:-}" = 1 ]; then r6_mutants "$1" | grep -c . >> "$R6_SKIP_FILE"; return 0; fi
   while IFS='|' read -r tag rel ex; do
     [ -n "$tag" ] || continue
     out="$($fn "$rel" "$ex" 2>&1)"
@@ -775,7 +845,7 @@ r6_suite() {
 # ---------- case 1: session-start.sh は対象ファイル不在でも exit 0 ----------
 case_1() {
   local tmp out rc
-  tmp="$(mktemp -d)"; mkdir -p "$tmp/hooks"
+  tmp="$(mkt)"; mkdir -p "$tmp/hooks"
   cp "$HOOKS/session-start.sh" "$tmp/hooks/" 2>/dev/null
   out="$(CLAUDE_PLUGIN_ROOT="$tmp" CLAUDE_PROJECT_DIR="$tmp" bash "$tmp/hooks/session-start.sh" 2>&1)"; rc=$?
   local lines; lines="$(printf '%s\n' "$out" | grep -c . || true)"
@@ -792,7 +862,7 @@ case_1() {
   # (画面下部が消えたり行数が崩れたり、設定の入口が見えなくなったりしない)。
   local sl="$ROOT/scripts/statusline.sh" std sout src why
   if [ ! -f "$sl" ]; then fail 1 "statusline.sh が存在する" "$sl が無い"; return; fi
-  std="$(mktemp -d)"
+  std="$(mkt)"
   for src in '' '{"model":' 'zzz' '{"model":{"display_name":"X"},"context_window":{"used_percentage":12}}'; do
     sout="$(printf '%s' "$src" | TMPDIR="$std" NO_COLOR=1 CLAUDE_PROJECT_DIR="$std" \
           HARNESS_UPDATE_CHECK=on bash "$sl" 2>&1)"; rc=$?
@@ -842,7 +912,7 @@ case_1() {
   # 置き場 4 通り (ホームのみ / プロジェクトのみ / 両方 / どちらも無し) で確かめる。
   # 期待値は「正式名（解説）」の表記 (v1.6.0) — 解説だけ / 正式名だけに戻すと FAIL する。
   local mw mhome mproj want got_s got_l where
-  mw="$(mktemp -d)"; mkdir -p "$mw/home/.claude" "$mw/proj/.claude" "$mw/plug"
+  mw="$(mkt)"; mkdir -p "$mw/home/.claude" "$mw/proj/.claude" "$mw/plug"
   cp -R "$ROOT/scripts" "$mw/plug/" 2>/dev/null
   mkdir -p "$mw/plug/hooks" && cp "$HOOKS/session-start.sh" "$mw/plug/hooks/" 2>/dev/null
   # <ホーム側> <プロジェクト側> <期待する進め方> ("-" は mode.yml を置かない)
@@ -889,7 +959,7 @@ EOF
   if ! printf '%s' "$blk" | grep -q '^mvdir .claude/tasks'; then
     fail 1 "/update 手順 2-2 の移行手順を取り出せる" "commands/update.md から取り出せない"; return
   fi
-  mg="$(mktemp -d)"
+  mg="$(mkt)"
   mkdir -p "$mg/proj/.claude/tasks" "$mg/proj/.claude/draft" "$mg/proj/.claude/rules-reference" \
            "$mg/proj/docs/draft" "$mg/home/.claude"
   printf '# タスク台帳\n\n| # | status | タスク |\n|---|---|---|\n| 1 | 進行中 | ログイン API |\n| 2 | 完了 | 初期設定 |\n' \
@@ -961,7 +1031,7 @@ EOF
                c && /^```$/ { if (b ~ /== 設定ファイル ==/) { printf "%s", b; exit } c = 0; next }
                c { b = b $0 "\n" }' "$im")"
   if [ -z "$iblk" ]; then fail 1 "事実収集の bash を取り出せる" "commands/init.md に無い"; return; fi
-  iw="$(mktemp -d)"; mkdir -p "$iw/full/src" "$iw/full/docs" "$iw/empty"
+  iw="$(mkt)"; mkdir -p "$iw/full/src" "$iw/full/docs" "$iw/empty"
   printf '# demo-app\n\n買い物かごの API。\n' > "$iw/full/README.md"
   printf '{"name":"demo-app","scripts":{"dev":"next dev"},"dependencies":{"next":"^15"}}\n' \
     > "$iw/full/package.json"
@@ -984,7 +1054,7 @@ EOF
   # hirai-task 無し) で、session-start と statusline が尋ねず・止まらず・GraphQL を打たない。
   # gh は偽物 (PATH の先頭) で、呼ばれたら引数を記録する。台帳の形では 1 回も呼ばれてはならない。
   local gw gwbin gwlog gwhome bad5="" sc scr sc_out sc_rc sc_sl sc_lines
-  gw="$(mktemp -d)"; gwbin="$gw/bin"; gwlog="$gw/gh.log"; gwhome="$gw/home"
+  gw="$(mkt)"; gwbin="$gw/bin"; gwlog="$gw/gh.log"; gwhome="$gw/home"
   mkdir -p "$gwbin" "$gwhome"; : > "$gwlog"
   # <名前> <remote の URL か -> <gh の挙動: fail|empty|ok> <mode.yml の中身か ->
   while read -r sc scr sc_gh sc_yml; do
@@ -1076,7 +1146,7 @@ EOF6
   # installed_plugins.json の版が最大の行 (先頭でも末尾でもない並びで置く) から見つけること。
   # 値の引用符・行末コメント・ホームとプロジェクトの順・末尾 / の remote は /bin/bash (3.2) で見る。
   local mw mhome mpm mrepo mout msl mbad="" mblk mu mo zsplit
-  mw="$(mktemp -d)"; mhome="$mw/home"; mpm="$mw/pm/1.0.0"; mrepo="$mw/repo"
+  mw="$(mkt)"; mhome="$mw/home"; mpm="$mw/pm/1.0.0"; mrepo="$mw/repo"
   mkdir -p "$mhome/.claude/plugins" "$mpm/bin" "$mrepo/.claude"; git -C "$mrepo" init -q 2>/dev/null
   printf '#!/usr/bin/env bash\n[ "$1" = line ] && echo "7（承認 3・裁定 1・取り込み 3）／進行中 2／待ち解け —"\nexit 0\n' > "$mpm/bin/hirai-task"
   chmod +x "$mpm/bin/hirai-task"
@@ -1213,11 +1283,11 @@ case_2() {
   local out rc
   # 既定の閾値は 50% (v1.15.0、80% → 50% に変更)。HC_CONTEXT_THRESHOLD を指定せず境界を見る:
   # 49% は無出力、50% ちょうどで発火する。
-  out="$(TMPDIR="$(mktemp -d)" HC_CONTEXT_RATIO=0.49 bash "$HOOKS/context-budget.sh" \
+  out="$(TMPDIR="$(mkt)" HC_CONTEXT_RATIO=0.49 bash "$HOOKS/context-budget.sh" \
         <<< '{"session_id":"smoke-under-49"}' 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ]; then fail 2 "閾値未満 (49%) は無出力" "exit=$rc"; return; fi
   if [ -n "$out" ]; then fail 2 "閾値未満 (49%) は無出力" "出力あり: $out"; return; fi
-  out="$(TMPDIR="$(mktemp -d)" HC_CONTEXT_RATIO=0.50 bash "$HOOKS/context-budget.sh" \
+  out="$(TMPDIR="$(mkt)" HC_CONTEXT_RATIO=0.50 bash "$HOOKS/context-budget.sh" \
         <<< '{"session_id":"smoke-at-50"}' 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ]; then fail 2 "既定の閾値 50% ちょうどで発火" "exit=$rc"; return; fi
   if ! printf '%s' "$out" | grep -q '使用率が 50%'; then
@@ -1227,7 +1297,7 @@ case_2() {
   local lr="$HOOKS/loop-reminder.sh"
   if [ ! -f "$lr" ]; then fail 2 "loop-reminder.sh が存在する" "$lr が無い"; return; fi
   local lw h p want where bad="" n
-  lw="$(mktemp -d)"; mkdir -p "$lw/home/.claude" "$lw/proj/.claude"
+  lw="$(mkt)"; mkdir -p "$lw/home/.claude" "$lw/proj/.claude"
 
   # lr_run [env=値 ...] -> hook を実行し stdout+stderr を返す (rc は $lr_rc に入れる)
   lr_rc=0
@@ -1315,7 +1385,7 @@ EOF
   if ! command -v jq >/dev/null 2>&1; then
     fail 2 "worktree-guard の確かめに jq が要る" "jq が無い (hook は fail-open で通すため、確かめられない)"; return
   fi
-  gw="$(mktemp -d)"; gm="$gw/main"; gl="$gw/wt"
+  gw="$(mkt)"; gm="$gw/main"; gl="$gw/wt"
   mkdir -p "$gm/.claude" "$gw/home" "$gw/outside"
   git -C "$gm" init -q 2>/dev/null
   printf '.tmp/\n' > "$gm/.gitignore"; printf 'x\n' > "$gm/a.txt"
@@ -1376,7 +1446,7 @@ EOF_GUARD
   # cwd ではなく**操作の対象**のリポで決めること、`git commit` の形が崩れても落とさないこと、heredoc の本文と
   # --dry-run を止めないこと、.tmp/ と .claude/state/ を止めないこと、jq が無くても python3 で読むことを見る。
   local g2w g2p g2q g2n g2bin g2t g2i=0 g2c g2out g2got
-  g2w="$(mktemp -d)"; g2p="$g2w/P"; g2q="$g2w/Q"; g2n="$g2w/NR"
+  g2w="$(mkt)"; g2p="$g2w/P"; g2q="$g2w/Q"; g2n="$g2w/NR"
   mkdir -p "$g2p/.claude" "$g2q" "$g2n" "$g2w/home" "$g2w/bin"
   for g2c in "$g2p" "$g2q"; do
     git -C "$g2c" init -q 2>/dev/null; printf 'x\n' > "$g2c/a.txt"; git -C "$g2c" add -A 2>/dev/null
@@ -1479,7 +1549,7 @@ PYEOF
 # ---------- case 3: 閾値超過で 1 度だけ発火 ----------
 case_3() {
   local td first second
-  td="$(mktemp -d)"
+  td="$(mkt)"
   first="$(TMPDIR="$td" HC_CONTEXT_RATIO=0.85 bash "$HOOKS/context-budget.sh" <<< '{"session_id":"smoke-over"}' 2>&1)"
   second="$(TMPDIR="$td" HC_CONTEXT_RATIO=0.85 bash "$HOOKS/context-budget.sh" <<< '{"session_id":"smoke-over"}' 2>&1)"
   rm -rf "$td"
@@ -1494,7 +1564,7 @@ case_3() {
   # 1 の位まで一致することを窓 2 通り × 使用率 5 通りで確かめる。
   # 窓サイズは画面下部の入力 JSON にしか無いため、画面下部 → 控え → hook の受け渡しも同時に検査する。
   local ct in_t out_t win want sl_p hk_p tr bad3=""
-  ct="$(mktemp -d)"
+  ct="$(mkt)"
   while read -r in_t out_t win want; do
     [ -n "$in_t" ] || continue
     tr="$ct/tr-${in_t}-${win}.jsonl"
@@ -1610,7 +1680,7 @@ case_4() {
   if [ $(( tokens * 2 )) -le "$T0_BUDGET_WARN" ]; then
     fail 4 "二重ロードは警告線に届く (検出の前提)" "倍でも $(( tokens * 2 )) <= ${T0_BUDGET_WARN}"; return
   fi
-  td="$(mktemp -d)"; mkdir -p "$td/proj/rules" "$td/home/rules"
+  td="$(mkt)"; mkdir -p "$td/proj/rules" "$td/home/rules"
   cp "$ROOT"/rules/*.md "$td/proj/rules/" 2>/dev/null
   # (a) 片側だけなら無警告
   out="$(bash "$sc" "$td/proj" "$td/home" 2>&1)"
@@ -1635,7 +1705,7 @@ case_4() {
   # (d) 台帳の二重存在。移行 (/update 手順 2) で 1 件だけ同名衝突が残ると、docs/ 側だけが
   # 読まれて .claude/ 側は誰にも見られないまま更新され続ける。取りこぼしをここで止める。
   local dl q1 q2
-  dl="$(mktemp -d)"; mkdir -p "$dl/docs/tasks" "$dl/.claude/tasks" "$dl/home"
+  dl="$(mkt)"; mkdir -p "$dl/docs/tasks" "$dl/.claude/tasks" "$dl/home"
   : > "$dl/docs/tasks/list.md"
   q1="$(bash "$sc" "$dl/.claude" "$dl/home" "$dl" 2>&1)"
   : > "$dl/.claude/tasks/list.md"
@@ -1650,7 +1720,7 @@ case_4() {
   # 全プロジェクト共通 (/init user) に置いた利用者に対し「既存ルール 0 件・予算 0 tokens」と
   # 誤判定し、重複ルールを素通しさせる (v1.0.0 の実害)。在る側を返すことを 4 通りで確かめる。
   local rw got want2 where2 h p
-  rw="$(mktemp -d)"; mkdir -p "$rw/home" "$rw/proj"
+  rw="$(mkt)"; mkdir -p "$rw/home" "$rw/proj"
   while read -r h p want2 where2; do
     [ -n "$h" ] || continue
     rm -rf "$rw/home/.claude" "$rw/proj/.claude"; mkdir -p "$rw/home/.claude" "$rw/proj/.claude"
@@ -1891,7 +1961,7 @@ case_7() {
     fail 7 "VERSION が semver 1 行" "semver ではない: $ver"; return
   fi
 
-  tmp="$(mktemp -d)"; td="$(mktemp -d)"
+  tmp="$(mkt)"; td="$(mkt)"
   if ! setup_update_env "$tmp"; then rm -rf "$tmp" "$td"; fail 7 "更新検知の作業 dir 構築" "cp 失敗"; return; fi
   . "$ROOT/scripts/update-check.sh" 2>/dev/null
   dir="$(export TMPDIR="$td"; harness_update_cache_dir "$tmp")"
@@ -1925,7 +1995,7 @@ case_7() {
   # opt-in したときは「版が変わった回だけ」「プラグイン所有の 3 本だけ」を入れ替え、
   # 利用者所有 (rules / settings.json / CLAUDE.md / 台帳) には触らないことを見る。
   local sw sp out7 bad7="" f7
-  sw="$(mktemp -d)"; sp="$sw/plug"
+  sw="$(mkt)"; sp="$sw/plug"
   mkdir -p "$sp/hooks" "$sw/proj/.claude/rules" "$sw/proj/docs/tasks" "$sw/home/.claude" "$sw/td"
   cp -R "$ROOT/scripts" "$sp/" 2>/dev/null
   cp "$HOOKS/session-start.sh" "$sp/hooks/" 2>/dev/null
@@ -2027,7 +2097,7 @@ auto_sync: on
 # ---------- case 8: 新版キャッシュのみ通知し、semver を数値比較する ----------
 case_8() {
   local tmp td dir out want failed=0 local_v cached_v expect
-  tmp="$(mktemp -d)"; td="$(mktemp -d)"
+  tmp="$(mkt)"; td="$(mkt)"
   if ! setup_update_env "$tmp"; then rm -rf "$tmp" "$td"; fail 8 "更新検知の作業 dir 構築" "cp 失敗"; return; fi
   . "$ROOT/scripts/update-check.sh" 2>/dev/null
   dir="$(export TMPDIR="$td"; harness_update_cache_dir "$tmp")"
@@ -2124,7 +2194,7 @@ EOF
   # v1.14.2/v1.16.0 のような版違いの併用で「無関係な案件の更新あり」が出た実害の再現形。
   if [ "$failed" -eq 0 ]; then
     local projB flagA flagB
-    projB="$(mktemp -d)"
+    projB="$(mkt)"
     printf '%s\n' "0.2.0" > "$tmp/VERSION"; printf '%s' "0.2.0" > "$dir/latest"; date +%s > "$dir/stamp"
     run_session_start "$tmp" "$td" "on" >/dev/null   # $tmp は最新版 = 控えは作らない
     flagA="$(update_flag_path "$td" "$tmp")"
@@ -2148,7 +2218,7 @@ EOF
   # 同じ結果になり、退行を検出できない。
   if [ "$failed" -eq 0 ]; then
     local plugD projD tdD flagD_want flagD_wrong plugDdir
-    plugD="$(mktemp -d)"; projD="$(mktemp -d)"; tdD="$(mktemp -d)"
+    plugD="$(mkt)"; projD="$(mkt)"; tdD="$(mkt)"
     mkdir -p "$plugD/hooks" "$plugD/scripts"
     cp "$HOOKS/session-start.sh" "$plugD/hooks/" 2>/dev/null
     cp "$ROOT/scripts/update-check.sh" "$ROOT/scripts/tasks-path.sh" "$plugD/scripts/" 2>/dev/null
@@ -2182,7 +2252,7 @@ EOF
   # case 1 は形の単体、case 7/8 は更新検知単体しか見ていないので、ここで組み合わせる。
   # 偽の hirai-task (PATH の先頭) が line で 1 行を返す。
   local wtmp wtd wbin wout wlines badw=""
-  wtmp="$(mktemp -d)"; wtd="$(mktemp -d)"; wbin="$wtmp/bin"
+  wtmp="$(mkt)"; wtd="$(mkt)"; wbin="$wtmp/bin"
   mkdir -p "$wtmp/hooks" "$wtmp/scripts" "$wbin"
   cp "$HOOKS/session-start.sh" "$wtmp/hooks/" 2>/dev/null
   cp "$ROOT/scripts/update-check.sh" "$ROOT/scripts/tasks-path.sh" "$wtmp/scripts/" 2>/dev/null
@@ -2331,7 +2401,7 @@ PYEOF
   fi
   # CLAUDE_PLUGIN_DATA / CLAUDE_PLUGIN_ROOT が別の値でも、空でも、書く側と読む側は同じ控えを指す。
   local c9tmp c9a c9b c9c
-  c9tmp="$(mktemp -d)"; git init -q "$c9tmp/r" 2>/dev/null
+  c9tmp="$(mkt)"; git init -q "$c9tmp/r" 2>/dev/null
   git -C "$c9tmp/r" remote add origin "https://github.com/example-org/example-repo.git" 2>/dev/null
   c9a="$(env -i HOME="$c9tmp/h" PATH="$PATH" bash -c ". \"$PM/scripts/ghp-path.sh\"; harness_ghp_cache_file \"$c9tmp/r\"")"
   c9b="$(env -i HOME="$c9tmp/h" PATH="$PATH" CLAUDE_PLUGIN_DATA="$c9tmp/decoy-data" CLAUDE_PLUGIN_ROOT="$c9tmp/decoy-root" \
@@ -2546,7 +2616,7 @@ PYCMD
   [ -n "$ab" ] || abad="$abad /init に承認の型を置く手順が無い"
   [ -n "$ub" ] || abad="$abad /update に承認の型を足す手順が無い"
   if [ -z "$abad" ]; then
-    aw="$(mktemp -d)"; mkdir -p "$aw/proj" "$aw/home" "$aw/u" "$aw/up/docs/rules-reference" "$aw/nod"
+    aw="$(mkt)"; mkdir -p "$aw/proj" "$aw/home" "$aw/u" "$aw/up/docs/rules-reference" "$aw/nod"
     # (a) /init 手順 7: 何も無いところに、配布版と同じ中身で置く
     ( cd "$aw/proj" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ab" ) >/dev/null 2>&1 \
       || abad="$abad /init 手順 7 が exit 0 で終わらない"
@@ -2640,7 +2710,7 @@ PYCMD
   # 選んでしまう) 置き、**退役した旧系列 hirai-lite-v2 の entry を、より大きい版 (9.9.0・DECOY) で**
   # 置く。cache にも hirai-lite と hirai-lite-v2 の両方を置く。hirai-lite の最大版 (3.10.0) が勝ち、
   # hirai-lite-v2 には落ちない (3.0.0 の決め打ち撤去の退行を拾う)。
-  pw="$(mktemp -d)"; mkdir -p "$pw/proj" "$pw/td"
+  pw="$(mkt)"; mkdir -p "$pw/proj" "$pw/td"
   local v3a="$pw/home/.claude/plugins/inst3/3.0.0" v3b="$pw/home/.claude/plugins/inst3/3.10.0" v2d="$pw/home/.claude/plugins/inst2/9.9.0"
   mkdir -p "$v3a" "$v3b" "$v2d"
   printf 'OLD\n' > "$v3a/VERSION"
@@ -2733,7 +2803,7 @@ JSONEOF
   # git の外 (リポを決められない) では読む側も exit 2 で gh を呼ばない、公開リポなので
   # 導入先の内部の名前を持ち込まない (R12 の語)。
   local ht_home ht_rc ht_out PM="$ROOT/plugins/hirai-project-method"
-  ht_home="$(mktemp -d)"; mkdir -p "$ht_home/nogh"
+  ht_home="$(mkt)"; mkdir -p "$ht_home/nogh"
   printf '#!/bin/sh\necho "$*" >> "%s/gh.log"\nexit 1\n' "$ht_home" > "$ht_home/nogh/gh"; chmod +x "$ht_home/nogh/gh"
   [ -x "$PM/bin/hirai-task" ] || pr_bad="$pr_bad plugins/hirai-project-method/bin/hirai-task が実行できない"
   [ -x "$ROOT/bin/hirai-notify" ] || pr_bad="$pr_bad bin/hirai-notify が実行できない"
@@ -2793,7 +2863,7 @@ JSONEOF
   #   DC-03 本文は <絶対 path>｜<要約> (波括弧なしの変数は bash 3.2 の全角の区切りで壊れる) / M4 値の無い --to・--dispatch-id は exit 2 /
   #   M6 引数が環境変数より先・両方の引数なら --dispatch-id / notify: off は何もしない。
   local nw nbin nlog nrepo nsub nabs nrc nline nb=""
-  nw="$(mktemp -d)"; nbin="$nw/bin"; nlog="$nw/orca.log"; nrepo="$nw/repo"; nsub="$nrepo/apps/api"
+  nw="$(mkt)"; nbin="$nw/bin"; nlog="$nw/orca.log"; nrepo="$nw/repo"; nsub="$nrepo/apps/api"
   mkdir -p "$nbin" "$nsub" "$nrepo/.claude" "$nw/home"; git -C "$nrepo" init -q 2>/dev/null
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$nlog" > "$nbin/orca"; chmod +x "$nbin/orca"
   printf 'notify: "orca"  # c\n' > "$nrepo/.claude/mode.yml"
@@ -2920,7 +2990,7 @@ JSONEOF
   # (g-4) hirai-pr-asset: 使い捨ての bare リポへ。branch pr-assets を作る・積み増す・作業ツリーと HEAD を動かさない・
   # remote を読めない / 無いと exit 1・/bin/bash 3.2。
   local pw pa_rc pa_bad="" pa_head pa_st pa_out
-  pw="$(mktemp -d)"; mkdir -p "$pw/img" "$pw/work" "$pw/bare.git"
+  pw="$(mkt)"; mkdir -p "$pw/img" "$pw/work" "$pw/bare.git"
   git init -q --bare "$pw/bare.git" 2>/dev/null
   printf 'x' > "$pw/img/a.png"; printf 'y' > "$pw/img/b.png"
   ( cd "$pw/work" && git init -q 2>/dev/null && printf 'f\n' > f.txt && git add f.txt \
@@ -2960,7 +3030,7 @@ JSONEOF
   # (g-5) hirai-watch: 偽の記録 5 場合 (API エラー終わり=出す・api-request 古い=出す・api-request 新しい=出さない・user 終わり古い=出す・end_turn 古い=出さない)
   # と 記録の dir 無し (「記録が無い」・止まりに数えず exit 0)・--orca (偽の orca・別リポと archived は見ない・orca 無しは exit 2)・/bin/bash でなく python3 の実行。
   local wb wb_bad="" wb_rc wb_out
-  wb="$(mktemp -d)"; mkdir -p "$wb/cfg/projects" "$wb/home" "$wb/obin" "$wb/repo"
+  wb="$(mkt)"; mkdir -p "$wb/cfg/projects" "$wb/home" "$wb/obin" "$wb/repo"
   # wb_mk <path> <touch -t の値 or 空> -> 標準入力を <path> の記録 (dir 名は / と . を - にしたもの) にする
   wb_mk() {
     local d="$wb/cfg/projects/$(printf '%s' "$1" | sed 's#[/.]#-#g')"
@@ -3068,6 +3138,10 @@ PYEOF
 case_1; case_2; case_3; case_4; case_5; case_6; case_7; case_8; case_9; case_10
 
 echo "---"
+if [ "${HARNESS_SMOKE_QUICK:-}" = 1 ]; then
+  echo "SKIP 壊した複製の確かめ $(awk '{n += $1} END {print n + 0}' "$R6_SKIP_FILE") 本（HARNESS_SMOKE_QUICK）"
+fi
+rm -f "$R6_SKIP_FILE"
 if [ "$FAILED" -ne 0 ]; then echo "RESULT: FAIL"; exit 1; fi
 echo "RESULT: PASS"
 exit 0

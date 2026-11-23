@@ -11,7 +11,7 @@
 # 入力を読む道具（jq か python3）が無いときは何もしない。
 set -uo pipefail
 
-plugin_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"
+plugin_root="$(CDPATH= builtin cd -- "$(dirname "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && builtin pwd -P)"
 input="$(cat 2>/dev/null)" || input=""
 [ -n "$input" ] || exit 0
 
@@ -20,7 +20,7 @@ fields=""
 if command -v jq >/dev/null 2>&1; then
   fields="$(printf '%s' "$input" | jq -r '[.hook_event_name, .notification_type, .message, .tool_name, (.tool_input.command // ""), .reason, .cwd, .session_id, .error, .last_assistant_message] | map((. // "") | tostring | gsub("[\r\n]+"; " ")) | .[]' 2>/dev/null)" || fields=""
 elif command -v python3 >/dev/null 2>&1; then
-  fields="$(printf '%s' "$input" | python3 -c '
+  fields="$(printf '%s' "$input" | python3 -I -c '
 import json,re,sys
 try: d=json.load(sys.stdin)
 except Exception: sys.exit(1)
@@ -37,12 +37,12 @@ EOF2
 
 cwd="${cwd:-$PWD}"
 [ -d "$cwd" ] || exit 0
-cd "$cwd" 2>/dev/null || exit 0
+CDPATH= builtin cd -- "$cwd" >/dev/null 2>&1 || exit 0
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || root="$PWD"
 
 notify="${HC_NOTIFY:-}"
 if [ -z "$notify" ] && [ -f "$plugin_root/scripts/tasks-path.sh" ]; then
-  notify="$( . "$plugin_root/scripts/tasks-path.sh" 2>/dev/null && harness_yml_value "$root" notify )" || notify=""
+  notify="$( . "$plugin_root/scripts/tasks-path.sh" 2>/dev/null && harness_yml_value "$PWD" notify )" || notify=""
 fi
 [ "$notify" = "orca" ] || exit 0
 

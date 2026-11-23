@@ -22,24 +22,32 @@
 # file-top に set -e / set -o pipefail を書かない。source 元の shell flags を汚染し、
 # パイプ先の早期終了で呼び出し元ごと落ちる事故を防ぐため (関数内で局所化する)。
 
-# _harness_abs <dir> -> 絶対 path (. や .. を畳む。dir が無ければ $PWD を前に付けるだけ)。
+# _harness_phys <dir> -> dir の実体の絶対 path (symlink を解く)。解けなければ何も出さず rc 1。
+# cd は CDPATH を空にし、builtin で呼び (chpwd・alias・関数を避け)、出力を捨てる (zsh の chpwd の ls が混ざらない)。
+_harness_phys() {
+  CDPATH= builtin cd -- "$1" >/dev/null 2>&1 && builtin pwd -P
+}
+
+# _harness_abs <dir> -> 絶対 path (. や .. を畳み、symlink を解く。dir が無ければ $PWD を前に付けるだけ)。
 _harness_abs() {
   local d="${1:-$PWD}" a
-  a="$(cd "$d" 2>/dev/null && pwd)" || { case "$d" in /*) a="$d" ;; *) a="$PWD/$d" ;; esac; }
+  a="$(_harness_phys "$d")" || { case "$d" in /*) a="$d" ;; *) a="$PWD/$d" ;; esac; }
   [ "$a" = / ] || a="${a%/}"
   printf '%s' "$a"
 }
 
 # _harness_resolve [dir] -> 上へ辿って 2 つを決め、_HR_TOP (git の toplevel。無ければ空) と
-# _HR_FIRST (dir から toplevel までで最初に .claude/mode.yml・.claude/settings.json・.claude/rules が在る dir。無ければ空) に入れる。
+# _HR_FIRST (dir から toplevel までで最初に .claude/mode.yml・.claude/settings.json・.claude/rules が在る dir。無ければ空)、
+# _HR_PKG (同じく最初に .claude/mode.yml が在る dir。無ければ空。mode:・tasks:・auto_sync: の「パッケージ」) に入れる。
 # toplevel が HOME か HOME の祖先なら git でないものとして扱う (ホームの git を「リポ」と読まない)。
 # ファイルの有無だけで決め、git を打たない (毎回動く画面下と hook を遅くしない)。常に rc 0。
 _harness_resolve() {
   local d cur h
   d="$(_harness_abs "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
-  _HR_TOP=""; _HR_FIRST=""
+  _HR_TOP=""; _HR_FIRST=""; _HR_PKG=""
   cur="$d"
   while :; do
+    if [ -z "$_HR_PKG" ] && [ -f "$cur/.claude/mode.yml" ]; then _HR_PKG="$cur"; fi
     if [ -z "$_HR_FIRST" ] && { [ -f "$cur/.claude/mode.yml" ] || [ -f "$cur/.claude/settings.json" ] || [ -d "$cur/.claude/rules" ]; }; then
       _HR_FIRST="$cur"
     fi
@@ -48,12 +56,12 @@ _harness_resolve() {
     cur="${cur%/*}"; [ -n "$cur" ] || cur=/
   done
   if [ -n "$_HR_TOP" ]; then
-    h="${HOME:-}"; [ "$h" = / ] || h="${h%/}"
+    h="${HOME:-}"; h="$(_harness_phys "$h" 2>/dev/null || printf '%s' "$h")"; [ "$h" = / ] || h="${h%/}"
     if [ "$_HR_TOP" = / ] || { [ -n "$h" ] && { [ "$_HR_TOP" = "$h" ] || case "$h/" in "$_HR_TOP"/*) true ;; *) false ;; esac; }; }; then
       _HR_TOP=""
     fi
   fi
-  [ -n "$_HR_TOP" ] || _HR_FIRST=""
+  [ -n "$_HR_TOP" ] || { _HR_FIRST=""; _HR_PKG=""; }
   return 0
 }
 
@@ -159,18 +167,36 @@ harness_incidents_file() {
 # 読む側 (SessionStart / 画面下部) と書く側 (/config) が別々の順で解決すると、
 # 「セッション冒頭は normal・画面下部は loop」のように食い違う。3 箇所ともここを通す。
 
+# _harness_yml_candidates <dir> <キー> -> そのキーを引く mode.yml のパスを優先順に 1 行ずつ stdout。
+# mode:・tasks:・auto_sync: などは「パッケージ (dir から toplevel までで最初に .claude/mode.yml を持つ dir) → toplevel → ホーム」。
+# worktree:・notify:・nightly_ci: は「toplevel → ホーム」だけ (サブディレクトリのは読まない)。
+# git でない・toplevel が HOME か HOME の祖先なら、toplevel の代わりに dir 自身。
+_harness_yml_candidates() {
+  local d top pkg
+  d="$(_harness_abs "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
+  _harness_resolve "$d"
+  pkg="$_HR_PKG"
+  if [ -n "$_HR_TOP" ]; then top="$_HR_TOP"; else top="$d"; fi
+  case "${2:-}" in
+    worktree|notify|nightly_ci) pkg="" ;;
+  esac
+  [ -z "$pkg" ] || printf '%s\n' "$pkg/.claude/mode.yml"
+  [ "$top" = "$pkg" ] || printf '%s\n' "$top/.claude/mode.yml"
+  [ -z "${HOME:-}" ] || printf '%s\n' "$HOME/.claude/mode.yml"
+}
+
 # harness_mode_file [root] -> すでに在る mode.yml のパスを stdout。
-# プロジェクト側 → ホーム側の順で探し、どちらにも無ければ空 + rc 1。
+# パッケージ → toplevel → ホーム側の順で探し、どこにも無ければ空 + rc 1。
 harness_mode_file() {
-  local root p
-  root="$(harness_root "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
-  for p in "$root/.claude/mode.yml" "${HOME:+$HOME/.claude/mode.yml}"; do
-    [ -n "$p" ] || continue
+  local p
+  while IFS= read -r p; do
     if [ -f "$p" ]; then
       printf '%s' "$p"
       return 0
     fi
-  done
+  done <<EOF
+$(_harness_yml_candidates "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" mode)
+EOF
   return 1
 }
 
@@ -235,21 +261,18 @@ harness_yml_file_value() {
 }
 
 # harness_yml_value <root> <キー> -> <キー>: の値を stdout。無ければ空。常に rc 0。
-# 項目ごとに「プロジェクトの .claude/mode.yml → ホームの ~/.claude/mode.yml」の順で引く
-# (片方のファイルだけを読まない。env の上書きと既定は呼び出し側で扱う)。プロジェクトは harness_root。
-# ただし worktree・notify・nightly_ci は harness_top (toplevel) の mode.yml から引く。
+# 項目ごとに「パッケージ (最初に .claude/mode.yml を持つ dir) → toplevel → ホームの ~/.claude/mode.yml」の順で引く
+# (片方のファイルだけを読まない。env の上書きと既定は呼び出し側で扱う)。
+# ただし worktree・notify・nightly_ci は「toplevel → ホーム」だけ (_harness_yml_candidates)。
 harness_yml_value() {
-  local root k="${2:-}" v="" p
+  local k="${2:-}" v="" p
   [ -n "$k" ] || return 0
-  case "$k" in
-    worktree|notify|nightly_ci) root="$(harness_top "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")" ;;  # toplevel の mode.yml だけ (サブディレクトリのは読まない)
-    *) root="$(harness_root "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")" ;;
-  esac
-  for p in "$root/.claude/mode.yml" "${HOME:+$HOME/.claude/mode.yml}"; do
-    [ -n "$p" ] || continue
+  while IFS= read -r p; do
     v="$(harness_yml_file_value "$p" "$k")"
     [ -z "$v" ] || break
-  done
+  done <<EOF
+$(_harness_yml_candidates "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" "$k")
+EOF
   printf '%s' "$v"
 }
 
@@ -326,7 +349,7 @@ harness_pm_install_dir() {
   root="$(harness_top "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}")"
   [ -f "$f" ] && command -v python3 >/dev/null 2>&1 || return 1
   common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-  p="$(python3 -c 'import json,os,re,subprocess,sys
+  p="$(python3 -I -c 'import json,os,re,subprocess,sys
 d = json.load(open(sys.argv[1]))
 root = os.path.realpath(sys.argv[3]).rstrip("/")
 common = os.path.realpath(sys.argv[4]) if sys.argv[4] else ""

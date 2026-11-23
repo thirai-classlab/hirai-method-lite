@@ -41,7 +41,7 @@ harness_plugin_root_from_installed() (
   local entry="${1:?}" f="$HOME/.claude/plugins/installed_plugins.json" p
   [ -f "$f" ] || return 1
   command -v python3 >/dev/null 2>&1 || return 1
-  p="$(python3 -c 'import json,re,sys
+  p="$(python3 -I -c 'import json,re,sys
 d = json.load(open(sys.argv[1]))
 rows = [x for k, v in d.get("plugins", {}).items() if k.split("@", 1)[0] == sys.argv[2]
         for x in v if x.get("installPath")]
@@ -188,7 +188,7 @@ harness_update_pm_notice() (
   harness_update_enabled || return 0
   local root="${1:-${CLAUDE_PLUGIN_ROOT:-$PWD}}" dir ip cur new
   # このリポの行だけで比べる (別のリポの行の版で知らせない)。絞りは tasks-path.sh の harness_pm_install_dir の 1 か所。
-  command -v harness_pm_install_dir >/dev/null 2>&1 || . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/tasks-path.sh" 2>/dev/null || return 0
+  command -v harness_pm_install_dir >/dev/null 2>&1 || . "$(CDPATH= builtin cd -- "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && builtin pwd -P)/tasks-path.sh" 2>/dev/null || return 0
   command -v harness_pm_install_dir >/dev/null 2>&1 || return 0
   ip="$(harness_pm_install_dir "${2:-${CLAUDE_PROJECT_DIR:-$PWD}}" 2>/dev/null)" || return 0
   [ -n "$ip" ] || return 0

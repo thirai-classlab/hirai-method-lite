@@ -9,10 +9,10 @@
 #                 無ければ toplevel。導入先リポジトリ = ユーザーの資産)。worktree・notify は harness_top (toplevel) の mode.yml から引く
 set -uo pipefail
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || here="."
+here="$(CDPATH= builtin cd -- "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && builtin pwd -P)" || here="."
 plugin_root="${CLAUDE_PLUGIN_ROOT:-}"
 if [ -z "$plugin_root" ] || [ ! -d "$plugin_root" ]; then
-  plugin_root="$(cd "$here/.." 2>/dev/null && pwd)" || plugin_root="."
+  plugin_root="$(CDPATH= builtin cd -- "$here/.." >/dev/null 2>&1 && builtin pwd -P)" || plugin_root="."
 fi
 root="${CLAUDE_PROJECT_DIR:-}"
 if [ -z "$root" ] || [ ! -d "$root" ]; then
@@ -85,7 +85,7 @@ else
     list="$(harness_tasks_file "$opened" 2>/dev/null || true)"
   fi
   if [ -n "$list" ] && [ -f "$list" ]; then
-    task_line="やること: $(harness_open_tasks "$list") 件 (${list#"$root"/})"
+    task_line="やること: $(harness_open_tasks "$list") 件 ($(d="${list#"$root"/}"; printf '%s' "${d#"$opened"/}"))"
   else
     task_line="やること一覧はまだありません (/hirai-lite:new-task で作れます)"
   fi

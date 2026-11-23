@@ -82,14 +82,12 @@ else
 fi
 
 # notify の値: env HC_NOTIFY > プロジェクトの mode.yml > ホームの mode.yml > off
-# プロジェクトの root は cwd の git のトップ（サブ dir から打っても同じ。Bash ツールに CLAUDE_PROJECT_DIR は無い）
+# プロジェクトの root は harness_top "$PWD"（git のトップ。トップが HOME か HOME の祖先なら cwd のまま。開始時の表示・guard と同じ規則）
 notify="${HC_NOTIFY:-}"
 if [ -z "$notify" ]; then
-  root="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" || root=""
-  [ -n "$root" ] || root="$PWD"
-  lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/scripts/tasks-path.sh"
+  lib="$(CDPATH= builtin cd -- "$(dirname "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && builtin pwd -P)/scripts/tasks-path.sh"
   if [ -f "$lib" ]; then
-    notify="$( . "$lib" 2>/dev/null && harness_yml_value "$root" notify )" || notify=""
+    notify="$( . "$lib" 2>/dev/null && harness_yml_value "$PWD" notify )" || notify=""
   fi
 fi
 [ "$notify" = "orca" ] || exit 0
@@ -130,16 +128,16 @@ else
     echo "hirai-notify: <file> が無い: ${file}（引数は <file> <要約> の順）" >&2
     exit 2
   fi
-  file="$(cd "$(dirname "$file")" && pwd -P)/$(basename "$file")"
+  file="$(CDPATH= builtin cd -- "$(dirname "$file")" >/dev/null 2>&1 && builtin pwd -P)/$(basename "$file")"
 fi
 
-# 終わりの知らせに添える「消してよい worktree: N 本（うち退避が要る M 本）」（gh も使う。全体で NOTE_LIMIT_SEC 秒を超えたら 1 行を出さない。
-# 0 本・読めないときも空。宛先が決まった後にだけ呼ぶ。超えたら process group ごと止める）
+# 終わりの知らせに添える「消してよい worktree: N 本（うち退避が要る M 本）」（gh も使う。全体で NOTE_LIMIT_SEC 秒を超えたら「数えられなかった」と出す。
+# 0 本・読めないときは空。宛先が決まった後にだけ呼ぶ。超えたら process group ごと止める）
 NOTE_LIMIT_SEC=15
 worktree_note() {
   local n evac
   read -r n evac <<EOF_WT
-$(env -u HIRAI_WORKTREES_NO_GH python3 -c '
+$(env -u HIRAI_WORKTREES_NO_GH python3 -I -c '
 import json, os, signal, subprocess, sys
 p = subprocess.Popen([sys.executable, sys.argv[1], "list", "--json"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
 try:
@@ -149,6 +147,7 @@ except subprocess.TimeoutExpired:
         os.killpg(p.pid, signal.SIGKILL)
     except OSError:
         pass
+    print("timeout")
     sys.exit(0)
 try:
     ok = [r for r in json.loads(out) if r.get("verdict") == "消してよい"]
@@ -157,18 +156,22 @@ except Exception:
 print(len(ok), sum(1 for r in ok if r.get("evacuate")))
 ' "$(dirname "${BASH_SOURCE[0]}")/hirai-worktrees" "$NOTE_LIMIT_SEC" 2>/dev/null)
 EOF_WT
+  if [ "$n" = "timeout" ]; then
+    printf '%s' "｜消してよい worktree: 数えられなかった（hirai-worktrees list で見る）"
+    return 0
+  fi
   case "${n}${evac}" in ''|*[!0-9]*) return 0 ;; esac
   [ "$n" -gt 0 ] || return 0
   printf '%s' "｜消してよい worktree: ${n} 本（うち退避が要る ${evac} 本。hirai-worktrees list で見る）"
 }
 
 # 終わりの知らせに添える「worktree の残り」（今いる worktree の未コミットと未 push を自分で数える。git でなければ空）
-# 未コミット: untracked は normal（status.showUntrackedFiles=no の設定でも数える）。未 push: origin のどの branch にも無い commit の数（upstream の有無によらない）
+# 未コミット: untracked は all（status.showUntrackedFiles=no の設定でも数える）。未 push: origin のどの branch にも無い commit の数（upstream の有無によらない）
 worktree_rest() {
   local top dirty ahead
   top="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" || return 0
   [ -n "$top" ] || return 0
-  dirty="$(GIT_OPTIONAL_LOCKS=0 git -C "$top" status --porcelain --untracked-files=normal 2>/dev/null | wc -l | tr -d '[:space:]')"
+  dirty="$(GIT_OPTIONAL_LOCKS=0 git -C "$top" status --porcelain --untracked-files=all 2>/dev/null | grep -vE '^.. "?(\.tmp|\.claude/state)(/|"|$)' | wc -l | tr -d '[:space:]')"
   case "$dirty" in ''|*[!0-9]*) return 0 ;; esac
   ahead="$(GIT_OPTIONAL_LOCKS=0 git -C "$top" rev-list --count HEAD --not --remotes=origin 2>/dev/null | tr -d '[:space:]')"
   case "$ahead" in ''|*[!0-9]*) return 0 ;; esac

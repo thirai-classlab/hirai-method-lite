@@ -37,7 +37,7 @@
 | [`plugin-development.md`](plugin-development.md) | manifest のキー、`validate` の限界、`${CLAUDE_PLUGIN_ROOT}`、更新経路 | プラグインを触るとき |
 | [`context-and-output.md`](context-and-output.md) | コンテキスト予算の実測、出力の形について user が求めたこと | 層構成を変えるとき / 出力形式を決めるとき |
 
-記録の大半は**前ハーネス (hirai-method) から 2026-08-27 に移入した実測と事故**である。前ハーネス固有の仕組み (hook / preset / 各種 guard) に依存する記述は、そのまま持ち込まず「前ハーネスの事例」と明示してある。**新ハーネスに機械強制はほとんど無い** — ここに書かれた対処は原則すべて指針であり、実際に止まるのは `settings.json` の `permissions` に登録された操作だけである。
+記録の大半は**前ハーネス (hirai-method) から 2026-08-27 に移入した実測と事故**である。前ハーネス固有の仕組み (hook / preset / 各種 guard) に依存する記述は、そのまま持ち込まず「前ハーネスの事例」と明示してある。**新ハーネスに機械強制はほとんど無い** — ここに書かれた対処は原則すべて指針であり、実際に止まるのは `settings.json` の `permissions` に登録された操作と、`worktree: block` のときの `worktree-guard`（`_meta.md` 条 5 の例外）だけである。
 
 ### 台帳を 2 つに分けている理由
 

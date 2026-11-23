@@ -7,7 +7,7 @@
 #   Edit / Write / NotebookEdit … 対象ファイルの dir から git rev-parse --show-toplevel
 #   Bash の git commit          … -C <dir>（--work-tree / --git-dir も）があればその dir、無ければ cwd
 #                                 （cwd がリポでなければ CLAUDE_PROJECT_DIR）
-#   決めたリポの mode.yml（項目ごとに 環境変数 HC_WORKTREE > そのリポ > ホーム > off）が block のときだけ止める。
+#   決めたリポ（toplevel が HOME か HOME の祖先のものは「リポ」と読まず通す。対象が $HOME/.claude/ の下のときも通す）の mode.yml（項目ごとに 環境変数 HC_WORKTREE > そのリポ > ホーム > off）が block のときだけ止める。
 # 止めないもの: 読み取り・リポの外（~/.claude の記憶の置き場など）・git に入らない場所（.gitignore 済み・
 #   .tmp/・.claude/state/。外側のリポの下にあるときは外側の .tmp/・.claude/state/ の下だけ）・git switch / git checkout・git commit --dry-run / --help。
 #   `worktree: off`（既定）と `warn` では何もしない。
@@ -36,7 +36,7 @@ jget() {
     for p in "$@"; do expr="${expr}.${p} // "; done
     printf '%s' "$input" | jq -r "(${expr}empty) | strings" 2>/dev/null
   else
-    printf '%s' "$input" | python3 -c '
+    printf '%s' "$input" | python3 -I -c '
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -97,7 +97,7 @@ emit_deny() {
   if [ "$HAVE_JQ" -eq 1 ]; then
     jq -n --arg r "$r" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
   elif [ "$HAVE_PY" -eq 1 ]; then
-    python3 -c 'import json,sys; print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":sys.argv[1]}}, ensure_ascii=False))' "$r"
+    python3 -I -c 'import json,sys; print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":sys.argv[1]}}, ensure_ascii=False))' "$r"
   fi
 }
 
@@ -127,7 +127,7 @@ resolve_path() {
     rest="/$(basename "$d")$rest"
     d="$(dirname "$d")"
   done
-  printf '%s' "$(cd "$d" 2>/dev/null && pwd -P)$rest"
+  printf '%s' "$(CDPATH= builtin cd -- "$d" >/dev/null 2>&1 && builtin pwd -P)$rest"
 }
 
 # --- Bash: コマンド文字列から git commit を拾う ---------------------------------
@@ -327,16 +327,45 @@ scan_commits() {
 # outer_ignored <リポの toplevel> [<toplevel からの相対 path>] -> rc 0 なら、そのリポは外側のリポの .tmp/ か .claude/state/ の下
 # にある（設計 §6。外側の .gitignore は見ない）。.tmp/ に作った worktree・clone は外側の git に入らないので止めない
 outer_ignored() {
-  local top="$1" sub="${2:-}" parent otop oprefix rel
-  parent="$(dirname "$top")"
-  otop="$(git -C "$parent" rev-parse --show-toplevel 2>/dev/null)" || return 1
-  [ -n "$otop" ] || return 1
-  oprefix="$(git -C "$parent" rev-parse --show-prefix 2>/dev/null)" || return 1
-  rel="${oprefix}$(basename "$top")"
-  [ -z "$sub" ] || rel="${rel}/${sub}"
-  case "$rel" in
-    .tmp|.tmp/*|.claude/state|.claude/state/*) return 0 ;;
-  esac
+  local cur="$1" rel="${2:-}" parent otop oprefix
+  while :; do
+    parent="$(dirname "$cur")"
+    otop="$(git -C "$parent" rev-parse --show-toplevel 2>/dev/null)" || return 1
+    [ -n "$otop" ] || return 1
+    oprefix="$(git -C "$parent" rev-parse --show-prefix 2>/dev/null)" || return 1
+    rel="${oprefix}$(basename "$cur")${rel:+/$rel}"
+    case "$rel" in
+      .tmp|.tmp/*|.claude/state|.claude/state/*) return 0 ;;
+    esac
+    cur="$otop"
+  done
+}
+
+# phys <dir> -> 物理 path（解けなければ <dir> のまま）
+phys() {
+  local d="$1" p
+  p="$(CDPATH= builtin cd -- "$d" >/dev/null 2>&1 && builtin pwd -P)" || p="$d"
+  printf '%s' "$p"
+}
+
+# home_scope <top> -> rc 0 なら、top が HOME か HOME の祖先（ホームの git を「リポ」と読まない。scripts/tasks-path.sh の harness_top と同じ規則）
+home_scope() {
+  local t h
+  t="$(phys "$1")"
+  h="${HOME:-}"; [ -n "$h" ] || return 1
+  h="$(phys "$h")"
+  [ "$t" = / ] && return 0
+  [ "$t" = "$h" ] && return 0
+  case "$h/" in "$t"/*) return 0 ;; esac
+  return 1
+}
+
+# under_home_claude <path> -> rc 0 なら $HOME/.claude/ の下（記憶・計画の置き場。止めない）
+under_home_claude() {
+  local h
+  h="${HOME:-}"; [ -n "$h" ] || return 1
+  h="$(phys "$h")/.claude"
+  case "$1" in "$h"|"$h"/*) return 0 ;; esac
   return 1
 }
 
@@ -364,8 +393,10 @@ check_commit() {
     IFS="$oldifs"
   fi
   [ -d "$dir" ] || return 0
+  under_home_claude "$(phys "$dir")" && return 0
   top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || return 0
   [ -n "$top" ] || return 0
+  home_scope "$top" && return 0
   [ "$(repo_mode "$top")" = "block" ] || return 0
   in_orca_wt "$top" && return 0
   outer_ignored "$top" && return 0
@@ -405,7 +436,9 @@ case "$tool" in
     while [ ! -d "$fdir" ]; do fdir="$(dirname "$fdir")"; done
     top="$(git -C "$fdir" rev-parse --show-toplevel 2>/dev/null)" || exit 0
     [ -n "$top" ] || exit 0
-    top="$(cd "$top" 2>/dev/null && pwd -P)" || exit 0
+    top="$(CDPATH= builtin cd -- "$top" >/dev/null 2>&1 && builtin pwd -P)" || exit 0
+    home_scope "$top" && exit 0
+    under_home_claude "$abs" && exit 0
     [ "$(repo_mode "$top")" = "block" ] || exit 0
     # リポの中かどうかと相対 path は、path の文字列の比較でなく git に聞く（macOS の既定の APFS は大文字小文字を区別しない）
     prefix="$(git -C "$fdir" rev-parse --show-prefix 2>/dev/null)" || exit 0

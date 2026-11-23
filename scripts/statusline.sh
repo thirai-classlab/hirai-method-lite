@@ -23,7 +23,7 @@
 # update-check.sh は複製の対象外) ため、鍵の式だけをここにも書く (2 か所とも変えること)。
 set -uo pipefail
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || here="."
+here="$(CDPATH= builtin cd -- "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && builtin pwd -P)" || here="."
 root="${CLAUDE_PROJECT_DIR:-$PWD}"
 input="$(cat 2>/dev/null || true)"
 

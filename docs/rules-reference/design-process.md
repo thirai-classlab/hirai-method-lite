@@ -173,7 +173,7 @@
 
 **新ハーネスでの意味**: 新ハーネスには機械強制の仕組みがほとんど無い。したがって**規範は強制の言葉で書いてはならない**。「hook が止める」「BLOCK される」と書けば、旧ハーネスが多大なコストを払って直したのと同じ失敗を、初日から再現することになる。
 
-実際に止まるのは `settings.json` の `permissions` に登録された操作だけであり、それ以外は**すべて指針である**。指針は指針として書く。
+実際に止まるのは `settings.json` の `permissions` に登録された操作と、`worktree: block` のときの `worktree-guard`（`_meta.md` 条 5 の例外）だけであり、それ以外は**すべて指針である**。指針は指針として書く。
 
 **出典**: 旧ハーネス `.claude/CommonRules.md` §Design Constraints、および `docs/tasks/list.md` task-70 / task-88 / task-103。
 
