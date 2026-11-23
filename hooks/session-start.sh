@@ -41,14 +41,14 @@ esac
 
 # --- タスク管理の形: .claude/mode.yml の tasks: が決める (自動では見分けない) ---
 # ledger (既定) は台帳の件数 (1.x と同じ。通信しない)。github-project のときだけ、足すプラグイン
-# hirai-project-method の hirai-task を PATH で呼ぶ (土台は GitHub の関数を直接呼ばない)。
+# hirai-project-method の hirai-task を、installed_plugins.json から引いた絶対 path で呼ぶ (土台は GitHub の関数を直接呼ばない)。
 tasks_form="ledger"
 if command -v harness_tasks_form >/dev/null 2>&1; then
   tasks_form="$(harness_tasks_form "$root" 2>/dev/null || echo ledger)"
 fi
 if [ "$tasks_form" = "github-project" ]; then
   # hook の PATH にプラグインの bin/ は入らない (Bash ツールだけに入る)。PATH に頼らず
-  # harness_pm_task_bin (installed_plugins.json の user かこのリポの行の最大版 → PATH。cache へは python3 が無いときだけ) で絶対 path を引く。
+  # harness_pm_task_bin (installed_plugins.json の user・managed かこのリポ [git-common-dir が同じ] の行の最大版 → PATH。cache へは python3 が無いときだけ) で絶対 path を引く。
   pm_task=""
   if command -v harness_pm_task_bin >/dev/null 2>&1; then
     pm_task="$(harness_pm_task_bin "$root" 2>/dev/null || true)"
@@ -60,8 +60,8 @@ if [ "$tasks_form" = "github-project" ]; then
     # **取り直しを $(...) の中で呼ばない。** hirai-task line --refresh は背景の子が出力の
     # パイプを持ったまま走るので、$(...) が子の終了まで戻らず、hook の 5 秒の timeout を食う。
     # 出力を捨て、stdin も閉じて、この shell の直下で切り離す。
-    ghp_line="$("$pm_task" line 2>/dev/null || true)"
-    "$pm_task" line --refresh >/dev/null 2>&1 </dev/null &
+    ghp_line="$(HIRAI_TASK_ROOT="$root" "$pm_task" line 2>/dev/null || true)"
+    HIRAI_TASK_ROOT="$root" "$pm_task" line --refresh >/dev/null 2>&1 </dev/null &
     if [ -n "$ghp_line" ]; then
       task_line="Project: あなたの番 ${ghp_line}"
     else
@@ -92,7 +92,10 @@ if [ -f "$plugin_root/scripts/update-check.sh" ]; then
   if command -v harness_update_notice >/dev/null 2>&1; then
     # 同じ理由で外側に >/dev/null 2>&1 を付けない (このすぐ上のコメント参照)。
     harness_update_fetch_async "$plugin_root" || true
-    update_line="$(harness_update_notice "$plugin_root" 2>/dev/null || true)"
+    update_line="$(harness_update_notice "$plugin_root" "$root" 2>/dev/null || true)"
+    # 土台と足すプラグインの 2 行は 1 行にまとめる (区切り「 ／ 」・2 つ目の [harness] は落とす)。
+    update_line="$(printf '%s\n' "$update_line" | awk 'NF{ if (n++) { sub(/^\[harness\] /, ""); printf " ／ %s", $0 } else printf "%s", $0 } END{ if (n) printf "\n" }')"
+    update_line="${update_line%$'\n'}"
     # 画面下部のお知らせ枠へ結果を渡す (statusline はプラグインのパスを知れないため)。
     # フラグの鍵はプロジェクト側のパス (root) にする (plugin_root では 1.x/2.x や
     # 別案件どうしの「更新あり」表示が入れ替わる)。
@@ -110,7 +113,8 @@ fi
 state=""
 for d in "$root/.claude/state" "$root/docs/state"; do
   [ -d "$d" ] || continue
-  f="$(ls -t "$d" 2>/dev/null | head -1)"
+  # coordinator は Orca の担当の宛先の控え (再開用の state ではない)。続きの判定から外す。
+  f="$(ls -t "$d" 2>/dev/null | grep -v '^coordinator' | head -1)"
   [ -n "$f" ] && state="${d#"$root"/}/$f" && break
 done
 

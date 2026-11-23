@@ -42,13 +42,13 @@ ls -d .claude/rules "$HOME/.claude/rules" 2>/dev/null; true   # 元が残って�
 /plugin update hirai-project-method@hirai-lite
 ```
 
-- **3 行とも必要（3 行目は足すプラグインが入っているときだけ）。** 1 行目は配布元の控えを取り直すだけで、これを飛ばすと 2 行目以降は古い控えを見て「最新です」と答える。足すプラグインは土台と版が別なので、2 行目だけでは上がらない。足すプラグインが入っていなければ 3 行目は打たない（`claude plugin list` で見分ける）。
-- **2.x（`hirai-lite-v2`）から移るとき**は、更新ではなく入れ替え。**この順で進める**（`hirai-lite-v2` を先に uninstall すると、2.x の控え `~/.claude/plugins/data/hirai-lite-v2-hirai-lite/` が消え、手順 2b が GitHub Project の形を見つけられず `tasks:` を書かない。`tasks:` を commit して既定の branch に入れる前に uninstall すると、同じリポのほかの worktree・clone は `ledger` のまま戻れない）:
+- **3 行とも必要（3 行目は足すプラグインが入っているときだけ）。** 1 行目は配布元の控えを取り直すだけで、これを飛ばすと 2 行目以降は古い控えを見て「最新です」と答える。足すプラグインは土台と版が別なので、2 行目だけでは上がらない。足すプラグインがこのリポで読み込まれていなければ 3 行目は打たない（見分けは、プラグインの `scripts/tasks-path.sh` を読み込んで `harness_pm_task_bin "$PWD"` が path を返すか。`claude plugin list` はどのリポの行も同じ並びで出るので見分けに使わない）。
+- **2.x（`hirai-lite-v2`）から移るとき**は、更新ではなく入れ替え。**この順で進める**（`hirai-lite-v2` を先に uninstall すると、2.x の控え `~/.claude/plugins/data/hirai-lite-v2-hirai-lite/` が消え、手順 2b が GitHub Project の形を見つけられず `tasks:` を書かない。`tasks:` と `enabledPlugins` を commit して既定の branch に入れる前に uninstall すると、同じリポのほかの worktree・clone は `ledger` のまま、`hirai-lite-v2: true` のまま戻れず、hirai-lite が 1 つも読み込まれない）:
+  0. **install・disable・uninstall は、2.x の行の `projectPath` と同じ場所（worktree ではなく本体の checkout）で打つ。** 場所は `~/.claude/plugins/installed_plugins.json` の `hirai-lite-v2@hirai-lite` の行の `projectPath` で確かめ、`pwd` がそれと違えば、そこへ `cd` して Claude Code を開き直してから始める（worktree で project の範囲に入れると、行の `projectPath` が消えうる worktree になり、2.x 側の uninstall が通らず、worktree を消すと本体も読み込めなくなる）
   1. `/plugin marketplace update hirai-lite` → `/plugin install hirai-lite@hirai-lite`（Project で回すリポは `hirai-project-method@hirai-lite` も）
-  2. `/plugin disable hirai-lite-v2@hirai-lite`（1 で入れた範囲と同じ範囲で。disable は 2.x の控えを消さない）→ Claude Code を開き直し、開始時の 1 行に `hirai-lite v3.0.0` が出ることを確かめる（出なければ 2.x のまま動いている。先へ進まない）
-  3. `/hirai-lite:update`（手順 2b が 2.x の控えから `tasks:` を `.claude/mode.yml` に書く）→ その 1 行を commit して既定の branch に入れる
+  2. `/plugin disable hirai-lite-v2@hirai-lite`（**v2 が入っている範囲で**。`--scope` は省いてよい。disable は 2.x の控えを消さない）→ Claude Code を開き直し、開始時の 1 行に `hirai-lite v3.0.0` が出ることを確かめる（出なければ 2.x のまま動いている。先へ進まない）
+  3. `/hirai-lite:update`（手順 2b が 2.x の控えから `tasks:` を `.claude/mode.yml` に書く）→ **`tasks:` の 1 行と、`.claude/settings.json` の `enabledPlugins`（`hirai-lite-v2@hirai-lite` を `hirai-lite@hirai-lite`、と `hirai-project-method@hirai-lite` へ書き換えたもの）を 1 つの commit にして既定の branch に入れる**。開いている worktree が既定の branch を取り込んだことを確かめる（`git worktree list` の各 worktree で `git log -1 -- .claude/settings.json` が同じ commit を指す）
   4. **そのあとで** `/plugin uninstall hirai-lite-v2@hirai-lite`
-  リポの `.claude/settings.json` の `enabledPlugins` に `hirai-lite-v2@hirai-lite` があれば、`hirai-lite@hirai-lite`（と `hirai-project-method@hirai-lite`）へ書き換える。
 - 入れ替えは**再起動で反映される**。Claude Code を開き直してから次へ進む。commands / hooks / agents / MCP サーバー定義はこの入れ替えで新しくなる。導入先の `.claude/` は手順 2〜4 で扱う。
 - ターミナルから `claude plugin update` を使う場合、**scope の既定は `user`**。入れた範囲が違うと `Plugin "hirai-lite" is not installed at scope user` で失敗するので `--scope local` / `--scope project` を付ける (どの範囲に入っているかは `claude plugin list` の `Scope:` 行)。画面の中から `/plugin` で実行する場合は指定不要。
 
@@ -120,7 +120,7 @@ P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&
 if [ -n "$(harness_yml_file_value .claude/mode.yml tasks)" ]; then echo "tasks: 設定済み"; else harness_tasks_migrate "$PWD"; fi; echo "tasks: $(harness_tasks_form "$PWD")"
 ```
 
-- 出た行（`tasks: <値> を <パス> に書きました (<理由>)`・`tasks: 設定済み`・`tasks: 書きませんでした (<理由>)`）を、手順 6 の報告に 1 行そのまま入れる。**`書きました` が出たときは、続けて 1 行「`.claude/mode.yml` の `tasks:` を commit して既定の branch に入れてください（入れるまで、ほかの worktree・clone は `ledger` で動きます。2.x を uninstall するのもそのあとです）」を報告に入れる。** `github-project` が書かれたのに `harness_pm_task_bin` が空なら `/plugin install hirai-project-method@hirai-lite` を 1 行案内する。`ledger` が書かれたが実は Project で回しているリポは、`/hirai-lite:config` の項目 8 で `github-project` に直す。
+- 出た行（`tasks: <値> を <パス> に書きました (<理由>)`・`tasks: 設定済み`・`tasks: 書きませんでした (<理由>)`）を、手順 6 の報告に 1 行そのまま入れる。**`書きました` が出たときは、続けて 1 行「`.claude/mode.yml` の `tasks:` の 1 行と `.claude/settings.json` の `enabledPlugins` を 1 つの commit にして既定の branch に入れてください（入れるまで、ほかの worktree・clone は `ledger` で動き、`hirai-lite-v2: true` のままだと hirai-lite が読み込まれません。2.x を uninstall するのもそのあと、開いている worktree が取り込んでからです）」を報告に入れる。** `github-project` が書かれたのに `harness_pm_task_bin` が空なら `/plugin install hirai-project-method@hirai-lite` を 1 行案内する。`ledger` が書かれたが実は Project で回しているリポは、`/hirai-lite:config` の項目 8 で `github-project` に直す。
 
 ## 手順 3: rules を再配置する
 

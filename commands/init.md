@@ -142,7 +142,7 @@ if [ "$(harness_tasks_form "$PWD")" = ledger ]; then
 [ -e "$BASE/tasks/list.md" ] || printf '# タスク台帳\n\nstatus は 未着手 / 進行中 / 完了 の 3 種。\n\n| # | status | タスク | 概要 | 依存先 | 詳細 |\n|---|--------|-------|------|-------|------|\n' > "$BASE/tasks/list.md"
 [ -e "$BASE/tasks/parking-lot.md" ] || printf '# 保留タスク\n\n| # | 状態 | タスク | 保留理由 | 再開条件 | 元の設計 |\n|---|------|-------|---------|---------|---------|\n' > "$BASE/tasks/parking-lot.md"; fi
 [ -e "$BASE/rules-reference/incidents.md" ] || printf '# 事故記録\n\n1 回目はここに 1 行。2 回目で /hirai-lite:add-rule に回す。\n\n| 日付 | 事象 | 影響 | 直し方 | 再発回数 |\n|-----|------|------|-------|--------|\n' > "$BASE/rules-reference/incidents.md"
-[ -e "$BASE/rules-reference/approval-template.md" ] || cp "$P/docs/rules-reference/approval-template.md" "$BASE/rules-reference/approval-template.md"; PR=.github/pull_request_template.md; HAVE=; for f in pull_request_template.md PULL_REQUEST_TEMPLATE.md docs/pull_request_template.md .github/pull_request_template.md .github/PULL_REQUEST_TEMPLATE.md; do [ -e "$f" ] && HAVE=1; done; if [ -n "$HAVE" ]; then echo "kept   PR の本文の雛形 (すでにある)"; else mkdir -p .github && cp "$P/templates/pull_request_template.md" "$PR" && echo "placed $PR"; fi
+[ -e "$BASE/rules-reference/approval-template.md" ] || cp "$P/docs/rules-reference/approval-template.md" "$BASE/rules-reference/approval-template.md"; PR=.github/pull_request_template.md; HAVE=; for f in pull_request_template.md PULL_REQUEST_TEMPLATE.md docs/pull_request_template.md .github/pull_request_template.md .github/PULL_REQUEST_TEMPLATE.md PULL_REQUEST_TEMPLATE docs/PULL_REQUEST_TEMPLATE .github/PULL_REQUEST_TEMPLATE; do [ -e "$f" ] && HAVE=1; done; if [ -n "$HAVE" ]; then echo "kept   PR の本文の雛形 (すでにある)"; else mkdir -p .github && cp "$P/templates/pull_request_template.md" "$PR" && echo "placed $PR"; fi
 ls "$BASE/rules-reference/incidents.md" "$BASE/rules-reference/approval-template.md" && ls -d "$BASE/draft"
 fi
 ```
@@ -275,7 +275,7 @@ echo "== 既存の書類 =="; find docs -name '*.md' 2>/dev/null | head -20; ech
 ✅ CLAUDE.md を埋めました（プロジェクト概要 / Tech Stack / Commands）
 ✅ ゴールと背景をまとめました → docs/overview.md
 ✅ 要件をまとめました → docs/requirements.md
-✅ やることを 3 件、設計メモにまとめました → docs/draft/（承認されたら /hirai-lite:new-task で issue にします）
+✅ やることを 3 件、設計メモにまとめました → docs/draft/（承認されたら /hirai-lite:new-task で task（やること）にします）
 
 伺えなかったところは書類を作っていません（構成の判断 → docs/architecture.md）。
 あとから話していただければ足します。

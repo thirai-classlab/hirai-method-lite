@@ -148,7 +148,7 @@ GitHub Project でやることを回すリポだけが入れます。
 /plugin install hirai-project-method@hirai-lite
 ```
 
-- 依存で、土台の hirai-lite 3.0.0 以上も一緒に入ります（土台が入っていないリポでは、足すプラグインだけを入れても土台が入ります。**1.x が入っている範囲では、先に `/plugin update hirai-lite@hirai-lite` で土台を 3.0.0 に上げてから足すプラグインを入れます**（1.16.0 のまま入れると依存の版で断られます）。土台だけを切ることはできません。先に足すプラグインを切ります。使い捨ての HOME で `claude plugin disable hirai-lite@hirai-lite` が「still required by hirai-project-method」で断られることを確かめた）
+- 依存で、土台の hirai-lite 3.0.0 以上も一緒に入ります（土台が入っていないリポでは、足すプラグインだけを入れても土台が入ります）。**1.x が入っている範囲では、先に `/plugin marketplace update hirai-lite` → `/plugin update hirai-lite@hirai-lite` で土台を 3.0.0 に上げてから足すプラグインを入れます**（marketplace update を飛ばすと update が「already at the latest version (1.16.0)」で終わり、続く足すプラグインの install は not found になります。1.16.0 のまま入れると依存の版で断られます）。**2.x（`hirai-lite-v2`）が入っている範囲では、足すプラグインだけを先に入れません**（3.0.0 は入りますが、開始時の表示とコマンドは 2.9.0 のもので、`/hirai-lite:board` と `/hirai-project-method:board` が両方並びます）。下の「1.x・2.x から 3.0.0 へ移る」の表の順（disable まで）を先に行います。土台だけを切ることはできません。先に足すプラグインを切ります（使い捨ての HOME で `claude plugin disable hirai-lite@hirai-lite` が「still required by hirai-project-method」で断られることを確かめた）
 - 中身: `hirai-task`（`bin/`）・`/hirai-project-method:board`・`/hirai-project-method:project-setup`・skill `github-project`
 - `mode.yml` に `tasks: github-project` を書いたあとで使えます
 
@@ -156,11 +156,12 @@ GitHub Project でやることを回すリポだけが入れます。
 
 [Orca](https://github.com/stablyai/orca) の worktree で複数の会話を並行に動かすリポ向けです。どちらも既定は `off` で、入れただけでは何も変わりません。
 
-- `worktree: block`: Orca の worktree でない会話（環境変数 `ORCA_WORKTREE_ID` が無い、または本体の checkout）からの、**リポの中の git に入るファイル**への Edit・Write・NotebookEdit と、`git commit` を止め、worktree の作り方を 1 行で示します。**serena などの MCP の書き込みの道具と、Bash でのファイルの書き換えは止めません。****読み取り・リポの外（`~/.claude` の記憶の置き場など）・git に入らない場所（`.tmp/` など）への書き込み・`git switch`・`git checkout` は止めません。** 並行の会話が同じ作業ツリーを触る事故を編集の時点で止めるための、`rules/_meta.md` 条 5 の唯一の例外です。`block` を外せば例外も消えます
-- `notify: orca`: 担当の会話が終わったとき・止まったとき・ユーザーに決めてもらうことができたときに、`hirai-notify` でコーディネーターへ知らせます。Orca が立ち上げた担当は `worker_done`・`question`（Dispatch の id は、Orca が担当の最初に差し込む前置きの文から `--dispatch-id` で渡す）、立ち上げられていない会話は依頼文で渡された宛先（`--to` か環境変数 `HIRAI_COORDINATOR`）へ `status`・`question`（`bin/hirai-notify`）
-- `notify: orca` のときは、担当の会話が**権限の確認の画面で止まったとき**（Notification の `permission_prompt`。約 6 秒待っても答えが無いとき）と、auto mode の分類器が操作を止めたとき（`PermissionDenied`）にも、`hooks/notify-attention.sh` が `hirai-notify waiting <要約>`（`--type escalation`。件名は「権限の確認で止まっています」「分類器が止めました」、本文は `<リポの root>｜<message か tool_name と reason の要約>`）を送ります。ユーザーが画面を見に行くまで止まりに気付けない事故（2026-11-23 に 2 回）への手当てです。**判断は変えません**（何も出力せず exit 0）。送れなくても会話は止めず、stderr に 1 行だけ出します。同じ会話から 1 分に 2 通以上は送りません。秘密を含みうる `tool_input` の中身は送らず、コマンドは先頭 60 字までです
+- `worktree: block`: Orca の worktree でない会話からの、**リポの中の git に入るファイル**への Edit・Write・NotebookEdit と、`git commit` を止め、worktree の作り方を 1 行で示します。Orca の会話とみなすのは、`ORCA_WORKTREE_ID` の path の `git rev-parse --git-common-dir` が対象のリポと同じで、対象の toplevel が id の path そのものか `/.claude/worktrees/` の下にあるときです（Orca の worktree の中に `isolation: 'worktree'` の subagent が作る入れ子の worktree も通ります）。macOS で大文字小文字だけが違う path は同じ場所として扱います（`-ef`）。**serena などの MCP の書き込みの道具と、Bash でのファイルの書き換えは止めません。** **読み取り・リポの外（`~/.claude` の記憶の置き場など）・git に入らない場所（`.tmp/` など）への書き込み・`git switch`・`git checkout` は止めません。** 並行の会話が同じ作業ツリーを触る事故を編集の時点で止めるための、`rules/_meta.md` 条 5 の唯一の例外です。`block` を外せば例外も消えます
+- `notify: orca`: 担当の会話が終わったとき・止まったとき・ユーザーに決めてもらうことができたときに、`hirai-notify` でコーディネーターへ知らせます。Orca が立ち上げた担当は `worker_done`・`question`（Dispatch の id は、Orca が担当の最初に差し込む前置きの文から `--dispatch-id` で渡す）、立ち上げられていない会話は依頼文で渡された宛先へ `status`・`question`（`bin/hirai-notify`）。宛先の決め方は上が先で、`--dispatch-id` ＞ `--to` ＞ 環境変数 `HIRAI_DISPATCH_ID` ＞ `HIRAI_COORDINATOR` ＞ 導入先の `.claude/state/coordinator`（1 行 `run:<id>`。担当が依頼文で宛先を渡されたら最初に書く。**更新から 24 時間を過ぎたら使わず、担当が終わるとき（`done`）に消えます**）＞ どれも無く `ORCA_TERMINAL_HANDLE` があれば宛先を省いて送ります
+- `notify: orca` のときは、担当の会話が**権限の確認の画面で止まったとき**（Notification の `permission_prompt`。約 6 秒待っても答えが無いとき）と、auto mode の分類器が操作を止めたとき（`PermissionDenied`）にも、`hooks/notify-attention.sh` が `hirai-notify waiting <要約>`（`--type escalation`。件名は「権限の確認で止まっています」「分類器が止めました」、本文は `<リポの root>｜<message か tool_name と reason の要約>`）を送ります。ユーザーが画面を見に行くまで止まりに気付けない事故（2026-11-23 に 2 回）への手当てです。**判断は変えません**（何も出力せず exit 0）。送れなくても会話は止めず、stderr に 1 行だけ出します。同じ会話から 1 分に 2 通以上は送りません。秘密を含みうる `tool_input` の中身は送りません。送るのは道具の名前（`tool_name`）と Bash の**先頭のコマンド名だけ**で、`VAR=値 cmd` は `VAR=…` に伏せ、`VAR=…`・`(VAR=…)`・`$(…)`・括弧で始まる形では代入とコマンド置換の中身を読まず、コマンド名が決められなければ道具の名前だけです。`reason` は 80 字までで、値らしい並びは伏せます
 - `notify: orca` のときは、担当の会話が **API エラーで手番を終えたとき**（`StopFailure`。`error` は `rate_limit`・`authentication_failed`・`server_error`・`unknown` など）にも、`hooks/notify-attention.sh` が `hirai-notify waiting`（`--type escalation`。件名は「API エラーで止まりました（<error>）」、本文は `<リポの root>｜<last_assistant_message の先頭 80 字>`）を送ります。判断は変えず、1 分に 2 通以上は送りません。「Request timed out」で必ず `StopFailure` が起きるかは公式の文書に無いので、取りこぼしは次の `hirai-watch` が拾います
 - **コーディネーターの見回り（`hirai-watch`）**: PC のスリープや API の時間切れで担当の会話が応答の途中で止まると、知らせる側も止まっていることがあります。コーディネーターは `hirai-watch [--minutes N] [--orca] [<worktree の path> ...]`（`bin/`）で、各 worktree の会話の記録（`~/.claude/projects/<cwd の / と . を - に置き換えた名前>/*.jsonl` の最新 1 本）を読み、止まりを 1 行ずつ出します。止まりは 2 つ: (a) 最後の会話の行が API エラーの assistant（`isApiErrorMessage: true`）かその直後の `turn_duration`、(b) 最後の行が `api-request` のまま、または最後の会話の行が user（tool_result を含む）のままで、記録の更新が N 分（既定 15）より前。`stop_reason: end_turn` で終わった会話は、何分たっても出しません（普通の待ち）。1 件でもあれば exit 1、無ければ何も出さず exit 0。`--orca` は `orca worktree list --json` から、今のリポ（`git remote get-url origin`）と同じ `projectId` の worktree を全部見ます（`orca` が無ければ exit 2 と理由）。記録の dir が無い worktree は「記録が無い」と出すだけで止まりに数えません。回し方の例: Monitor や定期の起き上がりで 10 分ごとに `hirai-watch --orca --minutes 15` を回し、exit 1 のときだけ出力を見て、止まった担当の端末に「続けて」を送る（`orca terminal send`）。出すのは API エラーの文の先頭 80 字だけで、本文は出しません
+- **worktree の片付け（`hirai-worktrees list [--orca] [--json]`）**: 今のリポの worktree を 1 行ずつ、`消してよい` か `残す` かを理由つきで出します。**消す操作は持ちません**（`git worktree remove` を呼びません。消すのは人です）。`消してよい` は次の 4 つがそろった worktree だけです。(1) 作業がない（`git status --porcelain` が空。`.gitignore` で無視される場所は見ません）。(2) 取り込み済み（先頭が既定の branch〈`origin/HEAD`〉の祖先、`git cherry` がすべて `-`、または `gh pr view` の state が MERGED。`gh` が無い・失敗したときは前の 2 つだけで決め、理由に「gh 未確認」と書きます）。(3) 未 push が無い（upstream があり `git rev-list @{u}..` が 0 件）。(4) 動いている端末が無い（`orca terminal list --json` に端末が 0 本。`orca` が無い・読めないときは「端末 未確認」で、`消してよい` に数えません）。本体の checkout・今いる worktree・`git worktree list` で locked のものは常に `残す` です。exit code は 0（一覧が出た）・2（git のリポでない・使い方の誤り。`--orca` で `orca` が無いときも 2）。足すプラグインの `hirai-task after-merge` の出力の末尾と、`hirai-notify done` の本文の末尾に、1 本以上あるときだけ「消してよい worktree: N 本（`hirai-worktrees list` で見る）」の 1 行を足します（0 本なら出しません）
 - **`worktree: block` の限界（止める範囲を広げません。`_meta.md` 条 5 は止めすぎを避ける）**:
   - `cd <別のリポ> && git commit` は `cd` を追わず、**会話の cwd のリポ**で判定します。別のリポへ commit するときは `git -C <dir> commit` を使ってください（拒否の文言にも 1 行出します）
   - `git -C` の引数に変数やコマンド置換（`$DIR`・`$(...)`）を含む形は、値を解決できないので**通します**
@@ -223,11 +224,13 @@ feature を起こすと（`hirai-task new --kind feature`・`new --from-table`�
 
 3.0.0 は、1.x（`hirai-lite`・1.16.0）と 2.x（`hirai-lite-v2`・2.9.0）の両方の続きです。配る系列は `main` の 1 本になり、2.x は退役して `v2` ブランチに凍結します（新しい版は出ません）。
 
+**install・disable・uninstall は、2.x の行の `projectPath` と同じ場所（worktree ではなく本体の checkout）で打ちます。**2.x の行は `~/.claude/plugins/installed_plugins.json` の `hirai-lite-v2@hirai-lite` の `projectPath` に記録されています。worktree で打つと 3.0.0 の行がその worktree の path で記録され、worktree を消したあと本体とほかの worktree で読み込まれなくなります（エラーも出ません）。手順 1 の前に、`projectPath` と今いる場所が同じかを確かめます。
+
 | いま | 移り方 |
 |---|---|
 | 1.x（`hirai-lite@hirai-lite`） | 更新だけ（`/plugin marketplace update hirai-lite` → `/plugin update hirai-lite@hirai-lite` → 開き直し → `/hirai-lite:update`）。台帳の形のまま動きます。2.x の痕跡が無ければ `mode.yml` には何も書きません（`tasks:` が無くても `ledger` で動きます） |
-| 2.x（退役した `hirai-lite-v2@hirai-lite`）で台帳の形 | `/plugin marketplace update hirai-lite` → `/plugin install hirai-lite@hirai-lite` → `/plugin disable hirai-lite-v2@hirai-lite`（同じ範囲で）→ 会話を開き直し、開始時の 1 行に `hirai-lite v3.0.0` が出ることを確かめる → `/hirai-lite:update`（`tasks:` を書く）→ `.claude/mode.yml` の `tasks:` の 1 行を commit して既定の branch に入れる → `/plugin uninstall hirai-lite-v2@hirai-lite`。`/hirai-lite:update` は、書く値が既定と同じ `ledger` でプロジェクト側に `mode.yml` が無いときは書きません（その旨を 1 行で報告します）。**uninstall は update と commit のあと**です（uninstall すると 2.x の控えが消え、`/hirai-lite:update` が 2.x の形を読めません。`tasks:` を commit していないと、同じリポのほかの worktree・clone は `ledger` のまま戻れません） |
-| 2.x で GitHub Project の形 | `/plugin marketplace update hirai-lite` → `/plugin install hirai-lite@hirai-lite` と `/plugin install hirai-project-method@hirai-lite` を入れる → `/plugin disable hirai-lite-v2@hirai-lite`（同じ範囲で）→ 会話を開き直し、開始時の 1 行に `hirai-lite v3.0.0` が出ることを確かめる → `/hirai-lite:update`（`tasks:` を書く）→ `.claude/mode.yml` の `tasks:` の 1 行を commit して既定の branch に入れる → `/plugin uninstall hirai-lite-v2@hirai-lite`。`/hirai-lite:update` が 2.x の控え（`~/.claude/plugins/data/hirai-lite-v2-hirai-lite/`）を見て `tasks: github-project` を書きます（書いたことと、commit が要ることが 1 行ずつ報告されます）。**commit して既定の branch に入れる前に uninstall しない**でください（ほかの worktree・clone に `tasks:` が届かず `ledger` のまま動きます）。呼び名は `/hirai-lite:board`・`:project-setup` から `/hirai-project-method:board`・`:project-setup` に変わります |
+| 2.x（退役した `hirai-lite-v2@hirai-lite`）で台帳の形 | `/plugin marketplace update hirai-lite` → `/plugin install hirai-lite@hirai-lite` → `/plugin disable hirai-lite-v2@hirai-lite`（2.x の行の範囲で）→ 会話を開き直し、開始時の 1 行に `hirai-lite v3.0.0` が出ることを確かめる → `/hirai-lite:update`（`tasks:` を書く）→ `.claude/mode.yml` の `tasks:` の 1 行と、`.claude/settings.json` の `enabledPlugins`（`hirai-lite-v2` の行を `hirai-lite` に書き換えたもの）を **1 つの commit** で既定の branch に入れ、開いている worktree がそれを取り込んでから → `/plugin uninstall hirai-lite-v2@hirai-lite`。`/hirai-lite:update` は、書く値が既定と同じ `ledger` でプロジェクト側に `mode.yml` が無いときは書きません（その旨を 1 行で報告します）。**uninstall は update と commit のあと**です（uninstall すると 2.x の控えが消え、`/hirai-lite:update` が 2.x の形を読めません。`tasks:` を commit していないと、同じリポのほかの worktree・clone は `ledger` のまま戻れません。`enabledPlugins` が `hirai-lite-v2: true` のまま uninstall すると、その worktree では `hirai-lite` が 1 つも読み込まれず、エラーも出ません） |
+| 2.x で GitHub Project の形 | `/plugin marketplace update hirai-lite` → `/plugin install hirai-lite@hirai-lite` と `/plugin install hirai-project-method@hirai-lite` を入れる → `/plugin disable hirai-lite-v2@hirai-lite`（2.x の行の範囲で）→ 会話を開き直し、開始時の 1 行に `hirai-lite v3.0.0` が出ることを確かめる → `/hirai-lite:update`（`tasks:` を書く）→ `.claude/mode.yml` の `tasks:` の 1 行と `.claude/settings.json` の `enabledPlugins` を **1 つの commit** で既定の branch に入れ、開いている worktree が取り込んでから → `/plugin uninstall hirai-lite-v2@hirai-lite`。`/hirai-lite:update` が 2.x の控え（`~/.claude/plugins/data/hirai-lite-v2-hirai-lite/`）を見て `tasks: github-project` を書きます（書いたことと、commit が要ることが 1 行ずつ報告されます）。**commit して既定の branch に入れ、開いている worktree が取り込む前に uninstall しない**でください（ほかの worktree・clone に `tasks:` が届かず `ledger` のまま動きます）。呼び名は `/hirai-lite:board`・`:project-setup` から `/hirai-project-method:board`・`:project-setup` に変わります |
 
 `enabledPlugins` を直接書いているリポ（`.claude/settings.json`）は、2.x の `hirai-lite-v2@hirai-lite` を `hirai-lite@hirai-lite`（と、使うなら `hirai-project-method@hirai-lite`）に書き換えます。
 
@@ -277,7 +280,7 @@ GitHub Project でやることを管理するリポでは、**着手の承認は
 [harness] 更新あり v0.3.0 → v0.9.0 (/hirai-lite:update で適用)
 ```
 
-これが **更新してくださいの合図**です。出たら下の 4 ステップを上から順にやります。合図が出ていなくても更新はできます（合図には時間差があります → [合図が出ないとき](#合図が出ないとき)）。
+これが **更新してくださいの合図**です。足すプラグイン（`hirai-project-method`）が入っているリポでは、その `VERSION` も配布元と比べ、更新があれば同じ行（区切りは「／」）にまとめます。更新の知らせは、今のリポと同じ git のリポ（`git rev-parse --git-common-dir` が同じ）に入っている行だけを数えます（user・managed の範囲の行は通します）。出たら下の 4 ステップを上から順にやります。合図が出ていなくても更新はできます（合図には時間差があります → [合図が出ないとき](#合図が出ないとき)）。
 
 ### 手順（上から順に）
 
@@ -555,7 +558,7 @@ claude plugins install mattpocock-skills
    /plugin install hirai-lite@hirai-lite
    ```
 
-   GitHub Project でやることを回すリポだけ、続けて `/plugin install hirai-project-method@hirai-lite`（足すプラグイン。土台の hirai-lite 3.0.0 以上が依存で入る。1.x が入っている範囲では、先に `/plugin update hirai-lite@hirai-lite` で土台を上げる）。
+   GitHub Project でやることを回すリポだけ、続けて `/plugin install hirai-project-method@hirai-lite`（足すプラグイン。土台の hirai-lite 3.0.0 以上が依存で入る。1.x が入っている範囲では、先に `/plugin marketplace update hirai-lite` → `/plugin update hirai-lite@hirai-lite` で土台を上げる。2.x が入っている範囲では、先に「1.x・2.x から 3.0.0 へ移る」の表の順（disable まで）を行う）。
 
    commands / hooks / agents / MCP サーバー定義はこの時点で有効になる。**rules はまだ配られていない** — プラグインには rules というコンポーネントが無いため。
 
@@ -576,7 +579,7 @@ claude plugins install mattpocock-skills
 | `.claude-plugin/plugin.json` | プラグインのマニフェスト（`VERSION` と同じ版を書く） |
 | `.claude-plugin/marketplace.json` | マーケットプレイス定義。3 行: `hirai-lite`（土台・`source: "./"`）・`hirai-project-method`（足すプラグイン・`./plugins/hirai-project-method`）・退役した 2.x（`ref: v2`） |
 | `plugins/hirai-project-method/` | 足すプラグイン（`hirai-task`・`/board`・`/project-setup`・skill `github-project`・自分の `plugin.json`・`tests/smoke.sh`）。土台に依存する（`hirai-lite >=3.0.0`） |
-| `bin/` | `hirai-notify`（Orca のコーディネーターへの知らせ）・`hirai-watch`（止まった会話の見回り）・`hirai-pr-retarget`（積んだ PR の付け替え）・`hirai-pr-asset`（PR の本文に載せる画面のキャプチャを branch `pr-assets` に置く）。足すプラグインの `hirai-task` は `plugins/hirai-project-method/bin/` |
+| `bin/` | `hirai-notify`（Orca のコーディネーターへの知らせ）・`hirai-watch`（止まった会話の見回り）・`hirai-worktrees`（worktree の片付けの一覧。消さない）・`hirai-pr-retarget`（積んだ PR の付け替え）・`hirai-pr-asset`（PR の本文に載せる画面のキャプチャを branch `pr-assets` に置く）。足すプラグインの `hirai-task` は `plugins/hirai-project-method/bin/` |
 | `.mcp.json` | 同梱する MCP サーバー 2 つの定義（キーは環境変数参照のみ） |
 | `agents/` | サブエージェント 1 個（`tdd-guide`。MIT、出典は `NOTICE.md`） |
 | `commands/` | スラッシュコマンド 12 個（数の上限は v2.7.0 で外した。`init`・`update`・`config`・`rules-audit` は `disable-model-invocation: true` で説明文が常時載らず、Claude からは呼ばれない） |

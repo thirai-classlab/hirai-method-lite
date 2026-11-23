@@ -225,32 +225,54 @@ harness_tasks_migrate() {
   printf 'tasks: %s を %s に書きました (%s)\n' "$val" "$f" "$why"
 }
 
+# harness_pm_install_dir [root] -> 足すプラグイン hirai-project-method の、このリポの行のうち版が最大の installPath を stdout。
+# 無ければ空 + rc 1 (python3 か installed_plugins.json が無いときも rc 1)。
+# 「このリポの行」= scope が user・managed の行、または projectPath がこのリポと同じ git のリポの行。
+# 同じ git のリポかは `git rev-parse --git-common-dir` (両方) が同じかで見る。worktree W1 で project の範囲に入れた行は、
+# 本体の checkout・ほかの worktree からも同じリポとして当たる。projectPath が無い・git でないとき (消えた worktree など) だけ
+# root との前方一致に落とす。行の絞りはここ 1 か所 (hirai-task の path・更新の知らせ・/update の見分けが使う)。
+harness_pm_install_dir() {
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" f="${HOME:-}/.claude/plugins/installed_plugins.json" p common
+  [ -f "$f" ] && command -v python3 >/dev/null 2>&1 || return 1
+  common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  p="$(python3 -c 'import json,os,re,subprocess,sys
+d = json.load(open(sys.argv[1]))
+root = os.path.realpath(sys.argv[3]).rstrip("/")
+common = os.path.realpath(sys.argv[4]) if sys.argv[4] else ""
+def gc(path):
+    try:
+        o = subprocess.run(["git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True, timeout=5)
+        return os.path.realpath(o.stdout.strip()) if o.returncode == 0 and o.stdout.strip() else ""
+    except Exception:
+        return ""
+def mine(x):
+    if x.get("scope") in ("user", "managed"):
+        return True
+    pp = str(x.get("projectPath") or "").rstrip("/")
+    if not pp:
+        return False
+    g = gc(pp) if os.path.isdir(pp) else ""
+    if g and common:
+        return g == common
+    ppr = os.path.realpath(pp).rstrip("/")
+    return root == ppr or root.startswith(ppr + "/")
+rows = [x for k, v in d.get("plugins", {}).items() if k.split("@", 1)[0] == sys.argv[2] for x in v if x.get("installPath") and mine(x)]
+rows.sort(key=lambda x: [int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version", "0")))])
+print(rows[-1]["installPath"] if rows else "")' "$f" hirai-project-method "$root" "$common" 2>/dev/null)"
+  [ -n "$p" ] || return 1
+  printf '%s' "$p"
+}
+
 # harness_pm_task_bin [root] -> 足すプラグイン hirai-project-method の hirai-task の絶対 path を stdout。無ければ空 + rc 1。
 # hook と画面下では、プラグインの bin/ は PATH に入らない (Bash ツールだけに入る)。PATH に頼らず探す:
-#   1. installed_plugins.json の hirai-project-method@hirai-lite の行のうち、scope が user の行か、projectPath が
-#      このリポ (root。worktree ならその本体の checkout も) を含む行だけを見て、版が最大の installPath/bin/hirai-task
+#   1. harness_pm_install_dir (installed_plugins.json のこのリポの行の最大版) の bin/hirai-task
 #   2. python3 が無いとき・installed_plugins.json が無いときだけ ~/.claude/plugins/cache/hirai-lite/hirai-project-method/ の最大版
 #      (installed に行があるのに該当が無い = 外した・別のリポの install、のときは cache へ落ちない。入れ方を示して止まる側へ倒す)
 #   3. PATH の hirai-task
 harness_pm_task_bin() {
-  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" f="${HOME:-}/.claude/plugins/installed_plugins.json" p="" c common="" roots
+  local root="${1:-${CLAUDE_PROJECT_DIR:-$PWD}}" f="${HOME:-}/.claude/plugins/installed_plugins.json" p="" c
   if [ -f "$f" ] && command -v python3 >/dev/null 2>&1; then
-    common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-    [ -z "$common" ] || common="${common%/.git}"
-    roots="$root"
-    [ -z "$common" ] || [ "$common" = "$root" ] || roots="$root
-$common"
-    p="$(python3 -c 'import json,re,sys
-d = json.load(open(sys.argv[1]))
-roots = [r.rstrip("/") for r in sys.argv[3].split("\n") if r]
-def mine(x):
-    if x.get("scope") == "user":
-        return True
-    pp = str(x.get("projectPath") or "").rstrip("/")
-    return bool(pp) and any(r == pp or r.startswith(pp + "/") for r in roots)
-rows = [x for k, v in d.get("plugins", {}).items() if k.split("@", 1)[0] == sys.argv[2] for x in v if x.get("installPath") and mine(x)]
-rows.sort(key=lambda x: [int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version", "0")))])
-print(rows[-1]["installPath"] if rows else "")' "$f" hirai-project-method "$roots" 2>/dev/null)"
+    p="$(harness_pm_install_dir "$root" 2>/dev/null || true)"
     if [ -n "$p" ] && [ -x "$p/bin/hirai-task" ]; then
       printf '%s' "$p/bin/hirai-task"
       return 0

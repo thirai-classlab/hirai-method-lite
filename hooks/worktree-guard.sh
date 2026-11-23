@@ -12,7 +12,9 @@
 #   .tmp/・.claude/state/）・git switch / git checkout・git commit --dry-run / --help。
 #   `worktree: off`（既定）と `warn` では何もしない。
 # Orca の worktree の判定: 環境変数 ORCA_WORKTREE_ID があり、決めたリポの --git-dir と --git-common-dir が違い
-#   （= リンクされた worktree）、ORCA_WORKTREE_ID が path を含むならそれがそのリポの中を指すこと。
+#   （= リンクされた worktree）、ORCA_WORKTREE_ID が path を含むなら、その path の --git-common-dir が決めたリポと同じで、
+#   決めたリポの toplevel が path そのもの（-ef = 同じ inode。macOS で大文字小文字だけ違う path も同じ）か
+#   /.claude/worktrees/ の下（その worktree が作った subagent・Workflow の入れ子の worktree）であること。
 #
 # 通信しない。入力を読む道具（jq か python3）が無い・入力が読めないときは通す（fail-open。
 # 止まらないことは scripts/orca-context.sh が会話の開始時に言う）。
@@ -70,9 +72,9 @@ repo_mode() {
   printf '%s' "$v"
 }
 
-# in_orca_wt <top> -> rc 0 なら Orca の worktree の会話
+# in_orca_wt <top> -> rc 0 なら Orca の worktree の会話（scripts/orca-context.sh に同じ判定の写しがある。直すときは両方）
 in_orca_wt() {
-  local top="$1" gd gc idpath real
+  local top="$1" gd gc wc idpath
   [ -n "${ORCA_WORKTREE_ID:-}" ] || return 1
   gd="$(git -C "$top" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || return 1
   gc="$(git -C "$top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
@@ -80,8 +82,11 @@ in_orca_wt() {
   idpath="${ORCA_WORKTREE_ID##*::}"
   case "$idpath" in
     /*)
-      real="$(cd "$idpath" 2>/dev/null && pwd -P)" || return 1
-      case "$real" in "$top"|"$top"/*) return 0 ;; esac
+      [ -d "$idpath" ] || return 1
+      wc="$(git -C "$idpath" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+      [ -n "$wc" ] && [ "$wc" -ef "$gc" ] || return 1
+      [ "$top" -ef "$idpath" ] && return 0
+      case "$top" in */.claude/worktrees/*) return 0 ;; esac
       return 1 ;;
   esac
   return 0
@@ -131,7 +136,7 @@ resolve_path() {
 # 文頭の then do else ! { time env VAR=.. command exec nohup xargs を読み飛ばし、/…/git・git の前置きの
 # -C -c --git-dir --work-tree を読み、bash -c 'sh -c' eval の中は SUB として返す。
 scan_commits() {
-  awk '
+  LC_ALL=C awk '
   function flush_word() { if (inword) { nt++; tok[nt] = word; word = ""; inword = 0 } }
   function end_seg() { flush_word(); if (nt > 0) analyze(); nt = 0 }
   function base_of(s) { sub(/.*\//, "", s); return s }
@@ -177,46 +182,69 @@ scan_commits() {
       gsub(/\n/, RS_, rest); print "SUB" US rest
     }
   }
-  # 行の中で、引用符の外・$(( )) の外にある << の区切りの語を返す（先頭 - は <<- の印）。無ければ空
-  function heredoc_delim(line,   n, i, c, d, q, ar, j, w, dash, qc) {
-    n = length(line); q = 0; ar = 0
-    for (i = 1; i <= n; i++) {
-      c = substr(line, i, 1)
-      if (q == 1) { if (c == "\047") q = 0; continue }
-      if (q == 2) { if (c == "\\") i++; else if (c == "\"") q = 0; continue }
-      if (c == "\\") { i++; continue }
-      if (c == "\047") { q = 1; continue }
-      if (c == "\"") { q = 2; continue }
-      if (c == "$" && substr(line, i + 1, 2) == "((") { ar = 2; i += 2; continue }
-      if (ar > 0) { if (c == "(") ar++; else if (c == ")") ar--; continue }
-      if (c == "<" && substr(line, i + 1, 1) == "<") {
-        if (substr(line, i + 2, 1) == "<") { i += 2; continue }
-        j = i + 2; dash = ""
-        if (substr(line, j, 1) == "-") { dash = "-"; j++ }
-        while (substr(line, j, 1) == " " || substr(line, j, 1) == "\t") j++
-        qc = substr(line, j, 1)
-        if (qc == "\047" || qc == "\"") j++
-        w = ""
-        while (j <= n && substr(line, j, 1) ~ /[A-Za-z0-9_]/) { w = w substr(line, j, 1); j++ }
-        if (w ~ /^[A-Za-z_]/) return dash w
-        i++
+  # buf の p 番目（"<<"の最初の <）から heredoc の区切りを読む。読めたら hd・hdstrip を決めて p を区切りの語の最後へ進める。
+  # here-string（<<<）と、区切りの語が読めない << は p を 1 進めるだけ
+  function try_heredoc(   j, dash, qc, w, ch) {
+    if (substr(buf, p + 1, 1) != "<") return
+    if (substr(buf, p + 2, 1) == "<") { p += 2; return }
+    j = p + 2; dash = 0
+    if (substr(buf, j, 1) == "-") { dash = 1; j++ }
+    while (substr(buf, j, 1) == " " || substr(buf, j, 1) == "\t") j++
+    qc = substr(buf, j, 1)
+    w = ""
+    if (qc == "\047" || qc == "\"") {
+      j++
+      while (j <= n && substr(buf, j, 1) != qc && substr(buf, j, 1) != "\n") { w = w substr(buf, j, 1); j++ }
+      if (substr(buf, j, 1) == qc) j++
+    } else {
+      if (qc == "\\") j++
+      while (j <= n) {
+        ch = substr(buf, j, 1)
+        if (ch == " " || ch == "\t" || ch == "\n" || ch == ";" || ch == "&" || ch == "|" || ch == "(" || ch == ")" || ch == "<" || ch == ">" || ch == "\047" || ch == "\"") break
+        w = w ch; j++
       }
     }
-    return ""
+    if (w == "") { p++; return }
+    hd = w; hdstrip = dash; p = j - 1
   }
-  BEGIN { US = sprintf("%c", 31); GS = sprintf("%c", 29); RS_ = sprintf("%c", 30); hd = "" }
-  {
-    line = $0
-    if (hd != "") {
+  # p が改行を指すとき、保留中の heredoc の本文を区切りの行まで読み飛ばす。p は区切りの行の末尾の改行へ進む
+  function skip_body(   s, e, line, t) {
+    while (1) {
+      s = p + 1
+      if (s > n) { hd = ""; return }
+      e = index(substr(buf, s), "\n")
+      if (e == 0) { line = substr(buf, s); p = n } else { line = substr(buf, s, e - 1); p = s + e - 1 }
       t = line
       if (hdstrip) sub(/^\t+/, "", t)
-      if (t == hd) hd = ""
-      next
+      if (t == hd || e == 0) { hd = ""; return }
     }
-    buf = buf line "\n"
-    m = heredoc_delim(line)
-    if (m != "") { hdstrip = (m ~ /^-/); sub(/^-/, "", m); hd = m }
   }
+  # p が "(" を指すとき（$( の直後）、対応する ")" まで読み飛ばす。中の引用符・入れ子の $( ・heredoc の本文を数える。p は ")" へ進む
+  function skip_subst(   depth, c) {
+    depth = 1
+    while (p < n) {
+      p++; c = substr(buf, p, 1)
+      if (c == "\\") { p++; continue }
+      if (c == "\047") { while (p < n) { p++; if (substr(buf, p, 1) == "\047") break } continue }
+      if (c == "\"") { skip_dq(); continue }
+      if (c == "$" && substr(buf, p + 1, 1) == "(") { p++; skip_subst(); continue }
+      if (c == "(") depth++
+      else if (c == ")") { depth--; if (depth == 0) return }
+      else if (c == "<" && substr(buf, p + 1, 1) == "<") try_heredoc()
+      else if (c == "\n" && hd != "") skip_body()
+    }
+  }
+  # p が開きの " を指すとき、閉じの " まで読み飛ばす（中の $( ) も読む）。p は閉じの " へ進む
+  function skip_dq(   c) {
+    while (p < n) {
+      p++; c = substr(buf, p, 1)
+      if (c == "\\") { p++; continue }
+      if (c == "\"") return
+      if (c == "$" && substr(buf, p + 1, 1) == "(") { p++; skip_subst() }
+    }
+  }
+  BEGIN { US = sprintf("%c", 31); GS = sprintf("%c", 29); RS_ = sprintf("%c", 30); hd = ""; hdstrip = 0; buf = "" }
+  { buf = buf $0 "\n" }
   END {
     n = length(buf); q = 0; word = ""; inword = 0; nt = 0
     for (p = 1; p <= n; p++) {
@@ -229,7 +257,8 @@ scan_commits() {
           if (d == "\n") { p++ }
           else if (d == "\"" || d == "\\" || d == "$" || d == "`") { word = word d; p++ }
           else word = word c
-        } else word = word c
+        } else if (c == "$" && substr(buf, p + 1, 1) == "(") { word = word "$("; p++; skip_subst() }
+        else word = word c
         continue
       }
       if (c == "\047") { q = 1; inword = 1 }
@@ -238,8 +267,15 @@ scan_commits() {
         d = substr(buf, p + 1, 1); p++
         if (d != "\n") { word = word d; inword = 1 }
       }
+      else if (c == "$" && substr(buf, p + 1, 2) == "((") {
+        ar = 0; p++
+        while (p < n) { p++; d = substr(buf, p, 1); if (d == "(") ar++; else if (d == ")") { ar--; if (ar == 0) break } }
+        word = word "0"; inword = 1
+      }
       else if (c == "#" && !inword) { while (p < n && substr(buf, p + 1, 1) != "\n") p++ }
-      else if (c == ";" || c == "\n" || c == "|" || c == "&" || c == "(" || c == ")" || c == "`") end_seg()
+      else if (c == "<" && substr(buf, p + 1, 1) == "<") { flush_word(); try_heredoc() }
+      else if (c == "\n") { end_seg(); if (hd != "") skip_body() }
+      else if (c == ";" || c == "|" || c == "&" || c == "(" || c == ")" || c == "`") end_seg()
       else if (c == " " || c == "\t") flush_word()
       else { word = word c; inword = 1 }
     }
@@ -305,18 +341,21 @@ case "$tool" in
     [ -n "$top" ] || exit 0
     top="$(cd "$top" 2>/dev/null && pwd -P)" || exit 0
     [ "$(repo_mode "$top")" = "block" ] || exit 0
-    case "$abs" in
-      "$top"/.git|"$top"/.git/*) exit 0 ;;            # git の内部は対象外
-      "$top"/.tmp/*|"$top"/.claude/state/*) exit 0 ;;  # .gitignore に無くても止めない（設計 §6）
-      "$top"/*) ;;
-      *) exit 0 ;;
+    # リポの中かどうかと相対 path は、path の文字列の比較でなく git に聞く（macOS の既定の APFS は大文字小文字を区別しない）
+    prefix="$(git -C "$fdir" rev-parse --show-prefix 2>/dev/null)" || exit 0
+    rest="${abs#"$fdir"}"; rest="${rest#/}"
+    rel="${prefix}${rest}"
+    rel="${rel%/}"
+    case "$rel" in
+      .git|.git/*) exit 0 ;;            # git の内部は対象外
+      .tmp|.tmp/*|.claude/state|.claude/state/*) exit 0 ;;  # .gitignore に無くても止めない（設計 §6）
     esac
     in_orca_wt "$top" && exit 0
     # 無視されるファイルは git に入らないので止めない。
-    if git -C "$top" check-ignore -q -- "$abs" 2>/dev/null; then
+    if [ -n "$rel" ] && git -C "$top" check-ignore -q -- "$rel" 2>/dev/null; then
       exit 0
     fi
-    deny "Orca の worktree でない会話から、git に入るファイル（${abs#"$top"/}）は編集できません。"
+    deny "Orca の worktree でない会話から、git に入るファイル（${rel}）は編集できません。"
     ;;
   Bash)
     cmd="$(jget tool_input.command)"

@@ -7992,6 +7992,37 @@ def main() -> int:
 
         t('after-merge は closingIssuesReferences が空なら何もしない', _after_merge_no_closing_refs)
 
+        def _after_merge_removable_worktrees() -> None:
+            # 出力の末尾に「消してよい worktree: N 本」を 1 行（0 本・道具が無い・道具が失敗のときは出さない）。偽の hirai-worktrees を PATH に置く。
+            gh_task.run_gh = make_command_gh([], closing_refs={})
+            saved_path = os.environ.get('PATH', '')
+
+            def tail(payload: str | None, rc: int = 0) -> str:
+                bindir = tempfile.mkdtemp(dir=cache_tmp_dir)
+                if payload is not None:
+                    tool = os.path.join(bindir, 'hirai-worktrees')
+                    with open(tool, 'w', encoding='utf-8') as fh:
+                        fh.write("#!/bin/sh\ncat <<'EOF'\n%s\nEOF\nexit %d\n" % (payload, rc))
+                    os.chmod(tool, 0o755)
+                os.environ['PATH'] = bindir + os.pathsep + '/usr/bin' + os.pathsep + '/bin'
+                out = io.StringIO()
+                try:
+                    with redirect_stdout(out):
+                        assert gh_task.main(['after-merge', '71']) == 0
+                finally:
+                    os.environ['PATH'] = saved_path
+                return out.getvalue()
+
+            rows = json.dumps([{'verdict': '消してよい'}, {'verdict': '残す'}, {'verdict': '消してよい'}], ensure_ascii=False)
+            text = tail(rows)
+            assert text.rstrip('\n').splitlines()[-1] == '消してよい worktree: 2 本（`hirai-worktrees list` で見る）', repr(text)
+            assert '消してよい worktree' not in tail(json.dumps([{'verdict': '残す'}])), '0 本なのに出した'
+            assert '消してよい worktree' not in tail(None), '道具が無いのに出した'
+            assert '消してよい worktree' not in tail(rows, rc=2), '道具が失敗したのに出した'
+            assert '消してよい worktree' not in tail('not json'), '読めない出力で出した'
+
+        t('after-merge の末尾に「消してよい worktree: N 本」を 1 行（0 本・道具なし・失敗では出さない）', _after_merge_removable_worktrees)
+
         # ── 書き込みのあとの件数の取り直し（refresh_board_counts・_entry） ──
         def _fake_plugin(function_body: str) -> tuple[str, str]:
             """ghp-path.sh の偽物を持つプラグインの置き場所と、呼ばれた記録のパスを返す。"""

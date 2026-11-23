@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+# hirai-worktrees: 今のリポの worktree を 1 行ずつ、「消してよい／残す」を理由つきで出す。消す操作は持たない。
+#
+#   hirai-worktrees list [--orca] [--json]
+#
+#   消してよい = 次の 1〜4 がそろった worktree だけ。ほかは理由つきで「残す」。
+#     1 作業がない        : git status --porcelain が空（.gitignore で無視される場所は見ない）
+#     2 取り込み済み      : 先頭が既定の branch（origin/HEAD）の祖先／git cherry が全部 `-`／gh pr view の state が MERGED
+#                           （gh が無い・失敗したときは前 2 つだけで決め、理由に「gh 未確認」と書く）
+#     3 未 push が無い    : upstream があり @{u}.. が 0 件。upstream が無い（remote 側を消した後など）ときは、
+#                           先頭が既定の branch の祖先か git cherry が全部 `-`（中身が既定の branch に入っている）のときだけ通す
+#     4 動いている端末が無い: orca terminal list --json にその worktree の端末が 0 本。orca が無い・読めないときは
+#                           「端末 未確認」とし、消してよいに数えない
+#   対象外（常に残す）: 本体の checkout・今いる worktree・git worktree list で locked のもの・prunable・bare
+#   --orca : orca が無ければ exit 2（付けなければ orca が無いとき「端末 未確認」で続ける）
+#   --json : 1 行 1 worktree でなく、配列で出す（path・branch・verdict・reasons・conditions）
+# exit code: 0 = 一覧が出た／2 = git のリポでない・使い方の誤り
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+GIT_TIMEOUT = 30
+GH_TIMEOUT = 20
+ORCA_TIMEOUT = 20
+KEEP = "残す"
+OK = "消してよい"
+
+
+def usage():
+    sys.stderr.write("usage: hirai-worktrees list [--orca] [--json]\n")
+    sys.exit(2)
+
+
+def run(cmd, cwd=None, timeout=GIT_TIMEOUT):
+    """(exit code, stdout)。起動できない・時間切れは (None, '')。"""
+    try:
+        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None, ""
+    return p.returncode, p.stdout
+
+
+def git(args, cwd):
+    return run(["git", "-C", cwd] + args)
+
+
+def list_worktrees(cwd):
+    code, out = git(["worktree", "list", "--porcelain"], cwd)
+    if code != 0:
+        return None
+    rows, cur = [], None
+    for line in out.splitlines() + [""]:
+        if not line.strip():
+            if cur:
+                rows.append(cur)
+            cur = None
+            continue
+        key, _, val = line.partition(" ")
+        if key == "worktree":
+            cur = {"path": val, "head": "", "branch": None, "locked": False, "prunable": False, "bare": False}
+        elif cur is not None:
+            if key == "HEAD":
+                cur["head"] = val
+            elif key == "branch":
+                cur["branch"] = val[len("refs/heads/"):] if val.startswith("refs/heads/") else val
+            elif key == "locked":
+                cur["locked"] = True
+            elif key == "prunable":
+                cur["prunable"] = True
+            elif key == "bare":
+                cur["bare"] = True
+    return rows
+
+
+def default_ref(cwd):
+    code, out = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd)
+    if code == 0 and out.strip():
+        return out.strip()
+    for cand in ("origin/main", "origin/master", "origin/stg"):
+        c, _ = git(["rev-parse", "--verify", "-q", cand], cwd)
+        if c == 0:
+            return cand
+    return None
+
+
+def orca_terminal_counts():
+    """{worktree path の realpath: 端末の数}。読めなければ None。"""
+    if not shutil.which("orca"):
+        return None
+    code, out = run(["orca", "terminal", "list", "--json"], timeout=ORCA_TIMEOUT)
+    if code != 0:
+        return None
+    try:
+        terms = json.loads(out)["result"]["terminals"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    counts = {}
+    for t in terms:
+        p = t.get("worktreePath") if isinstance(t, dict) else None
+        if p:
+            k = os.path.realpath(p)
+            counts[k] = counts.get(k, 0) + 1
+    return counts
+
+
+def in_default(wt, default):
+    """先頭が既定の branch の祖先か、git cherry が全部 `-`。"""
+    if default is None:
+        return False
+    code, _ = git(["merge-base", "--is-ancestor", "HEAD", default], wt)
+    if code == 0:
+        return True
+    code, out = git(["cherry", default, "HEAD"], wt)
+    return code == 0 and all(l.startswith("-") for l in out.splitlines() if l.strip())
+
+
+def gh_merged(wt, branch):
+    """True / False / None（gh が無い・失敗）。"""
+    if not branch or os.environ.get("HIRAI_WORKTREES_NO_GH") == "1" or not shutil.which("gh"):
+        return None
+    code, out = run(["gh", "pr", "view", branch, "--json", "state", "-q", ".state"], cwd=wt, timeout=GH_TIMEOUT)
+    if code != 0:
+        return None
+    return out.strip() == "MERGED"
+
+
+def judge(row, default, counts):
+    wt = row["path"]
+    conds, reasons = {}, []
+
+    code, out = git(["status", "--porcelain"], wt)
+    if code != 0:
+        conds["clean"] = False
+        reasons.append("作業の有無を読めない（git status が失敗）")
+    elif out.strip():
+        conds["clean"] = False
+        reasons.append("作業がある（未コミット %d 件）" % len(out.splitlines()))
+    else:
+        conds["clean"] = True
+
+    merged_local = in_default(wt, default)
+    if default is None:
+        reasons.append("既定の branch を決められない（origin/HEAD が無い）")
+    gh_note = ""
+    if merged_local:
+        conds["merged"] = True
+    else:
+        g = gh_merged(wt, row["branch"])
+        if g is True:
+            conds["merged"] = True
+        else:
+            conds["merged"] = False
+            if g is None:
+                gh_note = "（gh 未確認）"
+            reasons.append("取り込み済みでない" + gh_note)
+
+    if row["branch"]:
+        c, _ = git(["rev-parse", "--verify", "-q", "@{u}"], wt)
+    else:
+        c = 1
+    if c == 0:
+        c2, out = git(["rev-list", "--count", "@{u}.."], wt)
+        n = out.strip()
+        conds["pushed"] = c2 == 0 and n == "0"
+        if not conds["pushed"]:
+            reasons.append("未 push がある（%s 件）" % (n or "不明"))
+    elif merged_local:
+        conds["pushed"] = True
+    else:
+        conds["pushed"] = False
+        reasons.append("upstream が無く、中身も既定の branch に入っていない")
+
+    if counts is None:
+        conds["terminal"] = None
+        reasons.append("端末 未確認")
+    else:
+        n = counts.get(os.path.realpath(wt), 0)
+        conds["terminal"] = n == 0
+        if n:
+            reasons.append("動いている端末がある（%d 本）" % n)
+
+    ok = all(conds[k] is True for k in ("clean", "merged", "pushed", "terminal"))
+    return ok, conds, reasons
+
+
+def main(argv):
+    if not argv or argv[0] != "list":
+        usage()
+    flags = argv[1:]
+    for f in flags:
+        if f not in ("--orca", "--json"):
+            usage()
+    want_orca, as_json = "--orca" in flags, "--json" in flags
+    if want_orca and not shutil.which("orca"):
+        sys.stderr.write("hirai-worktrees: orca が PATH に無い\n")
+        return 2
+    cwd = os.getcwd()
+    code, top = git(["rev-parse", "--show-toplevel"], cwd)
+    if code != 0 or not top.strip():
+        sys.stderr.write("hirai-worktrees: git のリポの中で打つ\n")
+        return 2
+    here = top.strip()
+    rows = list_worktrees(here)
+    if rows is None:
+        sys.stderr.write("hirai-worktrees: git worktree list に失敗\n")
+        return 2
+    default = default_ref(here)
+    counts = orca_terminal_counts()
+    results = []
+    for i, row in enumerate(rows):
+        wt = row["path"]
+        skip = None
+        if i == 0:
+            skip = "本体の checkout"
+        elif os.path.exists(wt) and os.path.exists(here) and os.path.samefile(wt, here):
+            skip = "今いる worktree"
+        elif row["locked"]:
+            skip = "locked"
+        elif row["prunable"]:
+            skip = "prunable（path が無い）"
+        elif row["bare"]:
+            skip = "bare"
+        if skip:
+            results.append({"path": wt, "branch": row["branch"], "verdict": KEEP, "reasons": ["対象外: " + skip], "conditions": {}})
+            continue
+        ok, conds, reasons = judge(row, default, counts)
+        results.append({"path": wt, "branch": row["branch"], "verdict": OK if ok else KEEP,
+                        "reasons": reasons or ["作業なし・取り込み済み・未 push なし・端末なし"], "conditions": conds})
+    if as_json:
+        print(json.dumps(results, ensure_ascii=False, indent=2))
+        return 0
+    for r in results:
+        print("%s  %s  [%s]  %s" % (r["verdict"], r["path"], r["branch"] or "detached", "／".join(r["reasons"])))
+    n = sum(1 for r in results if r["verdict"] == OK)
+    print("消してよい: %d 本（消す操作はこの道具に無い。消すのは人が確かめてから）" % n)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

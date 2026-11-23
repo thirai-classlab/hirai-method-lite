@@ -6,7 +6,31 @@
 # worktree: block でも jq と python3 が無いと guard は入力を読めず止まらない。そのときは「止まりません」と言う（条 9）。
 set -uo pipefail
 
+# root は会話のリポの toplevel（サブディレクトリで開いても hooks/worktree-guard.sh・bin/hirai-notify と同じ mode.yml を読む）
 root="${CLAUDE_PROJECT_DIR:-$PWD}"
+if top="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then
+  root="$(cd "$top" 2>/dev/null && pwd -P)" || root="$top"
+fi
+
+# in_orca_wt <top> -> rc 0 なら Orca の worktree の会話（hooks/worktree-guard.sh の in_orca_wt と同じ判定。直すときは両方）
+in_orca_wt() {
+  local top="$1" gd gc wc idpath
+  [ -n "${ORCA_WORKTREE_ID:-}" ] || return 1
+  gd="$(git -C "$top" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || return 1
+  gc="$(git -C "$top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  [ -n "$gd" ] && [ -n "$gc" ] && [ "$gd" != "$gc" ] || return 1
+  idpath="${ORCA_WORKTREE_ID##*::}"
+  case "$idpath" in
+    /*)
+      [ -d "$idpath" ] || return 1
+      wc="$(git -C "$idpath" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+      [ -n "$wc" ] && [ "$wc" -ef "$gc" ] || return 1
+      [ "$top" -ef "$idpath" ] && return 0
+      case "$top" in */.claude/worktrees/*) return 0 ;; esac
+      return 1 ;;
+  esac
+  return 0
+}
 
 # yml_val <file> <キー> -> 値（引用符と行末のコメントを外す）。無ければ空。
 yml_val() {
@@ -28,13 +52,7 @@ notify="${HC_NOTIFY:-$(yml_get notify)}"
 
 case "$wt" in
   warn|block)
-    in_orca_wt=0
-    if [ -n "${ORCA_WORKTREE_ID:-}" ]; then
-      gd="$(git -C "$root" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || gd=""
-      gc="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || gc=""
-      [ -n "$gd" ] && [ -n "$gc" ] && [ "$gd" != "$gc" ] && in_orca_wt=1
-    fi
-    if [ "$in_orca_wt" -eq 0 ]; then
+    if ! in_orca_wt "$root"; then
       if [ "$wt" = "block" ]; then
         if command -v jq >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1; then
           echo "[harness] worktree: block — Orca の worktree ではないため、Edit・Write・NotebookEdit での git に入るファイルの編集と git commit は止まります（MCP の書き込みの道具は止めません）。orca worktree create --name <名前> で worktree を作って作業してください"
@@ -49,6 +67,6 @@ case "$wt" in
 esac
 
 if [ "$notify" = "orca" ]; then
-  echo "[harness] notify: orca — 決めてもらうことができたら問いを .tmp/ に単独で読める形で書き、hirai-notify question <絶対 path> <要約> を送ってその手番を終える。終わったら done <報告の絶対 path> <要約>、続けられないエラーは stopped <報告の絶対 path> <要約>（宛先は --dispatch-id（前置きの Dispatch の id）> --to > 環境変数。依頼文で宛先を渡されたら最初に .claude/state/coordinator へ 1 行 run:<id> で書く）。送る操作は検査の結果を見てから別の呼び出しで打つ。API エラーで手番が終わったときは StopFailure の hook が自動で知らせる"
+  echo "[harness] notify: orca — 決めてもらうことができたら問いを .tmp/ に単独で読める形で書き、hirai-notify question <絶対 path> <要約> を送ってその手番を終える。終わったら done <報告の絶対 path> <要約>、続けられないエラーは stopped <報告の絶対 path> <要約>（宛先は --dispatch-id（前置きの Dispatch の id）> --to > 環境変数。依頼文で宛先を渡されたら最初に .claude/state/coordinator へ 1 行 run:<id> で書く。24 時間で失効し、done で消える）。送る操作は検査の結果を見てから別の呼び出しで打つ。API エラーで手番が終わったときは StopFailure の hook が自動で知らせる"
 fi
 exit 0

@@ -169,7 +169,7 @@ harness_update_fetch_async() (
   return 0
 )
 
-# harness_update_notice [root] -> キャッシュ値が自分より新しい時だけ 1 行出力。他は無出力 rc 0。
+# harness_update_notice [plugin_root] [project_root] -> キャッシュ値が自分より新しい時だけ 1 行出力。他は無出力 rc 0。
 harness_update_notice() (
   set -uo pipefail
   harness_update_enabled || return 0
@@ -178,16 +178,19 @@ harness_update_notice() (
      && harness_semver_gt "$new" "$cur"; then
     printf '[harness] 更新あり v%s → v%s (/hirai-lite:update で適用)\n' "$cur" "$new"
   fi
-  harness_update_pm_notice "$root"
+  harness_update_pm_notice "$root" "${2:-}"
 )
 
-# harness_update_pm_notice [root] -> 足すプラグイン hirai-project-method が入っていて、前回取得した main の版より古いときだけ 1 行。
-# 入っていなければ (installed_plugins.json に行が無い) 何も出さない。常に rc 0。
+# harness_update_pm_notice [plugin_root] [project_root] -> 足すプラグイン hirai-project-method が入っていて、前回取得した main の版より古いときだけ 1 行。
+# このリポの行が無ければ (installed_plugins.json に行が無い・別のリポの行だけ) 何も出さない。常に rc 0。
 harness_update_pm_notice() (
   set -uo pipefail
   harness_update_enabled || return 0
   local root="${1:-${CLAUDE_PLUGIN_ROOT:-$PWD}}" dir ip cur new
-  ip="$(harness_plugin_root_from_installed hirai-project-method 2>/dev/null)" || return 0
+  # このリポの行だけで比べる (別のリポの行の版で知らせない)。絞りは tasks-path.sh の harness_pm_install_dir の 1 か所。
+  command -v harness_pm_install_dir >/dev/null 2>&1 || . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/tasks-path.sh" 2>/dev/null || return 0
+  command -v harness_pm_install_dir >/dev/null 2>&1 || return 0
+  ip="$(harness_pm_install_dir "${2:-${CLAUDE_PROJECT_DIR:-$PWD}}" 2>/dev/null)" || return 0
   [ -n "$ip" ] || return 0
   cur="$(harness_semver_norm "$(head -1 "$ip/VERSION" 2>/dev/null)")"
   dir="$(harness_update_cache_dir "$root")"

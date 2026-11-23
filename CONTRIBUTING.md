@@ -39,7 +39,7 @@ entry 名は系列ごとに分けてあります）。
 ## 版の上げ方
 
 `VERSION` は更新の合図にも使われます（セッション開始時に、配布元の `VERSION` と手元の版を比べて
-「更新あり」を出す仕組み。比べるのは土台の `VERSION` だけです）。**それぞれ 3 か所を必ず同じ値に揃えます。**
+「更新あり」を出す仕組み。比べるのは土台の `VERSION` と、入っていれば足すプラグインの `plugins/hirai-project-method/VERSION` です。足すプラグインの `VERSION` を上げ忘れると、足すプラグインの更新の合図が出ません）。**それぞれ 3 か所を必ず同じ値に揃えます。**
 `tests/smoke.sh` の case 9 が同じ検査をします。
 
 - **土台（`hirai-lite`）:** `VERSION` / `.claude-plugin/plugin.json` / `marketplace.json` の `hirai-lite` の行。

@@ -231,6 +231,7 @@ import datetime
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -4763,6 +4764,22 @@ def cmd_today() -> int:
     return 0
 
 
+def _print_removable_worktrees() -> None:
+    """after-merge の出力の末尾に「消してよい worktree: N 本」を 1 行足す（0 本・道具が無い・失敗なら出さない）。
+    判定は土台の bin/hirai-worktrees（消す操作は持たない）。"""
+    tool = shutil.which('hirai-worktrees')
+    if not tool:
+        return
+    try:
+        proc = subprocess.run([tool, 'list', '--json'], capture_output=True, text=True, timeout=90)
+        rows = json.loads(proc.stdout) if proc.returncode == 0 else []
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return
+    count = sum(1 for r in rows if isinstance(r, dict) and r.get('verdict') == '消してよい')
+    if count:
+        print(f'消してよい worktree: {count} 本（`hirai-worktrees list` で見る）')
+
+
 def cmd_after_merge(pr_number: int) -> int:
     """その PR が閉じた task について、close-parents を親→祖父→…と、閉じられる分だけ
     連鎖して辿ってから unblocked を呼ぶ。"""
@@ -5514,7 +5531,9 @@ def main(argv: list[str]) -> int:
     if sub == 'after-merge':
         if len(tail) != 1:
             die('使い方: hirai-task after-merge <PR 番号>', 2)
-        return cmd_after_merge(_parse_issue_number(tail[0]))
+        code = cmd_after_merge(_parse_issue_number(tail[0]))
+        _print_removable_worktrees()
+        return code
     die(f'未知のサブコマンド: {sub}', 2)
 
 

@@ -83,6 +83,325 @@ sl_shape() {
   esac
 }
 
+# ---------- 6 巡目の確かめ (既存の case から呼ぶ。case は増やさない) ----------
+# 各 r6_* は「直した形」を使い捨ての複製で確かめ、外れたものを 1 行ずつ「FAIL <名前> ...」で標準出力に返す (無ければ空)。
+# 引数に <相対 path> <sed 式> を渡すと、その複製の 1 か所を直す前の形に壊してから確かめる (壊したら FAIL が出るはず)。
+# r6_must_fail <tag> <出力> -> 出力に tag を含む FAIL が無ければ rc 1 (その確かめが壊れても FAIL にならない = 確かめが空振り)。
+
+# r6_scratch <dir> [<相対 path> <sed 式>] -> hooks・scripts・bin の複製 (VERSION は 0.1.0)。壊す式が効かなければ rc 1
+r6_scratch() {
+  local d="$1" rel="${2:-}" ex="${3:-}"
+  mkdir -p "$d/hooks" "$d/scripts" "$d/bin"
+  cp -R "$ROOT/hooks/." "$d/hooks/"; cp -R "$ROOT/scripts/." "$d/scripts/"; cp -R "$ROOT/bin/." "$d/bin/"
+  printf '0.1.0\n' > "$d/VERSION"
+  [ -n "$rel" ] || return 0
+  cp "$d/$rel" "$d/$rel.orig" && sed -i.bak "$ex" "$d/$rel" && rm -f "$d/$rel.bak"
+  if cmp -s "$d/$rel" "$d/$rel.orig"; then rm -f "$d/$rel.orig"; return 1; fi
+  rm -f "$d/$rel.orig"
+}
+
+r6_must_fail() {
+  case "$2" in *"FAIL $1"*) return 0 ;; esac
+  return 1
+}
+
+# r6_update_checks [<rel> <sed>] -> 足すプラグインの行の絞り・更新の知らせ・開始時と画面下 (u 巡目)
+#   A 本体の checkout・別の worktree・別のリポから harness_pm_task_bin が自分のリポの行だけを採る
+#   B 更新の知らせが各リポの行の版で出て、行の無いリポには出ない
+#   C 土台と足すプラグインの更新が重なっても 1 行 (／ 区切り)・coordinator があっても前回の続きは latest.md
+#   D cwd が CLAUDE_PROJECT_DIR と違っても、画面下が会話のリポで hirai-task line を引く
+r6_update_checks() {
+  local s h td M W1 W2 O X o c tb
+  s="$(mktemp -d)"; r6_scratch "$s" "$@" || { echo "FAIL 壊す式が効かない: $1"; rm -rf "$s"; return; }
+  h="$s/home"; td="$s/td"; M="$s/M"; W1="$s/W1"; W2="$s/W2"; O="$s/O"; X="$s/X"
+  mkdir -p "$h/.claude/plugins" "$td" "$M"
+  local r
+  for r in M O X; do
+    mkdir -p "$s/$r"; git init -q "$s/$r" 2>/dev/null
+    git -C "$s/$r" -c user.email=a@b -c user.name=a commit -q --allow-empty -m i 2>/dev/null
+  done
+  git -C "$M" worktree add -q "$W1" -b w1 2>/dev/null; git -C "$M" worktree add -q "$W2" -b w2 2>/dev/null
+  for r in pm100:1.0.0 pm101:1.0.1; do
+    mkdir -p "$s/${r%%:*}/bin"; printf '%s\n' "${r##*:}" > "$s/${r%%:*}/VERSION"
+    printf '#!/usr/bin/env bash\n[ "$1" = line ] && echo "ROOT=${HIRAI_TASK_ROOT:-none}"\nexit 0\n' > "$s/${r%%:*}/bin/hirai-task"
+    chmod +x "$s/${r%%:*}/bin/hirai-task"
+  done
+  # W1 (worktree) で入れた project の行 (pm 1.0.0) と、別のリポ O の行 (pm 1.0.1)
+  printf '{"plugins":{"hirai-project-method@hirai-lite":[{"scope":"project","projectPath":"%s","version":"1.0.0","installPath":"%s/pm100"},{"scope":"project","projectPath":"%s","version":"1.0.1","installPath":"%s/pm101"}]}}\n' \
+    "$W1" "$s" "$O" "$s" > "$h/.claude/plugins/installed_plugins.json"
+  local want="$s/pm100/bin/hirai-task"
+  for r in "$M" "$W1" "$W2"; do
+    o="$(HOME="$h" PATH=/usr/bin:/bin /bin/bash -c ". \"$s/scripts/tasks-path.sh\"; harness_pm_task_bin \"$r\"" 2>/dev/null)"
+    [ "$o" = "$want" ] || echo "FAIL A-worktree-row worktree で入れた行が $r から当たらない (期待 $want): [$o]"
+  done
+  o="$(HOME="$h" PATH=/usr/bin:/bin /bin/bash -c ". \"$s/scripts/tasks-path.sh\"; harness_pm_task_bin \"$O\"" 2>/dev/null)"
+  [ "$o" = "$s/pm101/bin/hirai-task" ] || echo "FAIL A-other-repo 別のリポの行を採らない: [$o]"
+  o="$(HOME="$h" PATH=/usr/bin:/bin /bin/bash -c ". \"$s/scripts/tasks-path.sh\"; harness_pm_task_bin \"$X\"" 2>/dev/null)"
+  [ -z "$o" ] || echo "FAIL A-no-row 行の無いリポが他のリポの行を採った: [$o]"
+  # 更新の知らせ。土台 0.1.0 → 0.2.0・足すプラグイン → 1.0.2
+  c="$(TMPDIR="$td" bash -c ". \"$s/scripts/update-check.sh\"; harness_update_cache_dir \"$s\"")"
+  mkdir -p "$c"; printf '0.2.0' > "$c/latest"; printf '1.0.2' > "$c/latest-pm"; date +%s > "$c/stamp"
+  for r in "$M:v1.0.0" "$W2:v1.0.0" "$O:v1.0.1" "$X:"; do
+    o="$(HOME="$h" TMPDIR="$td" HARNESS_UPDATE_CHECK=on bash -c ". \"$s/scripts/update-check.sh\"; harness_update_pm_notice \"$s\" \"${r%%:*}\"" 2>/dev/null)"
+    if [ -n "${r##*:}" ]; then
+      case "$o" in *"${r##*:} → v1.0.2"*) : ;; *) echo "FAIL B-pm-notice ${r%%:*} の行の版 ${r##*:} → v1.0.2 で知らせが出ない: [$o]" ;; esac
+    else
+      [ -z "$o" ] || echo "FAIL B-other-repo-silent 行の無いリポに知らせが出た: [$o]"
+    fi
+  done
+  # 開始時 (土台と足すプラグインの更新が両方ある・coordinator が latest.md より新しい)
+  mkdir -p "$M/.claude/state"; printf 'x\n' > "$M/.claude/state/latest.md"; sleep 1; printf 'run:C\n' > "$M/.claude/state/coordinator"
+  o="$(cd "$M" && env -i HOME="$h" PATH=/usr/bin:/bin TMPDIR="$td" CLAUDE_PLUGIN_ROOT="$s" CLAUDE_PROJECT_DIR="$M" HARNESS_UPDATE_CHECK=on \
+        HARNESS_UPDATE_URL="http://127.0.0.1:9/VERSION" bash "$s/hooks/session-start.sh" 2>&1 </dev/null)"
+  [ "$(printf '%s\n' "$o" | grep -c '更新あり' || true)" = 1 ] || echo "FAIL C-one-line 更新の知らせが 1 行でない: $o"
+  printf '%s' "$o" | grep -qF ' ／ 足すプラグイン hirai-project-method の更新あり' || echo "FAIL C-joined 土台の行に ／ で足すプラグインがつながらない: $o"
+  [ "$(printf '%s\n' "$o" | grep -c . || true)" -le 5 ] || echo "FAIL C-five-lines 5 行を超えた: $o"
+  printf '%s' "$o" | grep -qF '前回の続き: .claude/state/latest.md' || echo "FAIL C-coordinator-not-resume coordinator が前回の続きに出た: $o"
+  # 画面下 (cwd=/tmp・CLAUDE_PROJECT_DIR=本体)
+  printf 'tasks: github-project\n' > "$M/.claude/mode.yml"
+  printf '{"plugins":{"hirai-project-method@hirai-lite":[{"scope":"user","version":"1.0.0","installPath":"%s/pm100"}]}}\n' "$s" > "$h/.claude/plugins/installed_plugins.json"
+  o="$(cd /tmp && printf '{"context_window":{"used_percentage":12}}' | env -i HOME="$h" PATH=/usr/bin:/bin TMPDIR="$td" NO_COLOR=1 \
+        CLAUDE_PROJECT_DIR="$M" HARNESS_UPDATE_CHECK=off bash "$s/scripts/statusline.sh" 2>&1)"
+  printf '%s' "$o" | grep -qF "ROOT=$M" || echo "FAIL D-statusline-root cwd が違う画面下が会話のリポ (CLAUDE_PROJECT_DIR) で引かない: $o"
+  rm -rf "$s"
+}
+
+# r6_guard_checks [<rel> <sed>] -> worktree-guard.sh (入れ子・heredoc・日本語・大小・別 worktree)・orca-context.sh (サブディレクトリ表示・guard と同じ判定)
+r6_guard_checks() {
+  local s; s="$(mktemp -d)"; r6_scratch "$s" "$@" || { echo "FAIL 壊す式が効かない: $1"; rm -rf "$s"; return; }
+  cat > "$s/guard-test.sh" <<'R6GUARD'
+G="$1"
+W0="$(cd "$(dirname "$0")" && pwd -P)"
+rm -rf "$W0/t"; mkdir "$W0/t"; T="$W0/t"
+cd "$T" || exit 9
+git init -q P && cd P && git config user.email a@b && git config user.name a
+mkdir -p .claude sub && printf 'worktree: block\n' > .claude/mode.yml && echo x > sub/f.txt
+git add -A && git commit -qm i
+git worktree add -q ../W -b w
+git worktree add -q .claude/worktrees/agent-1 -b a1
+git worktree add -q ../W/.claude/worktrees/agent-2 -b a2
+git worktree add -q ../W3 -b w3
+cd "$T"
+fail=0
+ed() { printf '{"tool_name":"Edit","cwd":"%s","tool_input":{"file_path":"%s"}}' "$T" "$1"; }
+bs() { python3 -c 'import json,sys;print(json.dumps({"tool_name":"Bash","cwd":sys.argv[1],"tool_input":{"command":sys.argv[2]}}))' "$1" "$2"; }
+chk() {
+  local want="$1" name="$2" out got; shift 2
+  out="$(cat | env "$@" bash "$G" 2>/dev/null)"
+  [ -n "$out" ] && got=DENY || got=ALLOW
+  if [ "$got" = "$want" ]; then echo "ok   $name ($got)"; else echo "FAIL guard-$name (want $want got $got)"; fail=1; fi
+}
+ed "$T/P/sub/f.txt" | chk DENY main-edit X=1
+ed "$T/W/sub/f.txt" | chk ALLOW worktree-edit ORCA_WORKTREE_ID=repo::$T/W
+ed "$T/P/.claude/worktrees/agent-1/sub/f.txt" | chk ALLOW nested-under-P ORCA_WORKTREE_ID=repo::$T/W
+ed "$T/W/.claude/worktrees/agent-2/sub/f.txt" | chk ALLOW nested-under-W ORCA_WORKTREE_ID=repo::$T/W
+bs "$T/P/.claude/worktrees/agent-1" "git commit -am x" | chk ALLOW nested-commit ORCA_WORKTREE_ID=repo::$T/W
+ed "$T/W3/sub/f.txt" | chk DENY other-worktree-with-id ORCA_WORKTREE_ID=repo::$T/W
+ed "$T/p/sub/f.txt" | chk DENY case-differing-path X=1
+ed "$T/p/sub/new/n.txt" | chk DENY case-differing-new X=1
+ed "$T/W/sub/f.txt" | chk ALLOW case-differing-id ORCA_WORKTREE_ID=repo::$T/w
+ed "$T/P/.tmp/x" | chk ALLOW tmp X=1
+ed "$T/P/.claude/state/coordinator" | chk ALLOW state X=1
+bs "$T/P" 'echo "a
+b"; cat > .tmp/spec.md <<'"'EOF'"'
+git commit -m x
+EOF' | chk ALLOW multiline-quote-then-heredoc X=1
+bs "$T/P" 'gh issue comment 1 --body "$(cat <<'"'EOF'"'
+画面は 5.5" まで
+git commit -m x
+EOF
+)"' | chk ALLOW dq-subst-heredoc X=1
+bs "$T/P" 'gh x --body "$(cat <<'"'EOF'"'
+hi
+EOF
+)" && git commit -m x' | chk DENY commit-after-dq-subst X=1
+bs "$T/P" 'git commit -m x' | chk DENY plain-commit X=1
+bs "$T/P" 'cat <<EOF >x
+a
+EOF
+git commit -m y' | chk DENY commit-after-heredoc X=1
+bs "$T/P" 'x=$((1<<2)); git commit -m y' | chk DENY arith-shift X=1
+for l in en_US.UTF-8 ja_JP.UTF-8; do
+  bs "$T/P" 'git commit -m "$(cat <<'"'EOF'"'
+fix: 引用符の外の << を heredoc と読む
+EOF
+)"' | chk DENY "utf8-subst-commit-$l" LANG=$l LC_ALL=$l
+  bs "$T/P" 'cat <<'"'終'"' > .tmp/x
+本文
+終
+git commit -m x' | chk DENY "utf8-delim-$l" LANG=$l LC_ALL=$l
+  bs "$T/P" 'git add -A && git commit -m "fix: 見出し
+
+- <<重要>> の印を外す"' | chk DENY "utf8-dq-$l" LANG=$l LC_ALL=$l
+done
+exit $fail
+R6GUARD
+  cat > "$s/ctx-test.sh" <<'R6CTX'
+C="$1"
+T="$(cd "$(dirname "$0")" && pwd -P)/t"
+[ -d "$T/P" ] || { echo "FAIL ctx-setup guard-test が先"; exit 9; }
+fail=0
+mkdir -p "$T/P/apps/api"
+chk() { local name="$1" want="$2" out; shift 2; out="$(env -u CLAUDE_PROJECT_DIR "$@" bash "$C" 2>&1 </dev/null)"
+  if printf '%s' "$out" | grep -q -- "$want"; then echo "ok   $name"; else echo "FAIL ctx-$name (want /$want/): $out"; fail=1; fi; }
+chk subdir-shows-block 'worktree: block' CLAUDE_PROJECT_DIR="$T/P/apps/api"
+chk main-warns 'worktree: block' CLAUDE_PROJECT_DIR="$T/P"
+out="$(env CLAUDE_PROJECT_DIR="$T/W" ORCA_WORKTREE_ID=repo::$T/W bash "$C")"; [ -z "$out" ] && echo "ok   worktree silent" || { echo "FAIL ctx-worktree-silent: $out"; fail=1; }
+out="$(env CLAUDE_PROJECT_DIR="$T/P/.claude/worktrees/agent-1" ORCA_WORKTREE_ID=repo::$T/W bash "$C")"; [ -z "$out" ] && echo "ok   nested silent" || { echo "FAIL ctx-nested-silent (guard と判定が違う): $out"; fail=1; }
+out="$(env CLAUDE_PROJECT_DIR="$T/W3" ORCA_WORKTREE_ID=repo::$T/W bash "$C")"; [ -n "$out" ] && echo "ok   other worktree warns" || { echo "FAIL ctx-other-worktree-warns"; fail=1; }
+exit $fail
+R6CTX
+  ( cd "$s" && env -u CLAUDE_PROJECT_DIR -u ORCA_WORKTREE_ID bash guard-test.sh "$s/hooks/worktree-guard.sh" 2>&1 | grep '^FAIL' )
+  ( cd "$s" && env -u CLAUDE_PROJECT_DIR -u ORCA_WORKTREE_ID bash ctx-test.sh "$s/scripts/orca-context.sh" 2>&1 | grep '^FAIL' )
+  rm -rf "$s"
+}
+
+# r6_notify_checks [<rel> <sed>] -> notify-attention.sh の秘密の伏せ (代入・コマンド置換・括弧)・hirai-notify の coordinator の期限と done で消える
+r6_notify_checks() {
+  local s; s="$(mktemp -d)"; r6_scratch "$s" "$@" || { echo "FAIL 壊す式が効かない: $1"; rm -rf "$s"; return; }
+  cat > "$s/notify-test.sh" <<'R6NOTIFY'
+H="$1"; N="$2"
+T="$(cd "$(dirname "$0")" && pwd -P)/nt"
+rm -rf "$T"; mkdir -p "$T/bin" "$T/R/.claude/state"
+cat > "$T/bin/orca" <<'X'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_LOG"
+exit "${FAKE_RC:-0}"
+X
+chmod +x "$T/bin/orca"
+cd "$T/R" && git init -q . && printf 'notify: orca\n' > .claude/mode.yml
+pd() { python3 -c 'import json,sys;print(json.dumps({"hook_event_name":"PermissionDenied","tool_name":"Bash","cwd":sys.argv[1],"session_id":sys.argv[3],"reason":"blocked","tool_input":{"command":sys.argv[2]}}))' "$T/R" "$1" "$2"; }
+hook() { n=$(cat "$T/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$T/n"; : > "$T/log"; pd "$1" "s$n" | env PATH="$T/bin:$PATH" FAKE_LOG="$T/log" HIRAI_COORDINATOR=run:C CLAUDE_PLUGIN_DATA="$T/data$n" bash "$H" >/dev/null 2>&1; cat "$T/log"; }
+chk() {
+  local out; out="$(hook "$2")"
+  if [ -z "$out" ]; then echo "FAIL notify-$1 (送られていない)"; return; fi
+  if printf '%s' "$out" | grep -Eq "$3"; then echo "FAIL notify-$1 (秘密が出た): $out"; return; fi
+  printf '%s' "$out" | grep -Eq "$4" || echo "FAIL notify-$1 (期待の本文が無い): $out"
+}
+S='S3cretPass|sk-live|ABCDEF0123|base64|printf'
+chk subst-assign 'AUTH=$(printf '"'"'admin:S3cretPass'"'"' | base64); curl -H "Authorization: Basic $AUTH" x' "$S" 'Bash｜'
+chk backtick 'TOKEN=`echo sk-live-ABCDEF0123456789` curl x' "$S" 'Bash｜'
+chk paren '(API_TOKEN=sk-live-ABCDEF0123456789SECRET node x.js)' "$S" 'Bash｜'
+chk plain-assign 'API_TOKEN=sk-live-ABCDEF0123456789SECRET node x.js' "$S" 'Bash API_TOKEN=… node｜'
+chk quoted-subst 'A="x $(echo S3cretPass)" node' "$S" 'Bash｜'
+chk path-name '/usr/bin/curl -H sk-live-ABCDEF0123 x' "$S" 'Bash curl｜'
+cd "$T/R"
+echo run:OLD > .claude/state/coordinator
+: > "$T/log"; env PATH="$T/bin:$PATH" FAKE_LOG="$T/log" ORCA_TERMINAL_HANDLE=h bash "$N" waiting x >/dev/null 2>&1
+grep -q -- '--to run:OLD' "$T/log" || echo "FAIL notify-fresh-coordinator 新しい控えを使わない"
+touch -t 202001010000 .claude/state/coordinator
+: > "$T/log"; env PATH="$T/bin:$PATH" FAKE_LOG="$T/log" ORCA_TERMINAL_HANDLE=h bash "$N" waiting x >/dev/null 2>&1
+{ [ -s "$T/log" ] && ! grep -q -- 'run:OLD' "$T/log"; } || echo "FAIL notify-stale-coordinator 24 時間を過ぎた控えを使った: $(cat "$T/log")"
+echo run:C > .claude/state/coordinator; echo r > rep.md
+: > "$T/log"; env PATH="$T/bin:$PATH" FAKE_LOG="$T/log" bash "$N" question rep.md q >/dev/null 2>&1
+[ -f .claude/state/coordinator ] || echo "FAIL notify-question-keeps question が控えを消した"
+env PATH="$T/bin:$PATH" FAKE_LOG="$T/log" FAKE_RC=1 bash "$N" done rep.md d >/dev/null 2>&1
+[ -f .claude/state/coordinator ] || echo "FAIL notify-done-failed-keeps 送れなかった done が控えを消した"
+env PATH="$T/bin:$PATH" FAKE_LOG="$T/log" bash "$N" done rep.md d >/dev/null 2>&1; rc=$?
+{ [ ! -f .claude/state/coordinator ] && [ "$rc" -eq 0 ]; } || echo "FAIL notify-done-removes done が成功したのに控えが残った rc=$rc"
+exit 0
+R6NOTIFY
+  ( cd "$s" && bash notify-test.sh "$s/hooks/notify-attention.sh" "$s/bin/hirai-notify" 2>&1 | grep '^FAIL' )
+  rm -rf "$s"
+}
+
+# r6_worktrees_checks [<rel> <sed>] -> bin/hirai-worktrees。使い捨てのリポ・偽の orca・gh は失敗する偽物。
+# 未コミット・未 push・未 merge・端末が動いている・本体・locked は「残す」、4 条件がそろったものだけ「消してよい」。消す操作は持たない。
+r6_worktrees_checks() {
+  local s; s="$(mktemp -d)"; r6_scratch "$s" "$@" || { echo "FAIL 壊す式が効かない: $1"; rm -rf "$s"; return; }
+  local fb="$s/fakebin" M="$s/main" g="git -C" o b rc
+  mkdir -p "$fb"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fb/gh"
+  printf '#!/usr/bin/env bash\nprintf %%s '"'"'{"result":{"terminals":[{"worktreePath":"%s/term"}]}}'"'"'\n' "$s" > "$fb/orca"
+  chmod +x "$fb/gh" "$fb/orca"
+  git init -q --bare "$s/origin.git" 2>/dev/null; git -C "$s/origin.git" symbolic-ref HEAD refs/heads/main
+  git clone -q "$s/origin.git" "$M" 2>/dev/null
+  $g "$M" config user.email a@b; $g "$M" config user.name a
+  $g "$M" checkout -q -b main 2>/dev/null; echo a > "$M/a"; $g "$M" add -A; $g "$M" commit -qm i; $g "$M" push -q -u origin main 2>/dev/null
+  $g "$M" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  for b in ok dirty unpushed unmerged term locked; do $g "$M" worktree add -q "$s/$b" -b "b-$b" 2>/dev/null; done
+  echo d > "$s/dirty/new.txt"
+  $g "$s/unpushed" push -q -u origin b-unpushed 2>/dev/null; echo u > "$s/unpushed/u"; $g "$s/unpushed" add -A; $g "$s/unpushed" -c user.email=a@b -c user.name=a commit -qm u
+  echo m > "$s/unmerged/m"; $g "$s/unmerged" add -A; $g "$s/unmerged" -c user.email=a@b -c user.name=a commit -qm m
+  $g "$M" worktree lock "$s/locked" 2>/dev/null
+  o="$(cd "$M" && PATH="$fb:/usr/bin:/bin" python3 "$s/bin/hirai-worktrees" list --json 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] || echo "FAIL wt-exit gh が失敗する環境で list が exit $rc: $o"
+  printf '%s' "$o" | python3 -c '
+import json, sys, os
+try:
+    rows = json.load(sys.stdin)
+except Exception as e:
+    print("FAIL wt-json JSON を読めない: %s" % e); sys.exit()
+want = {"main": "残す", "ok": "消してよい", "dirty": "残す", "unpushed": "残す", "unmerged": "残す", "term": "残す", "locked": "残す"}
+got = {os.path.basename(r["path"]): r["verdict"] for r in rows}
+for k, v in want.items():
+    if got.get(k) != v:
+        print("FAIL wt-%s %s のはずが %s" % (k, v, got.get(k)))
+' 2>&1
+  # 端末が読めない (orca 無し) ときは「消してよい」に数えない
+  o="$(cd "$M" && PATH="/usr/bin:/bin" python3 "$s/bin/hirai-worktrees" list --json 2>&1)"
+  printf '%s' "$o" | grep -q '"verdict": "消してよい"' && echo "FAIL wt-orca-unknown orca が無いのに「消してよい」が出た"
+  # --orca は orca が無ければ exit 2・git の外も exit 2
+  ( cd "$M" && PATH="/usr/bin:/bin" python3 "$s/bin/hirai-worktrees" list --orca >/dev/null 2>&1 ); [ $? -eq 2 ] || echo "FAIL wt-orca-flag --orca が orca 無しで exit 2 にならない"
+  ( cd / && PATH="$fb:/usr/bin:/bin" python3 "$s/bin/hirai-worktrees" list >/dev/null 2>&1 ); [ $? -eq 2 ] || echo "FAIL wt-not-git git の外で exit 2 にならない"
+  [ "$(grep -v '^ *#' "$s/bin/hirai-worktrees" | grep -c '"remove"')" = 0 ] || echo "FAIL wt-no-remove 消す操作 (git worktree remove) を持っている"
+  # 終わりの知らせ (hirai-notify done) に、消してよい worktree の数が添えられる
+  printf '#!/usr/bin/env bash\ncase "$*" in *send*) printf "%%s\\n" "$@" > "%s/send.log" ;; *) printf %%s '"'"'{"result":{"terminals":[]}}'"'"' ;; esac\n' "$s" > "$fb/orca"; chmod +x "$fb/orca"
+  ( cd "$M" && mkdir -p .claude && printf 'notify: orca\n' > .claude/mode.yml && echo r > rep.md \
+    && PATH="$fb:/usr/bin:/bin" HIRAI_COORDINATOR=run:x bash "$s/bin/hirai-notify" done rep.md "終わり" ) >/dev/null 2>&1
+  grep -q '消してよい worktree: [1-9]' "$s/send.log" 2>/dev/null || echo "FAIL wt-notify-note hirai-notify done に消してよい worktree の数が出ない"
+  rm -rf "$s"
+}
+
+# r6_mutants <update|guard|notify|worktrees> -> 直す前の形にする壊し方を「名前|相対 path|sed 式」で 1 行ずつ
+r6_mutants() {
+  case "$1" in
+    update)
+      cat <<'X'
+A-worktree-row|scripts/tasks-path.sh|s/if g and common:/if False:/
+B-other-repo-silent|scripts/tasks-path.sh|s/return g == common/return True/
+C-one-line|hooks/session-start.sh|/awk .NF{ if (n++)/d
+C-coordinator-not-resume|hooks/session-start.sh|s/ | grep -v .^coordinator.//
+D-statusline-root|scripts/statusline.sh|s/HIRAI_TASK_ROOT="\$root" //
+C-joined|scripts/update-check.sh|s/^  harness_update_pm_notice "\$root" "\${2:-}"$/  :/
+X
+      ;;
+    guard)
+      cat <<'X'
+guard-nested-under|hooks/worktree-guard.sh|/\*\/\.claude\/worktrees\/\*) return 0/d
+guard-multiline-quote-then-heredoc|hooks/worktree-guard.sh|s/\(substr(buf, p + 1, 1) == "<"\)/\1 \&\& 0/
+guard-case-differing-id|hooks/worktree-guard.sh|s/\[ "\$top" -ef "\$idpath" \]/[ "$top" = "$idpath" ]/
+ctx-subdir-shows-block|scripts/orca-context.sh|s/rev-parse --show-toplevel/rev-parse --show-cdup/
+X
+      ;;
+    notify)
+      cat <<'X'
+notify-quoted-subst|hooks/notify-attention.sh|s/function unsafe(w) {.*}$/function unsafe(w) { return 0 }/
+notify-stale-coordinator|bin/hirai-notify|s/ -mmin "-\$COORDINATOR_TTL_MIN"//
+notify-done-removes|bin/hirai-notify|/rm -f "\$croot_done/d
+X
+      ;;
+    worktrees)
+      cat <<'X'
+wt-dirty|bin/hirai-worktrees|s/("clean", "merged", "pushed", "terminal")/("merged", "pushed", "terminal")/
+wt-term|bin/hirai-worktrees|s/("clean", "merged", "pushed", "terminal")/("clean", "merged", "pushed")/
+wt-notify-note|bin/hirai-notify|s/消してよい worktree:/X:/
+X
+      ;;
+  esac
+}
+
+# r6_suite <update|guard|notify|worktrees> -> 直した形で外れが 0 件、壊した複製で必ず FAIL が出ることを確かめ、問題を 1 行ずつ返す (無ければ空)
+r6_suite() {
+  local fn="r6_$1_checks" out tag rel ex
+  out="$($fn 2>&1)"; [ -z "$out" ] || printf '%s\n' "$out"
+  while IFS='|' read -r tag rel ex; do
+    [ -n "$tag" ] || continue
+    out="$($fn "$rel" "$ex" 2>&1)"
+    r6_must_fail "$tag" "$out" || printf 'NOFAIL 壊した複製 (%s) で %s が FAIL しない (確かめが空振り): %s\n' "$rel" "$tag" "$(printf '%s' "$out" | head -1)"
+  done < <(r6_mutants "$1")
+}
+
 # ---------- case 1: session-start.sh は対象ファイル不在でも exit 0 ----------
 case_1() {
   local tmp out rc
@@ -780,6 +1099,8 @@ def wired(ev, matcher):
                and any("notify-attention.sh" in x.get("command", "") for x in e.get("hooks", [])) for e in h.get(ev, []))
 sys.exit(0 if wired("Notification", "permission_prompt") and wired("PermissionDenied", "") else 1)
 PYEOF
+  # 6 巡目: guard の入れ子の worktree・heredoc・日本語・大小の path・別 worktree、orca-context のサブディレクトリ表示。壊した複製 4 通りで FAIL することも見る。
+  local r6g; r6g="$(r6_suite guard)"; [ -z "$r6g" ] || bad="$bad [6 巡目の guard・orca-context] $r6g"
   if [ -n "$bad" ]; then fail 2 "止める手段と fail-open" "$bad"; return; fi
 
   pass 2 "context-budget.sh は既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% ちょうどで発火 / loop-reminder.sh は置き場 6 通りで loop のときだけ ${lines} 行を出し normal では 1 バイトも出さない (要点 4 つ入り・全行 [harness] 始まり) / HC_LOOP_REMINDER=off・大文字 LOOP・壊れた/読めない mode.yml・共通ライブラリ不在でも exit 0 無出力 / worktree-guard.sh は worktree: block のとき、Orca の worktree でない会話からの git に入るファイルの Edit・Write と git commit を止めて worktree の作り方を出し (6 場合)、.tmp・リポの外・git switch・git checkout -b・読み取り・Orca の worktree の編集と commit・off・warn は通し (9 場合)、壊れた入力は fail-open、mode.yml の項目で働き、hooks.json の PreToolUse に結ばれている / 守るリポは cwd ではなく操作の対象 (git -C・Edit の file_path) で決め (別リポ・cwd が非リポ 7 場合)、git commit の形 12 と引用符つき -C・バックスラッシュ改行を止め、heredoc の本文・--dry-run・--help・.tmp/・.claude/state/ は止めず、/bin/bash 3.2 でも止め、jq 無しは python3 で読み、どちらも無ければ止めずに orca-context が「止まりません」と言う"
@@ -1519,7 +1840,12 @@ EOF
   rm -rf "$wtmp" "$wtd"
   if [ -n "$badw" ]; then fail 8 "github-project と更新あり・入れ替えの行が全部出ても 5 行以内" "$badw"; return; fi
 
-  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 と 1.9.0 < 1.10.0 を数値比較 / 画面下部 2 行目は設定リンクを常時出しつつ お知らせは 更新あり > context 高 > 無表示 の順に 1 つだけ (off で停止・閾値可変・通信なし) / 既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% でお知らせを出す / フラグの鍵は案件 (CLAUDE_PROJECT_DIR) ごとに分かれ、plugin_root と project_root が別のパスでも project_root 側だけに置かれ、他案件の更新ありは漏れない / tasks: github-project の行と更新あり・入れ替えの行が同時に出ても 5 行以内"
+  # 6 巡目: 足すプラグインの行の絞り (worktree で入れた行・別のリポの行)・更新の知らせが各リポの版で 1 行・
+  # coordinator があっても前回の続きは latest.md・cwd が違う画面下。壊した複製 5 通りで FAIL することも見る。
+  local r6u; r6u="$(r6_suite update)"
+  if [ -n "$r6u" ]; then fail 8 "足すプラグインの行の絞り・更新の知らせ・開始時と画面下" "$r6u"; return; fi
+
+  pass 8 "新版のみ 1 行通知 / 同版・旧版は無通知 / 0.9.0 < 0.10.0 と 1.9.0 < 1.10.0 を数値比較 / 画面下部 2 行目は設定リンクを常時出しつつ お知らせは 更新あり > context 高 > 無表示 の順に 1 つだけ (off で停止・閾値可変・通信なし) / 既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% でお知らせを出す / フラグの鍵は案件 (CLAUDE_PROJECT_DIR) ごとに分かれ、plugin_root と project_root が別のパスでも project_root 側だけに置かれ、他案件の更新ありは漏れない / tasks: github-project の行と更新あり・入れ替えの行が同時に出ても 5 行以内 / 足すプラグインの行は worktree で入れても本体・別 worktree から当たり別のリポの行は採らず、更新の知らせは各リポの行の版で土台と合わせて 1 行・前回の続きは coordinator でなく latest.md・cwd が違う画面下も会話のリポで引く (壊した複製 5 通りで FAIL)"
 }
 
 # ---------- case 9: マニフェストが妥当な JSON で、版が VERSION と一致する ----------
@@ -1880,6 +2206,26 @@ PYCMD
     ( cd "$aw/u" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "${ab/SCOPE=;/SCOPE=user;}" ) >/dev/null 2>&1
     [ -e "$aw/u/docs" ] && abad="$abad /init user が docs/ を作っている"
     [ -e "$aw/u/.github" ] && abad="$abad /init user が .github/ を作っている"
+    # (c-2) /init 手順 5 の mode.yml: user ではホームの雛形から tasks:・worktree:・notify: を写さず、project には写す。
+    # 逐語に取り出した block を走らせ、user の sed を無効にした block では FAIL することも見る (DC2-09)。
+    local mb mbx mi blk
+    mb="$(awk '/^```bash$/ { b = ""; c = 1; next } c && /^```$/ { if (b ~ /templates\/mode\.yml/) { printf "%s", b; exit } c = 0; next } c { b = b $0 "\n" }' "$ROOT/commands/init.md")"
+    mbx="$(printf '%s' "$mb" | sed "s|sed -i.bak '/^# tasks（やること管理の形）/,\$d' \"\$MF\"|true|")"
+    if [ -z "$mb" ] || [ "$mb" = "$mbx" ]; then abad="$abad /init の mode.yml の block を取り出せない・壊せない"; else
+      for mi in ok broken; do
+        rm -rf "$aw/mu" "$aw/mp"; mkdir -p "$aw/mu/home" "$aw/mp"
+        blk="$mb"; [ "$mi" = broken ] && blk="$mbx"
+        ( cd "$aw/mu" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/mu/home" bash -c "${blk/SCOPE=;/SCOPE=user;}" ) >/dev/null 2>&1
+        ( cd "$aw/mp" && git init -q . 2>/dev/null; env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/mu/home2" bash -c "$blk" ) >/dev/null 2>&1
+        if [ "$mi" = ok ]; then
+          grep -q '^mode: ' "$aw/mu/home/.claude/mode.yml" 2>/dev/null || abad="$abad /init user がホームに mode.yml を置かない"
+          grep -qE '^(tasks|worktree|notify):' "$aw/mu/home/.claude/mode.yml" 2>/dev/null && abad="$abad /init user がホームへ tasks:・worktree:・notify: を写した"
+          grep -qE '^tasks:' "$aw/mp/.claude/mode.yml" 2>/dev/null || abad="$abad /init project が mode.yml に tasks: を写さない"
+        else
+          grep -qE '^tasks:' "$aw/mu/home/.claude/mode.yml" 2>/dev/null || abad="$abad 壊した init の block (user の sed 無効) でも user のホームに tasks: が写らない (確かめが空振り)"
+        fi
+      done
+    fi
     # (d) /update 手順 4: docs/rules-reference が在って型が無ければ足す / 在れば触らない
     ( cd "$aw/up" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ub" ) >/dev/null 2>&1
     cmp -s "$at" "$aw/up/docs/rules-reference/approval-template.md" \
@@ -2338,9 +2684,11 @@ PYEOF
   { [ "${n_core:-0}" -ge 1 ] && [ "${n_core:-0}" -le 3 ]; } || pr_bad="$pr_bad core.md の 設計の起点 が ${n_core} 行 (1〜3 行)"
   grep -q 'docs/adr/' "$ROOT/templates/CLAUDE.md" || pr_bad="$pr_bad templates/CLAUDE.md の書類の表に ADR の置き場の行が無い"
   grep -q 'CLAUDE.md' "$ROOT/commands/new-draft.md" || pr_bad="$pr_bad new-draft.md の分かれ道 B が導入先の CLAUDE.md の表を指さない"
+  # 6 巡目: notify の秘密の伏せ・coordinator の期限と done で消える、hirai-worktrees の 4 条件。壊した複製 5 通りで FAIL することも見る。
+  local r6n; r6n="$(r6_suite notify)$(r6_suite worktrees)"; [ -z "$r6n" ] || pr_bad="$pr_bad [6 巡目の notify・hirai-worktrees] $r6n"
   if [ -n "$pr_bad" ]; then fail 10 "commands はプラグイン本体の場所を素材行で解決する" "$pr_bad"; return; fi
 
-  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) にカード 3 種と目印 + カードの 7 語 + AskUserQuestion + 記入例 ${n_ex} 件 (どれも長さの決まりの内) + 悪い例/良い例 + 進め方の用語集 / 承認を求める ${n_site} コマンドすべてが AskUserQuestion と同じ行にポインタを持ちカードの 7 語を備える / 手順書の逐語実行で /init は承認の型を導入先へ置き 2 回目は上書きせず user では docs/ を作らず、/update は無いときだけ足し在れば触らず docs/ を新設しない / commands の CLAUDE_PLUGIN_ROOT 無防備使用 0 件・素材行 ${n_boot} 本が 1 種類で \$P を使う全ブロックに在り、未設定でも installed_plugins.json の hirai-lite の最大版 (辞書順では負ける 3.10.0 で確認。退役した hirai-lite-v2 の大きい版には落ちない) → hirai-lite キャッシュの最大版の順で解決し harness_plugin_root と一致 / update.md ${n_up} 行 (<=220) / init.md ${n_in} 行 (<=310) / 手順 0 の逐語実行で 控えはコピー (project 側も home 側も元が残る)・置き場は一時領域の rules-backup-*・消えるタイミングを表示 を実挙動で確認 / hirai-notify は サブ dir・相対 path・引用符つき notify・/bin/bash 3.2・UTF-8 で <絶対 path>｜<要約> を送り、値の無い --to・--dispatch-id と取り違えは exit 2、引数が環境変数より先、notify: off は何も送らない / pr-retarget は bin/ にあり旧名が無く、承認ビューの節は足すプラグインにあり、設計の起点は 3 行以内で、ADR の置き場の行がある / hirai-task は偽の HOME・gh 無しで --selftest が通り、引数なしと git の外では exit 2、gh を呼ばず、絶対パスを持たない (内部の名前は HIRAI_INTERNAL_WORDS を渡したときだけ見る)"
+  pass 10 "MCP 定義は鍵を直書きせず / agent ${n} 件の frontmatter が妥当 / plugin.json は既定配置に任せている / state.md ${n_sm} 行 (<=150) に 仕分け→0 件なら書かない→承認→/add-rule 委譲 の工程がこの順で在る / 承認テンプレート (T2) にカード 3 種と目印 + カードの 7 語 + AskUserQuestion + 記入例 ${n_ex} 件 (どれも長さの決まりの内) + 悪い例/良い例 + 進め方の用語集 / 承認を求める ${n_site} コマンドすべてが AskUserQuestion と同じ行にポインタを持ちカードの 7 語を備える / 手順書の逐語実行で /init は承認の型を導入先へ置き 2 回目は上書きせず user では docs/ を作らず、/update は無いときだけ足し在れば触らず docs/ を新設しない / commands の CLAUDE_PLUGIN_ROOT 無防備使用 0 件・素材行 ${n_boot} 本が 1 種類で \$P を使う全ブロックに在り、未設定でも installed_plugins.json の hirai-lite の最大版 (辞書順では負ける 3.10.0 で確認。退役した hirai-lite-v2 の大きい版には落ちない) → hirai-lite キャッシュの最大版の順で解決し harness_plugin_root と一致 / update.md ${n_up} 行 (<=220) / init.md ${n_in} 行 (<=310) / 手順 0 の逐語実行で 控えはコピー (project 側も home 側も元が残る)・置き場は一時領域の rules-backup-*・消えるタイミングを表示 を実挙動で確認 / hirai-notify は サブ dir・相対 path・引用符つき notify・/bin/bash 3.2・UTF-8 で <絶対 path>｜<要約> を送り、値の無い --to・--dispatch-id と取り違えは exit 2、引数が環境変数より先、notify: off は何も送らない / pr-retarget は bin/ にあり旧名が無く、承認ビューの節は足すプラグインにあり、設計の起点は 3 行以内で、ADR の置き場の行がある / guard の入れ子・heredoc・日本語・大小の path・notify の秘密の伏せと coordinator の期限・hirai-worktrees の 4 条件が壊した複製で FAIL し / hirai-task は偽の HOME・gh 無しで --selftest が通り、引数なしと git の外では exit 2、gh を呼ばず、絶対パスを持たない (内部の名前は HIRAI_INTERNAL_WORDS を渡したときだけ見る)"
 }
 
 case_1; case_2; case_3; case_4; case_5; case_6; case_7; case_8; case_9; case_10

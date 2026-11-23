@@ -101,7 +101,7 @@ case "$mode" in
 esac
 
 # 未完了タスク: tasks: (mode.yml) が決める。ledger (既定) は台帳の件数、github-project は
-# 足すプラグインの `hirai-task line` (控えを読むだけ。--refresh を付けないので gh を叩かない。
+# 足すプラグインの `hirai-task line` (控えを読むだけ。--refresh を付けないので gh を叩かない。HIRAI_TASK_ROOT で会話のリポを渡す。
 # 取り直しは session-start.sh が起こす)。github-project のときだけ見出し語を「あなたの番」に替える —
 # 「やること 6（承認…」だと 6 を Project 番号のように読めるため。
 # この複製は古い tasks-path.sh と組になることがある (harness_tasks_form が無い) — その場合は ledger。
@@ -122,7 +122,8 @@ if [ "$tasks_form" = "github-project" ]; then
     pm_task="$(command -v hirai-task)"
   fi
   if [ -n "$pm_task" ]; then
-    todo_ghp="$("$pm_task" line 2>/dev/null || true)"
+    # 会話のリポ (root) で引く (cwd がリポの中の別リポでも、会話のリポの件数を出す)
+    todo_ghp="$(HIRAI_TASK_ROOT="$root" "$pm_task" line 2>/dev/null || true)"
     [ -n "$todo_ghp" ] && todo="$todo_ghp"
   else
     todo="hirai-project-method が未導入"
