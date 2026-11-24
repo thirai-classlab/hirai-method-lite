@@ -13,7 +13,8 @@
 #              種類は、宛先（--to・環境変数・控え）へ送るとき question、Dispatch の id を渡すときと宛先を省くとき escalation。
 #              Orca は、id も動いている Dispatch も無い差出人の escalation を断って status に変える。question は断らず、コーディネーターの待ち受け
 #              `check --wait --types worker_done,escalation,question` で拾える。宛先を省くときは、Orca が差出人の端末の Dispatch から Run を引き、
-#              escalation に Dispatch の id を足す（引けなければ何も送らず exit 1）。
+#              escalation に Dispatch の id を足す。Dispatch が無く、その端末が Run を持つとき（コーディネーター自身）は、自分の Run に
+#              「Rejected escalation」で届く（だからコーディネーターは HC_NOTIFY=off で開く）。どちらも無ければ何も送らず exit 1。
 #
 # 送り方:
 #   Orca に立ち上げられた担当（--dispatch-id か環境変数 HIRAI_DISPATCH_ID で Dispatch の id を渡されたとき。
@@ -23,7 +24,7 @@
 #       done     → --type worker_done --outcome succeeded --task-id <task の id> --report-path <file>
 #       stopped  → --type worker_done --outcome failed    --task-id <task の id> --report-path <file>
 #       Orca は task の id の無い worker_done を断る。task の id は --task-id（前置きの文の Task の id）、
-#       無ければ Dispatch の id から Orca に聞く（orca orchestration worker-show --dispatch <id> --json の .result.dispatch.taskId）。
+#       無ければ Dispatch の id から Orca に 1 回だけ聞く（orca orchestration worker-show --dispatch <id> --json の .result.dispatch.taskId。15 秒まで）。
 #       どちらでも引けなければ、足りないものを stderr に出して exit 1（送らない）。
 #     --to は省く（「From an active Dispatch, an omitted recipient defaults to its owning Run mailbox」）。
 #   立ち上げられていない会話（宛先を --to か環境変数 HIRAI_COORDINATOR で渡されたとき）:
@@ -198,27 +199,48 @@ worktree_rest() {
   printf '%s' "｜worktree の残り: 未コミット ${dirty} 件・未 push ${ahead} 件"
 }
 
-# task_of_dispatch <Dispatch の id> -> worker_done に要る task の id（Orca に聞く）。引けなければ、足りないものを stderr に 1 行出して rc 1
+# 担当が手で打つ done・stopped だけが通る。Orca の CLI の待ちは 60 秒なので、Bash ツールの既定 120 秒より先に理由を出す
+TASK_LIMIT_SEC=15
+
+# task_of_dispatch <Dispatch の id> -> worker_done に要る task の id（Orca に 1 回だけ聞く）。引けなければ、足りないものを stderr に 1 行出して rc 1
 task_of_dispatch() {
-  local out v=""
-  out="$(orca orchestration worker-show --dispatch "$1" --json 2>/dev/null)"
-  if command -v jq >/dev/null 2>&1; then
-    v="$(printf '%s' "$out" | jq -r '.result.dispatch | (.taskId // .task_id // empty) | strings' 2>/dev/null)"
-  fi
-  [ -n "$v" ] || v="$(printf '%s' "$out" | python3 -I -c '
+  local f pid end out="" pair="" v="" why=""
+  f="$(mktemp)" || { task_missing "$1" "一時ファイルを作れない"; return 1; }
+  orca orchestration worker-show --dispatch "$1" --json >"$f" 2>/dev/null </dev/null &
+  pid=$!
+  end=$((SECONDS + TASK_LIMIT_SEC))
+  while kill -0 "$pid" 2>/dev/null; do
+    if ! [ "$SECONDS" -lt "$end" ]; then
+      disown "$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null; rm -f "$f"
+      task_missing "$1" "Orca の答えが ${TASK_LIMIT_SEC} 秒で返らない"; return 1
+    fi
+    sleep 0.1
+  done
+  out="$(cat "$f")"; rm -f "$f"
+  # 1 行目に task の id（無ければ空）、2 行目に Orca の断り文（失敗も JSON で標準出力に出る）
+  command -v jq >/dev/null 2>&1 && pair="$(printf '%s' "$out" | jq -r '((.result.dispatch? // {}) | (.taskId // .task_id // "")), ((.error.message? // "") | gsub("\\s+"; " "))' 2>/dev/null)"
+  [ -n "$pair" ] || pair="$(printf '%s' "$out" | python3 -I -c '
 import json, sys
-try:
-    d = (json.load(sys.stdin).get("result") or {}).get("dispatch") or {}
-except Exception:
-    sys.exit(0)
-t = d.get("taskId") or d.get("task_id")
-print(t if isinstance(t, str) else "", end="")
+d = json.load(sys.stdin)
+t = (d.get("result") or {}).get("dispatch") or {}
+print(t.get("taskId") or t.get("task_id") or "")
+print(" ".join(str((d.get("error") or {}).get("message") or "").split()))
 ' 2>/dev/null)"
+  v="$(printf '%s\n' "$pair" | sed -n 1p)"
   if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
-  # 理由は人の読む形で聞き直す（--json の失敗は標準出力に JSON で出るため）
-  out="$(orca orchestration worker-show --dispatch "$1" 2>&1 | tr -s '[:space:]' ' ' | cut -c1-200)"
-  echo "hirai-notify: worker_done に要る task の id が足りない（送っていない）。Dispatch ${1} から引けなかった: ${out:-Orca の答えが空} ／ 前置きの文の Task の id を --task-id で渡して打ち直す" >&2
+  why="$(printf '%s\n' "$pair" | sed -n 2p)"
+  if [ -z "$why" ]; then
+    if ! command -v jq >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then why="jq も python3 も無いので Orca の答えを読めない"
+    elif [ -z "$out" ]; then why="Orca の答えが空"
+    else why="Orca の答えに task の id が無い"; fi
+  fi
+  task_missing "$1" "$why"
   return 1
+}
+
+# task_missing <Dispatch の id> <理由> -> 足りないものを stderr に 1 行
+task_missing() {
+  echo "hirai-notify: worker_done に要る task の id が足りない（送っていない）。Dispatch ${1} から引けなかった: ${2:0:200} ／ 前置きの文の Task の id を --task-id で渡して打ち直す" >&2
 }
 
 # worker_done の task の id。渡されていれば Orca に聞かない

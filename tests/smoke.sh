@@ -20,7 +20,9 @@ mkt() { local d; d="$(mktemp -d)" && CDPATH= builtin cd -- "$d" >/dev/null 2>&1 
 #   差出人の端末に動いている Dispatch があるときは FAKE_DISPATCH=<id>（実物は差出人の pane から引く）
 #   宛先 … --to も --dispatch-id も FAKE_DISPATCH も無いと断る ／ worker_done … --task-id・--dispatch-id が無い、Dispatch の task と合わないと断る
 #   escalation … --dispatch-id も FAKE_DISPATCH も無いと断る ／ question・status は（宛先があれば）断らない
-#   worker-show --dispatch <id> --json … task_<id> を返す。ctx_gone* は dispatch_not_found で exit 1（実物と同じく JSON は標準出力）
+#   worker-show --dispatch <id> --json … task_<id> を返す。--json が無ければ 1 行の文。ctx_gone* は dispatch_not_found で exit 1（実物と同じく、失敗も JSON は標準出力）・
+#   ctx_notask* は task の id の無い答え・ctx_down* は --json の 1 回だけ runtime_unavailable・ctx_slow* は 8 秒黙る
+#   断った send も含めて、試みた send を全部 $FAKE_LOG.try に書く（「送らずに exit 1」を見るため）
 fake_orca() {
   cat > "$1" <<'FAKEORCA'
 #!/usr/bin/env bash
@@ -28,7 +30,13 @@ val() { local k="$1"; shift; while [ $# -gt 0 ]; do if [ "$1" = "$k" ]; then pri
 if [ "${1:-} ${2:-}" = "orchestration worker-show" ]; then
   printf '%s\n' "$*" >> "$FAKE_LOG.show"
   d="$(val --dispatch "$@")"
+  case "$d" in ctx_slow*) exec sleep 8 ;; esac
+  case " $* " in
+    *" --json "*) ;;
+    *) case "$d" in ctx_gone*) echo "Worker Dispatch $d was not found." >&2; exit 1 ;; esac; echo "$d task=task_$d [running] stage=running"; exit 0 ;;
+  esac
   case "$d" in
+    ctx_down*) printf '{\n  "ok": false,\n  "error": {\n    "code": "runtime_unavailable",\n    "message": "Orca runtime is unavailable."\n  }\n}\n'; exit 1 ;;
     ctx_gone*) printf '{\n  "ok": false,\n  "error": {\n    "code": "dispatch_not_found",\n    "message": "Worker Dispatch %s was not found."\n  }\n}\n' "$d"; exit 1 ;;
     ctx_notask*) printf '{\n  "ok": true,\n  "result": {\n    "dispatch": {\n      "id": "%s"\n    }\n  }\n}\n' "$d"; exit 0 ;;
   esac
@@ -36,6 +44,7 @@ if [ "${1:-} ${2:-}" = "orchestration worker-show" ]; then
   exit 0
 fi
 [ "${1:-} ${2:-}" = "orchestration send" ] || exit 0
+printf '%s\n' "$*" >> "$FAKE_LOG.try"
 t="$(val --type "$@")"; d="$(val --dispatch-id "$@")"; k="$(val --task-id "$@")"; to="$(val --to "$@")"
 own="${d:-${FAKE_DISPATCH:-}}"
 if [ -z "$to" ] && [ -z "$own" ]; then echo "No recipient or active Dispatch Run could be resolved. No effects were applied." >&2; exit 1; fi
@@ -579,16 +588,29 @@ mkdir -p "$T/strict" "$T/nojq" "$T/nopy"; cp "$T/../strict-orca" "$T/strict/orca
 # 偽物が先に見つからないと本物の Orca に送ってしまう。見つからなければ、ここで止める
 [ "$(PATH="$T/strict:$PATH" command -v orca)" = "$T/strict/orca" ] || { echo "FAIL notify-fake-orca 偽の orca を置けていない"; exit 0; }
 printf '#!/usr/bin/env bash\nexit 1\n' > "$T/nojq/jq"; cp "$T/nojq/jq" "$T/nopy/python3"; chmod +x "$T/nojq/jq" "$T/nopy/python3"
+# 要る道具だけの PATH（only … python3 はあるが jq は見えない／none … どちらも見えない）
+mkdir -p "$T/only" "$T/none"
+for t in bash sh env cat sed awk head git dirname basename tr cut wc rm find touch mktemp grep sleep ls uname python3; do
+  command -v "$t" >/dev/null 2>&1 || continue
+  ln -sf "$(command -v "$t")" "$T/only/$t"; [ "$t" = python3 ] || ln -sf "$(command -v "$t")" "$T/none/$t"
+done
+cp "$T/strict/orca" "$T/only/orca"; cp "$T/strict/orca" "$T/none/orca"
 # sn <前に置く dir か -> <環境変数 か -> <引数...>
 sn() {
   local pre="" ev="NOP=1"; [ "$1" = - ] || pre="$1:"; [ "$2" = - ] || ev="$2"; shift 2
-  : > "$T/log"; : > "$T/log.show"
-  ( cd "$T/R" && env -u HIRAI_COORDINATOR -u HIRAI_DISPATCH_ID -u ORCA_TERMINAL_HANDLE HC_NOTIFY=orca $ev PATH="${pre}$T/strict:$PATH" FAKE_LOG="$T/log" bash "$N" "$@" >"$T/out" 2>"$T/err" )
+  : > "$T/log"; : > "$T/log.show"; : > "$T/log.try"
+  ( cd "${SNDIR:-$T/R}" && env -u HIRAI_COORDINATOR -u HIRAI_DISPATCH_ID -u ORCA_TERMINAL_HANDLE HC_NOTIFY=orca $ev PATH="${pre}$T/strict:$PATH" FAKE_LOG="$T/log" "$BASH" "${SNBIN:-$N}" "$@" >"$T/out" 2>"$T/err" )
+}
+# sp <PATH> <引数...> -> PATH をそのまま使う（道具を見えなくする）
+sp() {
+  local p="$1"; shift
+  : > "$T/log"; : > "$T/log.show"; : > "$T/log.try"
+  ( cd "$T/R" && env -i HOME="$T/hm9" HC_NOTIFY=orca PATH="$p" FAKE_LOG="$T/log" "$BASH" "$N" "$@" >"$T/out" 2>"$T/err" )
 }
 echo r > "$T/R/rep.md"
 got() { grep -qF -- "$1" "$T/log"; }
 sn - - done rep.md d --dispatch-id ctx_1; rc=$?
-{ [ "$rc" -eq 0 ] && got '--type worker_done' && got '--outcome succeeded' && got '--task-id task_ctx_1' && got '--dispatch-id ctx_1'; } || echo "FAIL notify-task-id done に Dispatch の task の id を添えない rc=$rc log=$(cat "$T/log") err=$(cat "$T/err")"
+{ [ "$rc" -eq 0 ] && got '--type worker_done' && got '--outcome succeeded' && got '--task-id task_ctx_1' && got '--dispatch-id ctx_1' && got "--report-path $T/R/rep.md"; } || echo "FAIL notify-task-id done に Dispatch の task の id を添えない rc=$rc log=$(cat "$T/log") err=$(cat "$T/err")"
 sn - - stopped rep.md d --dispatch-id ctx_2; rc=$?
 { [ "$rc" -eq 0 ] && got '--outcome failed' && got '--task-id task_ctx_2'; } || echo "FAIL notify-task-id stopped に Dispatch の task の id を添えない rc=$rc err=$(cat "$T/err")"
 sn - HIRAI_DISPATCH_ID=ctx_3 done rep.md d; rc=$?
@@ -599,20 +621,48 @@ if command -v jq >/dev/null 2>&1; then
   sn "$T/nopy" - stopped rep.md d --dispatch-id ctx_5; rc=$?
   { [ "$rc" -eq 0 ] && got '--task-id task_ctx_5'; } || echo "FAIL notify-task-jq python3 が動かないときに jq で引かない rc=$rc err=$(cat "$T/err")"
 fi
-for d in ctx_gone1 ctx_notask1; do
+sp "$T/only" done rep.md d --dispatch-id ctx_4b; rc=$?
+{ [ "$rc" -eq 0 ] && got '--task-id task_ctx_4b'; } || echo "FAIL notify-task-nojq jq の無い機械で python3 で引かない rc=$rc err=$(cat "$T/err")"
+sp "$T/none" stopped rep.md d --dispatch-id ctx_4c; rc=$?
+{ [ "$rc" -eq 1 ] && [ ! -s "$T/log.try" ] && grep -qF 'jq も python3 も無い' "$T/err"; } || echo "FAIL notify-task-notool jq も python3 も無いことを言って送らずに exit 1 にならない rc=$rc try=$(cat "$T/log.try") err=$(cat "$T/err")"
+SNDIR="$T/pyc"; rm -f "$T/pymark"; sn "$T/nojq" - done "$T/R/rep.md" d --dispatch-id ctx_4d; SNDIR=""
+[ ! -e "$T/pymark" ] || echo "FAIL notify-task-isolated task の id を引く python3 が作業ディレクトリの json.py を読み込んだ"
+for d in ctx_gone1 ctx_notask1 ctx_down1; do
   sn - - done rep.md d --dispatch-id "$d"; rc=$?
-  { [ "$rc" -eq 1 ] && [ ! -s "$T/log" ] && grep -qF -- '--task-id' "$T/err" && grep -qF "$d" "$T/err"; } || echo "FAIL notify-task-missing 引けない Dispatch（${d}）で、足りないものを言って exit 1 にならない rc=$rc log=$(cat "$T/log") err=$(cat "$T/err")"
+  case "$d" in ctx_gone1) why='was not found' ;; ctx_down1) why='Orca runtime is unavailable.' ;; *) why="$d" ;; esac
+  grep -qF "$why" "$T/err" || echo "FAIL notify-task-why 引けない理由（${d}・${why}）が文に無い err=$(cat "$T/err")"
+  grep -qF "task=task_" "$T/err" && echo "FAIL notify-task-why 引けなかったと言いながら task の id を出した（${d}） err=$(cat "$T/err")"
+  [ "$(grep -c . "$T/log.show")" = 1 ] || echo "FAIL notify-task-once Orca に 2 回聞いた（${d}） show=$(cat "$T/log.show")"
+  { [ "$rc" -eq 1 ] && [ ! -s "$T/log.try" ] && [ "$(grep -c . "$T/err")" = 1 ] && grep -qF -- '--task-id' "$T/err" && grep -qF "$d" "$T/err"; } || echo "FAIL notify-task-missing 引けない Dispatch（${d}）で、足りないものを言って exit 1 にならない rc=$rc try=$(cat "$T/log.try") err=$(cat "$T/err")"
 done
+# Orca が黙ったとき、上限の秒で「返らない」と言って送らずに exit 1（上限の値は文字で確かめ、止まり方は 1 秒に縮めた複製で測る）
+grep -q '^TASK_LIMIT_SEC=15$' "$N" || echo "FAIL notify-task-limit-15 TASK_LIMIT_SEC が 15 秒でない"
+mkdir -p "$(dirname "$N")/../bin9"; SNBIN="$(dirname "$N")/../bin9/hirai-notify"; sed 's/^TASK_LIMIT_SEC=.*$/TASK_LIMIT_SEC=1/' "$N" > "$SNBIN"
+t0=$SECONDS; sn - - done rep.md d --dispatch-id ctx_slow1; rc=$?; t0=$((SECONDS - t0)); SNBIN=""
+{ [ "$rc" -eq 1 ] && [ "$t0" -lt 6 ] && [ ! -s "$T/log.try" ] && grep -qF '1 秒で返らない' "$T/err" && [ "$(grep -c . "$T/err")" = 1 ]; } || echo "FAIL notify-task-limit Orca が黙っても上限で止まらない rc=$rc ${t0} 秒 try=$(cat "$T/log.try") err=$(cat "$T/err")"
+sn - - stopped rep.md d --dispatch-id ctx_gone3 --task-id task_ctx_gone3; rc=$?
+{ [ "$rc" -eq 0 ] && got '--task-id task_ctx_gone3' && [ ! -s "$T/log.show" ]; } || echo "FAIL notify-task-arg-stopped stopped が渡した --task-id を使わない rc=$rc err=$(cat "$T/err")"
+sn - HIRAI_DISPATCH_ID=ctx_gone4 done rep.md d --task-id task_ctx_gone4; rc=$?
+{ [ "$rc" -eq 0 ] && got '--task-id task_ctx_gone4' && got '--dispatch-id ctx_gone4'; } || echo "FAIL notify-task-arg-env 環境変数の Dispatch と --task-id の組を使えない rc=$rc err=$(cat "$T/err")"
 sn - - done rep.md d --dispatch-id ctx_gone2 --task-id task_ctx_gone2; rc=$?
 { [ "$rc" -eq 0 ] && got '--task-id task_ctx_gone2' && [ ! -s "$T/log.show" ]; } || echo "FAIL notify-task-arg 渡した --task-id を使わないか、Orca に聞いた rc=$rc show=$(cat "$T/log.show") err=$(cat "$T/err")"
 sn - - question rep.md q --dispatch-id ctx_6; rc=$?
 { [ "$rc" -eq 0 ] && got '--type question' && [ ! -s "$T/log.show" ]; } || echo "FAIL notify-question-no-lookup question で task を聞いたか送れない rc=$rc show=$(cat "$T/log.show")"
-for a in "question rep.md q --task-id task_x --dispatch-id ctx_7" "done rep.md d --to run:R --task-id task_x" "done rep.md d --dispatch-id ctx_7 --task-id"; do
-  sn - - $a; rc=$?
-  { [ "$rc" -eq 2 ] && [ ! -s "$T/log" ]; } || echo "FAIL notify-task-usage 使えない --task-id（${a}）を exit 2 にしない rc=$rc log=$(cat "$T/log")"
+for a in "question rep.md q --task-id task_x --dispatch-id ctx_7" "waiting w --task-id task_x --dispatch-id ctx_7" "done rep.md d --to run:R --task-id task_x" "done rep.md d --task-id task_x" "done rep.md d --dispatch-id ctx_7 --task-id"; do
+  sn - ORCA_TERMINAL_HANDLE=h\ FAKE_DISPATCH=ctx_7 $a; rc=$?
+  { [ "$rc" -eq 2 ] && [ ! -s "$T/log.try" ]; } || echo "FAIL notify-task-usage 使えない --task-id（${a}）を exit 2 にしない rc=$rc log=$(cat "$T/log")"
 done
 sn - - waiting w --to run:R; rc=$?
 { [ "$rc" -eq 0 ] && got '--type question' && got '--to run:R'; } || echo "FAIL notify-waiting-question Dispatch の無い waiting を Orca が受ける種類で送らない rc=$rc log=$(cat "$T/log") err=$(cat "$T/err")"
+echo run:F > "$T/R/.claude/state/coordinator"; sn - - waiting w; rc=$?; rm -f "$T/R/.claude/state/coordinator"
+{ [ "$rc" -eq 0 ] && got '--type question' && got '--to run:F'; } || echo "FAIL notify-waiting-file 控え（.claude/state/coordinator）へ送る waiting を question で送らない rc=$rc log=$(cat "$T/log") err=$(cat "$T/err")"
+sn - HIRAI_DISPATCH_ID=ctx_8 waiting w; rc=$?
+{ [ "$rc" -eq 0 ] && got '--type escalation' && got '--dispatch-id ctx_8'; } || echo "FAIL notify-waiting-env 環境変数の Dispatch の waiting が escalation でない rc=$rc log=$(cat "$T/log") err=$(cat "$T/err")"
+sn - - waiting w --dispatch-id ctx_gone5; rc=$?
+{ [ "$rc" -eq 0 ] && [ ! -s "$T/log.show" ]; } || echo "FAIL notify-waiting-no-lookup waiting で task の id を聞いた rc=$rc show=$(cat "$T/log.show") err=$(cat "$T/err")"
+sn - - stopped rep.md d --to run:R; rc=$?
+{ [ "$rc" -eq 0 ] && got '--type status' && got '--to run:R'; } || echo "FAIL notify-stopped-to 宛先へ送る stopped が status でない rc=$rc log=$(cat "$T/log")"
+env -u ORCA_WORKTREE_ID HC_NOTIFY=orca CLAUDE_PROJECT_DIR="$T/R" bash "$(dirname "$N")/../scripts/orca-context.sh" 2>/dev/null | grep -qF 'Task の id も --task-id で渡す' || echo "FAIL notify-ctx-task-id 開始の 1 行に --task-id が無い"
 sn - "ORCA_TERMINAL_HANDLE=h FAKE_DISPATCH=ctx_9" waiting w; rc=$?
 { [ "$rc" -eq 0 ] && got '--type escalation' && ! got '--to'; } || echo "FAIL notify-waiting-escalation 宛先を省く waiting（差出人の端末に Dispatch がある）を escalation で送らない rc=$rc log=$(cat "$T/log") err=$(cat "$T/err")"
 sn - ORCA_TERMINAL_HANDLE=h waiting w; rc=$?
@@ -912,12 +962,27 @@ notify-python-isolated|bin/hirai-notify|s/python3 -I -c/python3 -c/
 notify-home-coordinator|bin/hirai-notify|s/\[ ! -f "\$lib" \] || t=/false \&\& t=/
 notify-task-id|bin/hirai-notify|s/--task-id "\$task" //
 notify-task-id|bin/hirai-notify|s/worker-show --dispatch/worker-show --nope/
-notify-task-python|bin/hirai-notify|s/^  \[ -n "\$v" \] || v="\$(printf/  : || v="$(printf/
+notify-task-python|bin/hirai-notify|s/^  \[ -n "\$pair" \] || pair=/  : || pair=/
 notify-task-missing|bin/hirai-notify|s/^  task="\$(task_of_dispatch "\$dispatch")" || exit 1$/  task="$(task_of_dispatch "$dispatch" 2>\/dev\/null)" || task=task_unknown/
+notify-task-missing|bin/hirai-notify|s/^  task="\$(task_of_dispatch "\$dispatch")" || exit 1$/  task="$(task_of_dispatch "$dispatch")" || true/
+notify-task-id|bin/hirai-notify|s/worker-show --dispatch "\$1" --json/worker-show --dispatch "$1"/
+notify-task-why|bin/hirai-notify|s/\.error\.message/.error.nope/;s/get("message")/get("nope")/
+notify-task-limit-15|bin/hirai-notify|s/^TASK_LIMIT_SEC=15$/TASK_LIMIT_SEC=600/
+notify-task-limit|bin/hirai-notify|s/\[ "\$SECONDS" -lt "\$end" \]/true/
+notify-task-notool|bin/hirai-notify|s/jq も python3 も無い/答えが読めない/
+notify-task-isolated|bin/hirai-notify|s/python3 -I -c/python3 -c/
+notify-task-arg-stopped|bin/hirai-notify|s/ \&\& \[ -n "\$dispatch" \] \&\& \[ -z "\$task" \]; then/ \&\& [ -n "$dispatch" ] \&\& { [ -z "$task" ] || [ "$kind" = stopped ]; }; then/
+notify-task-arg-env|bin/hirai-notify|s/^if \[ -n "\$arg_task" \] \&\& { \[ -z "\$dispatch" \]/if [ -n "$arg_task" ] \&\& { [ -z "$arg_dispatch" ]/
+notify-waiting-no-lookup|bin/hirai-notify|s/^if { \[ "\$kind" = "done" \] || \[ "\$kind" = "stopped" \]; } \&\& \[ -n/if [ "$kind" != question ] \&\& [ -n/
+notify-waiting-file|bin/hirai-notify|s/^wtype=escalation; \[ -z "\$to" \]/wtype=escalation; [ -z "$to" ] || [ -n "$coordinator_file" ]/
+notify-waiting-env|bin/hirai-notify|s/^wtype=escalation; \[ -z "\$to" \]/wtype=escalation; { [ -z "$to" ] \&\& [ -z "${HIRAI_DISPATCH_ID:-}" ]; }/
+notify-stopped-to|bin/hirai-notify|s/stopped)  args=(--type status/stopped)  args=(--type escalation/
+notify-ctx-task-id|scripts/orca-context.sh|s/ も --task-id で渡す//
 notify-task-arg|bin/hirai-notify|s/ \&\& \[ -n "\$dispatch" \] \&\& \[ -z "\$task" \]; then/ \&\& [ -n "$dispatch" ]; then/
 notify-question-no-lookup|bin/hirai-notify|s/^if { \[ "\$kind" = "done" \] || \[ "\$kind" = "stopped" \]; } \&\& \[ -n/if [ -n/
 notify-task-usage|bin/hirai-notify|s/^if \[ -n "\$arg_task" \] \&\& .*; then$/if false; then/
-notify-task-jq|bin/hirai-notify|s/^  if command -v jq >\/dev\/null 2>\&1; then$/  if false; then/
+notify-task-jq|bin/hirai-notify|s/command -v jq >\/dev\/null 2>\&1 \&\& pair=/false \&\& pair=/
+notify-task-nojq|bin/hirai-notify|s/^  \[ -n "\$pair" \] || pair=/  : || pair=/
 notify-waiting-question|bin/hirai-notify|s/|| wtype=question$/|| wtype=escalation/
 notify-waiting-escalation|bin/hirai-notify|s/^wtype=escalation; /wtype=question; /
 X
@@ -964,6 +1029,8 @@ r6_suite() {
   if [ "${HARNESS_SMOKE_QUICK:-}" = 1 ]; then r6_mutants "$1" | grep -c . >> "$R6_SKIP_FILE"; return 0; fi
   while IFS='|' read -r tag rel ex; do
     [ -n "$tag" ] || continue
+    # jq の道の壊し方は、jq の無い機械では確かめようがない（python3 の道だけが動く）
+    case "$tag" in notify-task-jq) command -v jq >/dev/null 2>&1 || continue ;; esac
     out="$($fn "$rel" "$ex" 2>&1)"
     r6_must_fail "$tag" "$out" || printf 'NOFAIL 壊した複製 (%s) で %s が FAIL しない (確かめが空振り): %s\n' "$rel" "$tag" "$(printf '%s' "$out" | head -1)"
   done < <(r6_mutants "$1")
