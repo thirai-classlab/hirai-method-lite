@@ -2937,7 +2937,7 @@ PYCMD
   # (a) 無ければ配布版と 1 バイト違わず置く (b) 在れば触らない (c) 全プロジェクト共通 (user) と
   # docs/ の無い環境には作らない、を実挙動で確かめる。手順書そのものを走らせるので、
   # 文書と実挙動が離れた時点でここが落ちる。
-  local at_blk ab ub aw abad=""
+  local at_blk ab ub aw abad="" uhit v
   at_blk='/^```bash$/ { b = ""; c = 1; next }
           c && /^```$/ { if (b ~ /rules-reference\/approval-template\.md/) { printf "%s", b; exit } c = 0; next }
           c { b = b $0 "\n" }'
@@ -3002,6 +3002,15 @@ PYCMD
       || abad="$abad /update が承認の型を足さない"
     printf 'USER-EDIT\n' >> "$aw/up/docs/rules-reference/approval-template.md"
     ( cd "$aw/up" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ub" ) >/dev/null 2>&1
+    # 雛形が 3.0.x の 9 節 (v1) のままなら outdated を 1 行出し、書き換えない。今の版・雛形なしでは出さない
+    mkdir -p "$aw/up/.github"
+    for v in v1 v2; do
+      printf '<!-- hirai-lite: pull_request_template %s -->\nx\n' "$v" > "$aw/up/.github/pull_request_template.md"
+      uhit="$( cd "$aw/up" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ub" 2>&1 | grep -cxF 'outdated .github/pull_request_template.md' )"
+      [ "$v:$uhit" = v1:1 ] || [ "$v:$uhit" = v2:0 ] || abad="$abad /update の手順 4 が雛形 $v で outdated を ${uhit} 回出した"
+      [ "$(wc -l < "$aw/up/.github/pull_request_template.md" | tr -d ' ')" = 2 ] || abad="$abad /update の手順 4 が雛形を書き換えた"
+    done
+    rm -f "$aw/up/.github/pull_request_template.md"
     grep -q 'USER-EDIT' "$aw/up/docs/rules-reference/approval-template.md" \
       || abad="$abad /update が既存の承認の型を上書きした"
     # (e) docs/rules-reference が無い環境 (全プロジェクト共通で入れた場合) には新設しない
@@ -3479,6 +3488,12 @@ PYEOF
   rm -rf "$nw"
   [ -z "$nb" ] || pr_bad="$pr_bad hirai-notify・notify-attention・hirai-pr-asset:${nb}"
 
+  # PR の本文の型は、導入先の雛形・検査が先。プラグインの 4 種別は、どれも無いときだけ (commit.md・code.md・git-and-pr.md が同じ文)
+  for f in commands/commit.md rules/code.md docs/rules-reference/git-and-pr.md; do
+    grep -qF '雛形も検査も無いときだけ' "$ROOT/$f" || pr_bad="$pr_bad ${f} に、導入先の雛形・検査を先に使う決まり（雛形も検査も無いときだけ 4 種別）が無い"
+  done
+  # 戻し方: 足すプラグインを入れたリポの土台は、tag が残る間は下がらない (README)
+  grep -qF 'tag が残る間は下がりません' "$ROOT/README.md" || pr_bad="$pr_bad README に、足すプラグインを入れたリポの土台が revert だけでは下がらないことが無い"
   # 移行の手順の合格の条件に、版の数字（hirai-lite v3.0.0 など）を決め打ちしない（版を上げるたびに「先へ進まない」で止まる）
   grep -rnE 'hirai-lite v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/commands" "$ROOT/README.md" "$ROOT/docs" 2>/dev/null | grep -q . \
     && pr_bad="$pr_bad 版の決め打ち: $(grep -rnoE 'hirai-lite v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/commands" "$ROOT/README.md" "$ROOT/docs" 2>/dev/null | head -1)"
