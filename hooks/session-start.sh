@@ -67,7 +67,7 @@ if [ "$tasks_form" = "github-project" ]; then
   if [ -n "$pm_task" ]; then
     # 件数は控えを読むだけ (通信しない)。取り直しは別に切り離して起こす。
     # **取り直しを $(...) の中で呼ばない。** hirai-task line --refresh は背景の子が出力の
-    # パイプを持ったまま走るので、$(...) が子の終了まで戻らず、hook の 5 秒の timeout を食う。
+    # パイプを持ったまま走るので、$(...) が子の終了まで戻らず、hook の timeout を食う。
     # 出力を捨て、stdin も閉じて、この shell の直下で切り離す。
     ghp_line="$(HIRAI_TASK_ROOT="$root" "$pm_task" line 2>/dev/null || true)"
     HIRAI_TASK_ROOT="$root" "$pm_task" line --refresh >/dev/null 2>&1 </dev/null &

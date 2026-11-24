@@ -18,6 +18,7 @@
 #
 # 通信しない。入力を読む道具（jq か python3）が無い・入力が読めないときは通す（fail-open。
 # 止まらないことは scripts/orca-context.sh が会話の開始時に言う）。
+# 制限は 30 秒（hooks.json の timeout）。超えると Claude Code が打ち切り、操作は通る（Claude Code の動き。ここでは変えない）。
 set -uo pipefail
 # 環境の GIT_DIR（linked worktree の git hook や rebase --exec から起きた会話）で、対象のリポを取り違えない
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_PREFIX 2>/dev/null
