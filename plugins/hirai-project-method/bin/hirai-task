@@ -1010,22 +1010,23 @@ def rest_item_id(project_number: int, number: int, *, attempts: int = _ITEM_LOOK
     return items[0]['id']
 
 
-def write_project_item_fields_rest(project_number: int, item_id, fields: list) -> None:
-    rest('PATCH', f'{project_items_rest_path(project_number)}/{item_id}', {'fields': fields})
+def write_project_item_fields_rest(project_number: int, item_id, fields: list):
+    return rest('PATCH', f'{project_items_rest_path(project_number)}/{item_id}', {'fields': fields})
 
 
 def write_single_select_rest(
     project_number: int, number: int, field_name: str, option_name: str, *, item_id=None,
-) -> None:
+):
     """既存の行の single select を REST で書く。approve・set・start・
     review・done・reopen・add（入れ直したあとの値）・align・today の完了書き込みが使う。new は変えていない
     （モジュールの docstring を参照）。item_id を渡せば ?q= を引かない（add が POST の
-    応答の id で書く・start/reopen が副作用の前に引いた id を使う）。"""
+    応答の id で書く・start/reopen が副作用の前に引いた id を使う）。戻り値は PATCH の応答
+    （書けたかを確かめるのは today の完了書き込みだけ）。"""
     if item_id is None:
         item_id = rest_item_id(project_number, number)
     fid = rest_field_id(project_number, field_name)
     oid = rest_option_id(project_number, field_name, option_name)
-    write_project_item_fields_rest(project_number, item_id, [{'id': fid, 'value': oid}])
+    return write_project_item_fields_rest(project_number, item_id, [{'id': fid, 'value': oid}])
 
 
 def has_mark(title: str, mark: str | None = None) -> bool:
@@ -4373,8 +4374,9 @@ CLOSED_DONE_WRITE_LIMIT = 5  # 1 回の today で 完了 を書けた件数の�
 # 始めた 1 件は最後まで行うので、上乗せは最大でこの秒＋ 1 件分（REST 2 回・GraphQL 1 回）。
 CLOSED_DONE_SECONDS = 45
 _REASON_LIMIT = 200
-_RATE_LIMIT_RE = re.compile(r'rate limit|\(HTTP 429\)', re.IGNORECASE)
-_DENIED_RE = re.compile(r'\(HTTP 403\)')
+# gh は、応答が JSON でない失敗を括弧なしの `HTTP 429` で出す。detail に path・issue 番号は入らないので、番号と読み違えない
+_RATE_LIMIT_RE = re.compile(r'rate limit|abuse detection|\bHTTP 429\b', re.IGNORECASE)
+_DENIED_RE = re.compile(r'\bHTTP 403\b')
 STOP_RATE, STOP_DENIED = 'rate', 'denied'
 # 打ち切った理由 → (文の頭, 次にすること)
 _STOP_LINES = {
@@ -4431,14 +4433,17 @@ def _write_one_closed_done(project_number: int, number: int) -> tuple[str, str, 
     blocker = closed_done_blocker(title, now['fields'].get(KIND_FIELD, ''), status)
     if blocker:
         return f'今は {blocker} のため', status, title
-    write_single_select_rest(project_number, number, 'Status', DONE_STATUS, item_id=item_id)
+    answer = write_single_select_rest(project_number, number, 'Status', DONE_STATUS, item_id=item_id)
+    if not (isinstance(answer, dict) and answer.get('id')):
+        die('PATCH の応答に id が無い（書けたかは次の today の板で見る）')
     return '', status, title
 
 
-def _apply_closed_done(project_number: int, rows: list[dict]) -> tuple[list[int], list[dict], str]:
-    """rows へ 1 件ずつ 完了 を書き、(書けた番号, 試さなかった行, 打ち切った理由) を返す。1 件ごとに 1 行を出す
-    （時間切れで止められても、何を書いたかが残る）。1 件落ちても理由を残してほかを続けるが、rate limit・権限の 403 なら
-    残りを打ち切る。書けた件数が CLOSED_DONE_WRITE_LIMIT に達したか、経過が CLOSED_DONE_SECONDS を超えるなら止める。"""
+def _apply_closed_done(project_number: int, rows: list[dict], cursor: 'ClosedDoneCursor') -> tuple[list[int], list[dict], str]:
+    """rows へ 1 件ずつ 完了 を書き、(書けた番号, 試さなかった行, 打ち切った理由) を返す。1 件ごとに 1 行を出し、
+    試す位置を控える（時間切れで止められても、何を書いたかが残り、次は続きから試す）。1 件落ちても理由を残して
+    ほかを続けるが、rate limit・権限の 403 なら残りを打ち切る。想定外の形の応答も 1 件の失敗として扱う（today の
+    ほかの段へ進む）。書けた件数が CLOSED_DONE_WRITE_LIMIT に達したか、経過が CLOSED_DONE_SECONDS を超えるなら止める。"""
     fixed: list[int] = []
     stop, tried, waiting = '', 0, 0.0
     started = clock_fn()
@@ -4450,11 +4455,15 @@ def _apply_closed_done(project_number: int, rows: list[dict]) -> tuple[list[int]
             waiting = 0.0
         tried += 1
         number = row['number']
+        cursor.save(number)
         try:
             reason, before, title = _write_one_closed_done(project_number, number)
         except GhError as exc:
             _say(f'  {DONE_STATUS}にできなかった: #{number}（{_short_reason(exc)}）')
             stop = gh_stop_reason(exc)
+            continue
+        except Exception as exc:  # noqa: BLE001 - 1 件の応答の形の違いで today 全体を止めない
+            _say(f'  {DONE_STATUS}にできなかった: #{number}（想定外の応答: {type(exc).__name__}）')
             continue
         if reason:
             _say(f'  飛ばした: #{number}（{reason}）')
@@ -4482,16 +4491,26 @@ def rotate_closed_done(rows: list[dict], last: int) -> list[dict]:
     return [r for r in ordered if r['number'] > last] + [r for r in ordered if r['number'] <= last]
 
 
-def _load_closed_done_cursor(namespace: str) -> int:
-    last = _load_namespaced(CLOSED_DONE_CURSOR_CACHE, namespace).get('last')
-    return last if isinstance(last, int) else 0
+class ClosedDoneCursor:
+    """前の today が最後に試した番号の控え（全 worktree で共有。repo と Project ごと）。"""
 
+    def __init__(self, project_number: int):
+        self.namespace = f'{REPO}#{project_number}'
+        self.writable = True
 
-def _save_closed_done_cursor(namespace: str, last: int) -> None:
-    try:
-        _save_namespaced(CLOSED_DONE_CURSOR_CACHE, namespace, {'last': last})
-    except OSError as exc:
-        print(f'警告: 完了を試した位置を控えられなかった（{exc}）。次の today は同じ所から試す', file=sys.stderr)
+    def load(self) -> int:
+        last = _load_namespaced(CLOSED_DONE_CURSOR_CACHE, self.namespace).get('last')
+        return last if isinstance(last, int) else 0
+
+    def save(self, last: int) -> None:
+        """書けなければ警告を 1 回だけ出し、その回はもう書かない（完了の書き込みは続ける）。"""
+        if not self.writable:
+            return
+        try:
+            _save_namespaced(CLOSED_DONE_CURSOR_CACHE, self.namespace, {'last': last})
+        except OSError as exc:
+            self.writable = False
+            print(f'警告: 完了を試した位置を控えられなかった（{exc}）。次の today は同じ所から試す', file=sys.stderr)
 
 
 def with_done_status(items: list[dict], numbers: list[int]) -> list[dict]:
@@ -4514,13 +4533,10 @@ def sync_closed_done(project_number: int, items: list[dict], *, write_allowed: b
     rows = closed_done_targets(items)
     if not rows or not write_allowed:
         return ClosedDoneResult([], False)
-    namespace = f'{REPO}#{project_number}'
-    rows = rotate_closed_done(rows, _load_closed_done_cursor(namespace))
+    cursor = ClosedDoneCursor(project_number)
+    rows = rotate_closed_done(rows, cursor.load())
     _say(f'閉じたのに完了でない task を{DONE_STATUS}にする（対象 {len(rows)} 件・1 回 {CLOSED_DONE_WRITE_LIMIT} 件まで）')
-    fixed, untried, stop = _apply_closed_done(project_number, rows)
-    tried = rows[:len(rows) - len(untried)]
-    if tried:
-        _save_closed_done_cursor(namespace, tried[-1]['number'])
+    fixed, untried, stop = _apply_closed_done(project_number, rows, cursor)
     if stop and untried:
         why, advice = _STOP_LINES[stop]
         _say(f'  {why}残り {len(untried)} 件は打ち切った。{advice}')

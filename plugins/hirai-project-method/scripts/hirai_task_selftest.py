@@ -470,7 +470,7 @@ def _fake_rest_project_call(
             return None  # REST の id でない（GraphQL の id を渡した）→ 失敗させる
         if record is not None:
             record.extend(converted)
-        return {}
+        return {'id': int(item_id)}
     return None
 
 
@@ -8017,8 +8017,9 @@ def main() -> int:
 
         def _today_closed_fix_rereads_status_and_kind() -> None:
             # 書く直前に読み直した種別・Status・題が書く相手でなければ飛ばす（板を読んだあとに人が動かした）。
-            items = [_closed_row(420 + k, gh_task.IN_PROGRESS_STATUS) for k in range(5)]
-            after = [dict(status=gh_task.JUDGMENT_STATUS), dict(kind='feature'), dict(title='[操作] x'), dict(status=gh_task.REVIEW_STATUS), dict(status=gh_task.DONE_STATUS)]
+            items = [_closed_row(420 + k, gh_task.IN_PROGRESS_STATUS) for k in range(7)]
+            after = [dict(status=gh_task.JUDGMENT_STATUS), dict(kind='feature'), dict(title='[操作] x'), dict(status=gh_task.REVIEW_STATUS), dict(status=gh_task.DONE_STATUS),
+                     dict(kind='wave'), dict(kind='設計メモ')]
 
             def change(method, path, _input):
                 if method == 'GET' and 'q=%23420' in path:
@@ -8029,7 +8030,7 @@ def main() -> int:
             probe: dict = {}
             text, _err, patched, _log = _today_with(items, override=change, probe=probe)
             assert patched == [423], f'動いた行に書いた: {patched}'
-            for n, why in ((420, '判断待ち'), (421, 'feature'), (422, '[操作]'), (424, '完了')):
+            for n, why in ((420, '判断待ち'), (421, 'feature'), (422, '[操作]'), (424, '完了'), (425, 'wave'), (426, '設計メモ')):
                 line = next((ln for ln in text.splitlines() if ln.startswith(f'  飛ばした: #{n}（')), '')
                 assert why in line, f'#{n}: {line!r}'
             assert '  完了にした: #423（レビュー中 → 完了）' in text, text
@@ -8246,7 +8247,7 @@ def main() -> int:
         def _today_closed_fix_time_limit_and_rotation() -> None:
             # 先頭に書けない行が並んでも、次の today は続きから試すので、後ろの書ける行に必ず届く。
             bad = tuple(range(240, 270))
-            items = [_closed_row(n, gh_task.IN_PROGRESS_STATUS) for n in bad + (300, 301)]
+            items = [_closed_row(n, gh_task.IN_PROGRESS_STATUS) for n in reversed(bad + (300, 301))]  # 板の並びは番号順でない
             probe: dict = {}
             text, _err, patched, _log = _today_with(items, fail_numbers=bad, step=3.0, probe=probe)
             assert patched == [] and '残り 17 件は次の today' in text and probe['clock'] == 45.0, (patched, text, probe['clock'])
@@ -8254,6 +8255,37 @@ def main() -> int:
             assert patched == [] and '残り 17 件は次の today' in text, (patched, text)
             text, _err, patched, _log = _today_with(items, fail_numbers=bad, step=3.0, keep_cursor=True)
             assert patched == [300, 301], f'3 回目でも後ろの行に届かない: {patched}'
+            # 控えの中身（repo と Project ごと）と置き場所（全 worktree で共有）。値が数でなければ先頭から。
+            with open(gh_task.CLOSED_DONE_CURSOR_CACHE, encoding='utf-8') as f:
+                kept = json.load(f)
+            assert list(kept) == [f'{gh_task.REPO}#7'] and list(kept[f'{gh_task.REPO}#7']) == ['last'], f'控えの中身が違う: {kept}'
+            assert kept[f'{gh_task.REPO}#7']['last'] in bad, f'最後に試した番号でない: {kept}'
+            assert os.path.dirname(orig_closed_done_cursor_cache) == os.path.dirname(orig_comments_since_cache), '控えが共有の置き場に無い'
+            with open(gh_task.CLOSED_DONE_CURSOR_CACHE, 'w', encoding='utf-8') as f:
+                json.dump({f'{gh_task.REPO}#7': {'last': '9999'}}, f)
+            _text, _err, patched, _log = _today_with([_closed_row(330, gh_task.IN_PROGRESS_STATUS)], keep_cursor=True)
+            assert patched == [330], '文字列の控えで止まった'
+            # rate limit で止まった回も、試した所まで進む（同じ 1 件で毎回止まらない）。
+            items = [_closed_row(340 + k, gh_task.IN_PROGRESS_STATUS) for k in range(3)]
+            _text, _err, patched, _log = _today_with(items, override=_ov(patch={340: RATE_429}))
+            _text, _err, patched, _log = _today_with(items, keep_cursor=True)
+            assert patched == [341, 342, 340], f'rate limit の次の回が続きから始まらない: {patched}'
+            # 途中で切られても（Ctrl-C・時間切れ）、試した所まで控えが残る。
+            items = [_closed_row(350 + k, gh_task.IN_PROGRESS_STATUS) for k in range(4)]
+
+            def cut():
+                raise KeyboardInterrupt
+
+            try:
+                _today_with(items, fail_numbers=(350, 351), override=_ov(search={352: cut}))
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError('切られたはずの today が終わった')
+            seen: list = []
+            _today_with(items, fail_numbers=(350, 351, 352, 353), override=_ov(seen=seen), keep_cursor=True)
+            order = [int(re.search(r'%23(\d+)', p).group(1)) for m, p in seen if m == 'GET' and 'q=%23' in p]
+            assert order[0] in (352, 353), f'切られた次の回が先頭から始まった: {order}'
             # 書いたあとの待ち（8.5 秒）を足すと 45 秒を超えるなら、待たずに止める。
             items = [_closed_row(310 + k, gh_task.IN_PROGRESS_STATUS) for k in range(5)]
             probe = {}
@@ -8273,6 +8305,12 @@ def main() -> int:
             finally:
                 gh_task._save_shared_json = orig
             assert patched == [320] and err.count('試した位置') == 1, (patched, err)
+            gh_task._save_shared_json = broken
+            try:
+                _text, err, patched, _log = _today_with([_closed_row(321 + k, gh_task.IN_PROGRESS_STATUS) for k in range(3)])
+            finally:
+                gh_task._save_shared_json = orig
+            assert patched == [321, 322, 323] and err.count('試した位置') == 1, f'控えの警告を 1 件ごとに出した: {err}'
 
         t('today: 45 秒で止め、次の today は試した所の続きから回す（書けない行が先頭に並んでも後ろに届く）。控えが書けなくても続ける',
           _today_closed_fix_time_limit_and_rotation)
@@ -8291,7 +8329,9 @@ def main() -> int:
             assert '完了にできなかった: #120' in text and 'rate limit のため残り 2 件は打ち切った' in text, text
             assert '完了にした' not in text, text
             # 読み直しの rate limit でも同じ（GraphQL の errors・HTTP の数字なしの文でも）。
-            for answer in (RATE_403, (1, '', 'gh: API rate limit exceeded for user ID 1.'),
+            for answer in (RATE_403, (1, '', 'gh: API rate limit exceeded for user ID 1.'), (1, '', 'gh: HTTP 429'),
+                           (1, '', 'HTTP 429: Too Many Requests (https://api.github.com/graphql)'),
+                           (1, '', 'gh: You have triggered an abuse detection mechanism. Please wait a few minutes. (HTTP 403)'),
                            (0, json.dumps({'errors': [{'type': 'RATE_LIMITED', 'message': 'API rate limit exceeded for user ID 1.'}]}), '')):
                 items = [_closed_row(125 + k, gh_task.IN_PROGRESS_STATUS) for k in range(3)]
                 text, _err, patched, _log = _today_with(items, override=_ov(issue={125: answer}))
@@ -8315,6 +8355,9 @@ def main() -> int:
             denied = (1, '', 'gh: Resource not accessible by integration (HTTP 403)')
             text, _err, patched, _log = _today_with(items, override=_ov(patch={440: denied}))
             assert '403（権限）のため残り 2 件は打ち切った' in text and 'rate limit' not in text and '時間をおいて' not in text, text
+            items = [_closed_row(445 + k, gh_task.IN_PROGRESS_STATUS) for k in range(3)]
+            text, _err, patched, _log = _today_with(items, override=_ov(patch={445: (1, '', 'gh: HTTP 403')}))
+            assert '403（権限）のため残り 2 件は打ち切った' in text, text
 
         t('today: issue 番号 403・429 の失敗を rate limit と読まず、権限の 403 は文を分ける',
           _today_closed_fix_issue_number_is_not_a_status_code)
@@ -8371,6 +8414,64 @@ def main() -> int:
 
         t('today: 読み直しが 404・state なし・null・open・Project に居ない・配列でも today は止まらず、安全側（書かない）に倒す',
           _today_closed_fix_reread_answers)
+
+        def _today_closed_fix_survives_unexpected_shapes() -> None:
+            # 1 件の応答が想定外の形（GraphQL の nodes の null・検索の要素・途中で切れた UTF-8）でも、その 1 件だけを
+            # 「想定外の応答」と出して、ほかの行・align・一覧まで進む。次の today も同じ行で止まらない。
+            good = _write_item_body(project_number=7, title='t', status=gh_task.IN_PROGRESS_STATUS, kind='task', state='CLOSED')
+
+            def with_null(path):
+                body = json.loads(json.dumps(good))
+                node = body['data']['repository']['issue']
+                for key in path[:-1]:
+                    node = node[key]
+                node[path[-1]] = [None] + list(node[path[-1]] or [])
+                return 0, json.dumps(body), ''
+
+            def broken_utf8():
+                raise UnicodeDecodeError('utf-8', b'\xe3', 0, 1, 'unexpected end of data')
+
+            def board():
+                return [_closed_row(500 + k, gh_task.IN_PROGRESS_STATUS) for k in range(3)] + [
+                    {'number': 511, 'type': 'Issue', 'kind': gh_task.FEATURE_KIND, 'status': gh_task.READY_STATUS,
+                     'state': 'OPEN', 'title': 'F', 'parent_number': None},
+                    {'number': 512, 'type': 'Issue', 'kind': 'task', 'status': gh_task.PENDING_STATUS,
+                     'state': 'OPEN', 'title': 'child', 'parent_number': 511},
+                ]
+
+            shapes = [
+                dict(issue={500: with_null(('projectItems', 'nodes'))}),
+                dict(issue={500: with_null(('blockedBy', 'nodes'))}),
+                dict(issue={500: with_null(('projectItems', 'nodes', 0, 'fieldValues', 'nodes'))}),
+                dict(issue={500: broken_utf8}),
+                dict(search={500: (0, '[null]', '')}),
+                dict(search={500: (0, '["x"]', '')}),
+                dict(search={500: (0, json.dumps([{'content': {'number': 500}}]), '')}),
+            ]
+            for shape in shapes:
+                text, _err, patched, log = _today_with(board(), override=_ov(**shape))
+                assert patched == [501, 502, 512], f'{shape}: ほかの行（501・502 の完了と 512 の align）に届かない: {patched}'
+                line = next((ln for ln in text.splitlines() if '完了にできなかった: #500（' in ln), '')
+                assert '想定外の応答: ' in line and 'Error' in line, f'{shape}: {line!r}'
+                assert ('item-update', 'F_Status', 'O_Status_着手可') in log, f'{shape}: align まで進まない'
+                assert '打ち切った' not in text, text
+
+        t('today: 1 件の応答が想定外の形でも today は止まらず、その 1 件だけ「想定外の応答」と出して、ほかの行と align まで進む',
+          _today_closed_fix_survives_unexpected_shapes)
+
+        def _today_closed_fix_needs_the_patch_answer() -> None:
+            # PATCH が exit 0 でも、応答に item の id が無ければ書けたと数えない（journal にも残さない）。
+            for answer in ('', '{}', json.dumps({'message': 'Validation Failed'}), '[]', json.dumps({'id': None})):
+                probe: dict = {}
+                text, _err, _patched, _log = _today_with(
+                    [_closed_row(520, gh_task.IN_PROGRESS_STATUS), _closed_row(521, gh_task.IN_PROGRESS_STATUS)],
+                    override=_ov(patch={520: (0, answer, '')}), probe=probe)
+                assert '完了にした: #520' not in text and '完了にできなかった: #520（PATCH の応答に id が無い' in text, (answer, text)
+                assert '完了にした: #521' in text and '閉じたのに完了でない: #520' in text, (answer, text)
+                assert [r['number'] for r in probe['journal'] if r['op'] == 'close-sync'] == [521], (answer, probe['journal'])
+
+        t('today: PATCH の応答に id が無ければ、書けたと数えず journal にも残さない（stuck に残る）',
+          _today_closed_fix_needs_the_patch_answer)
 
         def _today_closed_fix_rereads_after_lookup() -> None:
             # 読み直しは item id の検索のあと、書く直前。検索の間に reopen された行へ 完了 を上書きしない。
