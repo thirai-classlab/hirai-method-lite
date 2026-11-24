@@ -1,22 +1,31 @@
 #!/usr/bin/env bash
 # hirai-notify: Orca のコーディネーターへ、担当の会話の「問い」「完了」「停止」を知らせる。
 #
-#   hirai-notify question|done|stopped <file> <要約> [--dispatch-id <id>] [--to <run:id>]
+#   hirai-notify question <file> <要約> [--dispatch-id <id>] [--to <run:id>]
+#   hirai-notify done|stopped <file> <要約> [--dispatch-id <id> [--task-id <id>]] [--to <run:id>]
 #   hirai-notify waiting <要約> [--subject <件名>] [--dispatch-id <id>] [--to <run:id>]
 #
 #   question : 決めてもらうことができた。<file> は単独で読める問い（決めること・案・帰結・推し）。
 #   done     : 終わった。<file> は報告。
 #   stopped  : 続けられないエラーで止まった。<file> は報告。
 #   waiting  : 権限の確認の画面などで止まっている（ファイル無し。hooks/notify-attention.sh が送る）。
-#              --type escalation・件名は --subject（既定「権限の確認で止まっています」）・本文は <導入先の root>｜<要約>。
+#              件名は --subject（既定「権限の確認で止まっています」）・本文は <導入先の root>｜<要約>。
+#              種類は、宛先（--to・環境変数・控え）へ送るとき question、Dispatch の id を渡すときと宛先を省くとき escalation。
+#              Orca は、id も動いている Dispatch も無い差出人の escalation を断って status に変える。question は断らず、コーディネーターの待ち受け
+#              `check --wait --types worker_done,escalation,question` で拾える。宛先を省くときは、Orca が差出人の端末の Dispatch から Run を引き、
+#              escalation に Dispatch の id を足す。Dispatch が無く、その端末が Run を持つとき（コーディネーター自身）は、自分の Run に
+#              「Rejected escalation」で届く（だからコーディネーターは HC_NOTIFY=off で開く）。どちらも無ければ何も送らず exit 1。
 #
 # 送り方:
 #   Orca に立ち上げられた担当（--dispatch-id か環境変数 HIRAI_DISPATCH_ID で Dispatch の id を渡されたとき。
 #   id は Orca が担当の最初に差し込む前置きの文にある。Orca は id を環境変数では渡さない
 #   — `orca orchestration send --help` の「injected preambles include the correct --from value」）:
 #       question → orchestration send --type question
-#       done     → --type worker_done --outcome succeeded --report-path <file>
-#       stopped  → --type worker_done --outcome failed    --report-path <file>
+#       done     → --type worker_done --outcome succeeded --task-id <task の id> --report-path <file>
+#       stopped  → --type worker_done --outcome failed    --task-id <task の id> --report-path <file>
+#       Orca は task の id の無い worker_done を断る。task の id は --task-id（前置きの文の Task の id）、
+#       無ければ Dispatch の id から Orca に 1 回だけ聞く（orca orchestration worker-show --dispatch <id> --json の .result.dispatch.taskId。15 秒まで）。
+#       どちらでも引けなければ、足りないものを stderr に出して exit 1（送らない）。
 #     --to は省く（「From an active Dispatch, an omitted recipient defaults to its owning Run mailbox」）。
 #   立ち上げられていない会話（宛先を --to か環境変数 HIRAI_COORDINATOR で渡されたとき）:
 #       question → --type question --to <宛先>
@@ -34,7 +43,8 @@
 set -uo pipefail
 
 usage() {
-  echo "usage: hirai-notify question|done|stopped <file> <要約> [--dispatch-id <id>] [--to <run:id>]" >&2
+  echo "usage: hirai-notify question <file> <要約> [--dispatch-id <id>] [--to <run:id>]" >&2
+  echo "       hirai-notify done|stopped <file> <要約> [--dispatch-id <id> [--task-id <id>]] [--to <run:id>]" >&2
   echo "       hirai-notify waiting <要約> [--subject <件名>] [--dispatch-id <id>] [--to <run:id>]" >&2
 }
 
@@ -56,15 +66,16 @@ case "$kind" in
 esac
 arg_to=""
 arg_dispatch=""
+arg_task=""
 arg_subject=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --subject)
       [ "$kind" = "waiting" ] && [ $# -ge 2 ] && [ -n "$2" ] || { echo "hirai-notify: --subject は waiting だけで、値が要る" >&2; usage; exit 2; }
       arg_subject="$2"; shift 2 ;;
-    --to|--dispatch-id)
+    --to|--dispatch-id|--task-id)
       [ $# -ge 2 ] && [ -n "$2" ] || { echo "hirai-notify: $1 に値が無い" >&2; usage; exit 2; }
-      if [ "$1" = "--to" ]; then arg_to="$2"; else arg_dispatch="$2"; fi
+      case "$1" in --to) arg_to="$2" ;; --task-id) arg_task="$2" ;; *) arg_dispatch="$2" ;; esac
       shift 2 ;;
     *) usage; exit 2 ;;
   esac
@@ -79,6 +90,10 @@ elif [ -n "${HIRAI_DISPATCH_ID:-}" ]; then
   dispatch="$HIRAI_DISPATCH_ID"
 else
   to="${HIRAI_COORDINATOR:-}"
+fi
+# --task-id は worker_done（Dispatch の在る done・stopped）だけが使う。使わない打ち方で黙って捨てない
+if [ -n "$arg_task" ] && { [ -z "$dispatch" ] || { [ "$kind" != "done" ] && [ "$kind" != "stopped" ]; }; }; then
+  echo "hirai-notify: --task-id は done・stopped を --dispatch-id（か HIRAI_DISPATCH_ID）と合わせて打つときだけ" >&2; usage; exit 2
 fi
 
 # notify の値: env HC_NOTIFY > プロジェクトの mode.yml > ホームの mode.yml > off
@@ -184,18 +199,71 @@ worktree_rest() {
   printf '%s' "｜worktree の残り: 未コミット ${dirty} 件・未 push ${ahead} 件"
 }
 
+# 担当が手で打つ done・stopped だけが通る。Orca の CLI の待ちは 60 秒なので、Bash ツールの既定 120 秒より先に理由を出す
+TASK_LIMIT_SEC=15
+
+# task_of_dispatch <Dispatch の id> -> worker_done に要る task の id（Orca に 1 回だけ聞く）。引けなければ、足りないものを stderr に 1 行出して rc 1
+task_of_dispatch() {
+  local f pid end out="" pair="" v="" why=""
+  f="$(mktemp)" || { task_missing "$1" "一時ファイルを作れない"; return 1; }
+  orca orchestration worker-show --dispatch "$1" --json >"$f" 2>/dev/null </dev/null &
+  pid=$!
+  end=$((SECONDS + TASK_LIMIT_SEC))
+  while kill -0 "$pid" 2>/dev/null; do
+    if ! [ "$SECONDS" -lt "$end" ]; then
+      disown "$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null; rm -f "$f"
+      task_missing "$1" "Orca の答えが ${TASK_LIMIT_SEC} 秒で返らない"; return 1
+    fi
+    sleep 0.1
+  done
+  out="$(cat "$f")"; rm -f "$f"
+  # 1 行目に task の id（無ければ空）、2 行目に Orca の断り文（失敗も JSON で標準出力に出る）
+  command -v jq >/dev/null 2>&1 && pair="$(printf '%s' "$out" | jq -r '((.result.dispatch? // {}) | (.taskId // .task_id // "")), ((.error.message? // "") | gsub("\\s+"; " "))' 2>/dev/null)"
+  [ -n "$pair" ] || pair="$(printf '%s' "$out" | python3 -I -c '
+import json, sys
+d = json.load(sys.stdin)
+t = (d.get("result") or {}).get("dispatch") or {}
+print(t.get("taskId") or t.get("task_id") or "")
+print(" ".join(str((d.get("error") or {}).get("message") or "").split()))
+' 2>/dev/null)"
+  v="$(printf '%s\n' "$pair" | sed -n 1p)"
+  if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
+  why="$(printf '%s\n' "$pair" | sed -n 2p)"
+  if [ -z "$why" ]; then
+    if ! command -v jq >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then why="jq も python3 も無いので Orca の答えを読めない"
+    elif [ -z "$out" ]; then why="Orca の答えが空"
+    else why="Orca の答えに task の id が無い"; fi
+  fi
+  task_missing "$1" "$why"
+  return 1
+}
+
+# task_missing <Dispatch の id> <理由> -> 足りないものを stderr に 1 行
+task_missing() {
+  echo "hirai-notify: worker_done に要る task の id が足りない（送っていない）。Dispatch ${1} から引けなかった: ${2:0:200} ／ 前置きの文の Task の id を --task-id で渡して打ち直す" >&2
+}
+
+# worker_done の task の id。渡されていれば Orca に聞かない
+task="$arg_task"
+if { [ "$kind" = "done" ] || [ "$kind" = "stopped" ]; } && [ -n "$dispatch" ] && [ -z "$task" ]; then
+  task="$(task_of_dispatch "$dispatch")" || exit 1
+fi
+
+# waiting の種類。宛先へ送るときだけ question（Orca は、Dispatch の無い差出人の escalation を断る）
+wtype=escalation; [ -z "$to" ] || wtype=question
+
 args=()
 if [ -n "$dispatch" ]; then
   case "$kind" in
-    waiting)  args=(--type escalation --subject "$wsubject" --body "$wbody") ;;
+    waiting)  args=(--type "$wtype" --subject "$wsubject" --body "$wbody") ;;
     question) args=(--type question --subject "$summary" --body "${file}｜${summary}") ;;
-    done)     args=(--type worker_done --outcome succeeded --report-path "$file" --subject "${summary}$(worktree_rest)$(worktree_note)") ;;
-    stopped)  args=(--type worker_done --outcome failed --report-path "$file" --subject "$summary") ;;
+    done)     args=(--type worker_done --outcome succeeded --task-id "$task" --report-path "$file" --subject "${summary}$(worktree_rest)$(worktree_note)") ;;
+    stopped)  args=(--type worker_done --outcome failed --task-id "$task" --report-path "$file" --subject "$summary") ;;
   esac
   args+=(--dispatch-id "$dispatch")
 elif [ -n "$to" ] || [ "$omit_to" -eq 1 ]; then
   case "$kind" in
-    waiting)  args=(--type escalation --subject "$wsubject" --body "$wbody") ;;
+    waiting)  args=(--type "$wtype" --subject "$wsubject" --body "$wbody") ;;
     question) args=(--type question --subject "$summary" --body "${file}｜${summary}") ;;
     done)     args=(--type status --subject "完了: ${summary}" --body "${file}｜${summary}$(worktree_rest)$(worktree_note)") ;;
     stopped)  args=(--type status --subject "停止: ${summary}" --body "${file}｜${summary}") ;;

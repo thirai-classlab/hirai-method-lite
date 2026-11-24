@@ -16,6 +16,49 @@ R6_SKIP_FILE="$(mktemp)"   # HARNESS_SMOKE_QUICK=1 で飛ばした壊した複�
 # mkt -> 実体の path (pwd -P) にした使い捨ての dir。macOS の /var → /private/var の違いで、実体を返す script の出力と期待値が食い違わない
 mkt() { local d; d="$(mktemp -d)" && CDPATH= builtin cd -- "$d" >/dev/null 2>&1 && builtin pwd -P; }
 
+# fake_orca <path> -> 実物の Orca (1.4.229) の断り方のうち、hirai-notify が当たる所を写した偽の orca を置く。受けた send だけを $FAKE_LOG に、worker-show の問い合わせは $FAKE_LOG.show に書く。
+#   差出人の端末に動いている Dispatch があるときは FAKE_DISPATCH=<id>（実物は差出人の pane から引く）
+#   宛先 … --to も --dispatch-id も FAKE_DISPATCH も無いと断る ／ worker_done … --task-id・--dispatch-id が無い、Dispatch の task と合わないと断る
+#   escalation … --dispatch-id も FAKE_DISPATCH も無いと断る ／ question・status は（宛先があれば）断らない
+#   worker-show --dispatch <id> --json … task_<id> を返す。--json が無ければ 1 行の文。ctx_gone* は dispatch_not_found で exit 1（実物と同じく、失敗も JSON は標準出力）・
+#   ctx_notask* は task の id の無い答え・ctx_down* は --json の 1 回だけ runtime_unavailable・ctx_slow* は 8 秒黙る
+#   断った send も含めて、試みた send を全部 $FAKE_LOG.try に書く（「送らずに exit 1」を見るため）
+fake_orca() {
+  cat > "$1" <<'FAKEORCA'
+#!/usr/bin/env bash
+val() { local k="$1"; shift; while [ $# -gt 0 ]; do if [ "$1" = "$k" ]; then printf '%s' "${2:-}"; return 0; fi; shift; done; }
+if [ "${1:-} ${2:-}" = "orchestration worker-show" ]; then
+  printf '%s\n' "$*" >> "$FAKE_LOG.show"
+  d="$(val --dispatch "$@")"
+  case "$d" in ctx_slow*) exec sleep 8 ;; esac
+  case " $* " in
+    *" --json "*) ;;
+    *) case "$d" in ctx_gone*) echo "Worker Dispatch $d was not found." >&2; exit 1 ;; esac; echo "$d task=task_$d [running] stage=running"; exit 0 ;;
+  esac
+  case "$d" in
+    ctx_down*) printf '{\n  "ok": false,\n  "error": {\n    "code": "runtime_unavailable",\n    "message": "Orca runtime is unavailable."\n  }\n}\n'; exit 1 ;;
+    ctx_gone*) printf '{\n  "ok": false,\n  "error": {\n    "code": "dispatch_not_found",\n    "message": "Worker Dispatch %s was not found."\n  }\n}\n' "$d"; exit 1 ;;
+    ctx_notask*) printf '{\n  "ok": true,\n  "result": {\n    "dispatch": {\n      "id": "%s"\n    }\n  }\n}\n' "$d"; exit 0 ;;
+  esac
+  printf '{\n  "ok": true,\n  "result": {\n    "dispatch": {\n      "id": "%s",\n      "taskId": "task_%s",\n      "task_id": "task_%s"\n    }\n  }\n}\n' "$d" "$d" "$d"
+  exit 0
+fi
+[ "${1:-} ${2:-}" = "orchestration send" ] || exit 0
+printf '%s\n' "$*" >> "$FAKE_LOG.try"
+t="$(val --type "$@")"; d="$(val --dispatch-id "$@")"; k="$(val --task-id "$@")"; to="$(val --to "$@")"
+own="${d:-${FAKE_DISPATCH:-}}"
+if [ -z "$to" ] && [ -z "$own" ]; then echo "No recipient or active Dispatch Run could be resolved. No effects were applied." >&2; exit 1; fi
+if [ "$t" = worker_done ]; then
+  [ -n "$k" ] || { echo "worker_done requires taskId." >&2; exit 1; }
+  [ -n "$d" ] || { echo "worker_done requires dispatchId." >&2; exit 1; }
+  [ "$k" = "task_$d" ] || { echo "worker_done dispatch $d belongs to task_$d, not $k." >&2; exit 1; }
+fi
+if [ "$t" = escalation ] && [ -z "$own" ]; then echo "No active Dispatch belongs to this message sender." >&2; exit 1; fi
+printf '%s\n' "$*" >> "$FAKE_LOG"
+FAKEORCA
+  chmod +x "$1"
+}
+
 # T0 (常時ロード = frontmatter に paths: を持たない rule) に居てよいファイルの許可リスト。
 # 層を変える (T0 昇格 / T1 降格) ときはここを更新する。
 T0_ALLOWLIST="_meta.md core.md"
@@ -414,7 +457,7 @@ CL="$T/P/.tmp/clone"; git -C "$CL" -c user.email=a@b -c user.name=a commit -q --
 git -C "$CL" worktree add -q "$CL/.claude/worktrees/agent-z" -b z
 ed "$CL/.claude/worktrees/agent-z/b.txt" | chk ALLOW tmp-clone-worktree-edit HC_WORKTREE=block
 bs "$T/P" "git -C $CL/.claude/worktrees/agent-z commit -am x" | chk ALLOW tmp-clone-worktree-commit HC_WORKTREE=block
-# 絶対 path の GIT_DIR がある環境でも、5 秒の hook の上限より早く終わって止める
+# 絶対 path の GIT_DIR がある環境でも、hook の上限 (30 秒) よりずっと早く終わって止める
 o="$(ed "$T/P/sub/f.txt" | env GIT_DIR="$T/P/.git" python3 -I -c 'import subprocess,sys
 try: sys.stdout.write(subprocess.run(["bash",sys.argv[1]],stdin=sys.stdin,capture_output=True,text=True,timeout=4).stdout)
 except subprocess.TimeoutExpired: print("TIMEOUT")' "$G")"
@@ -452,6 +495,7 @@ R6CTX
 # r6_notify_checks [<rel> <sed>] -> notify-attention.sh の秘密の伏せ (代入・コマンド置換・括弧)・hirai-notify の coordinator の期限と done で消える
 r6_notify_checks() {
   local s; s="$(mkt)"; r6_scratch "$s" "$@" || { echo "FAIL 壊す式が効かない: $1"; rm -rf "$s"; return; }
+  fake_orca "$s/strict-orca"
   cat > "$s/notify-test.sh" <<'R6NOTIFY'
 H="$1"; N="$2"
 T="$(cd "$(dirname "$0")" && pwd -P)/nt"
@@ -539,6 +583,96 @@ printf 'notify: orca\n' > "$T/hg/work/nogit/.claude/mode.yml"; echo r > "$T/hg/w
 echo run:HOMEOLD > "$T/hg/.claude/state/coordinator"; echo run:FOLDER > "$T/hg/work/nogit/.claude/state/coordinator"
 : > "$T/log"; ( cd "$T/hg/work/nogit" && env -u HIRAI_COORDINATOR -u HIRAI_DISPATCH_ID -u CLAUDE_PROJECT_DIR HOME="$T/hg" PATH="$T/bin:$PATH" FAKE_LOG="$T/log" bash "$N" done .tmp/r.md d >/dev/null 2>&1 )
 { grep -q -- '--to run:FOLDER' "$T/log" && [ -f "$T/hg/.claude/state/coordinator" ] && [ ! -f "$T/hg/work/nogit/.claude/state/coordinator" ]; } || echo "FAIL notify-home-coordinator HOME が git のとき、別の会話の控えへ送ったか消した: $(cat "$T/log") home=$(ls "$T/hg/.claude/state") folder=$(ls "$T/hg/work/nogit/.claude/state")"
+# 実物の Orca と同じ所を断る偽物で: done・stopped は Dispatch の task の id を添える・引けなければ送らず exit 1・--task-id が先・Dispatch の無い waiting は question
+mkdir -p "$T/strict" "$T/nojq" "$T/nopy"; cp "$T/../strict-orca" "$T/strict/orca"; chmod +x "$T/strict/orca"
+# 偽物が先に見つからないと本物の Orca に送ってしまう。見つからなければ、ここで止める
+[ "$(PATH="$T/strict:$PATH" command -v orca)" = "$T/strict/orca" ] || { echo "FAIL notify-fake-orca 偽の orca を置けていない"; exit 0; }
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/nojq/jq"; cp "$T/nojq/jq" "$T/nopy/python3"; chmod +x "$T/nojq/jq" "$T/nopy/python3"
+# 要る道具だけの PATH（only … python3 はあるが jq は見えない／none … どちらも見えない）
+mkdir -p "$T/only" "$T/none"
+for t in bash sh env cat sed awk head git dirname basename tr cut wc rm find touch mktemp grep sleep ls uname python3; do
+  command -v "$t" >/dev/null 2>&1 || continue
+  ln -sf "$(command -v "$t")" "$T/only/$t"; [ "$t" = python3 ] || ln -sf "$(command -v "$t")" "$T/none/$t"
+done
+cp "$T/strict/orca" "$T/only/orca"; cp "$T/strict/orca" "$T/none/orca"
+# sn <前に置く dir か -> <環境変数 か -> <引数...>
+sn() {
+  local pre="" ev="NOP=1"; [ "$1" = - ] || pre="$1:"; [ "$2" = - ] || ev="$2"; shift 2
+  : > "$T/log"; : > "$T/log.show"; : > "$T/log.try"
+  ( cd "${SNDIR:-$T/R}" && env -u HIRAI_COORDINATOR -u HIRAI_DISPATCH_ID -u ORCA_TERMINAL_HANDLE HC_NOTIFY=orca $ev PATH="${pre}$T/strict:$PATH" FAKE_LOG="$T/log" "$BASH" "${SNBIN:-$N}" "$@" >"$T/out" 2>"$T/err" )
+}
+# sp <PATH> <引数...> -> PATH をそのまま使う（道具を見えなくする）
+sp() {
+  local p="$1"; shift
+  : > "$T/log"; : > "$T/log.show"; : > "$T/log.try"
+  ( cd "$T/R" && env -i HOME="$T/hm9" HC_NOTIFY=orca PATH="$p" FAKE_LOG="$T/log" "$BASH" "$N" "$@" >"$T/out" 2>"$T/err" )
+}
+echo r > "$T/R/rep.md"
+got() { grep -qF -- "$1" "$T/log"; }
+sn - - done rep.md d --dispatch-id ctx_1; rc=$?
+{ [ "$rc" -eq 0 ] && got '--type worker_done' && got '--outcome succeeded' && got '--task-id task_ctx_1' && got '--dispatch-id ctx_1' && got "--report-path $T/R/rep.md"; } || echo "FAIL notify-task-id done に Dispatch の task の id を添えない rc=$rc log=$(cat "$T/log") err=$(cat "$T/err")"
+sn - - stopped rep.md d --dispatch-id ctx_2; rc=$?
+{ [ "$rc" -eq 0 ] && got '--outcome failed' && got '--task-id task_ctx_2'; } || echo "FAIL notify-task-id stopped に Dispatch の task の id を添えない rc=$rc err=$(cat "$T/err")"
+sn - HIRAI_DISPATCH_ID=ctx_3 done rep.md d; rc=$?
+{ [ "$rc" -eq 0 ] && got '--task-id task_ctx_3'; } || echo "FAIL notify-task-id 環境変数の Dispatch で task の id を添えない rc=$rc err=$(cat "$T/err")"
+sn "$T/nojq" - done rep.md d --dispatch-id ctx_4; rc=$?
+{ [ "$rc" -eq 0 ] && got '--task-id task_ctx_4'; } || echo "FAIL notify-task-python jq が読めないときに python3 で引かない rc=$rc err=$(cat "$T/err")"
+if command -v jq >/dev/null 2>&1; then
+  sn "$T/nopy" - stopped rep.md d --dispatch-id ctx_5; rc=$?
+  { [ "$rc" -eq 0 ] && got '--task-id task_ctx_5'; } || echo "FAIL notify-task-jq python3 が動かないときに jq で引かない rc=$rc err=$(cat "$T/err")"
+fi
+sp "$T/only" done rep.md d --dispatch-id ctx_4b; rc=$?
+{ [ "$rc" -eq 0 ] && got '--task-id task_ctx_4b'; } || echo "FAIL notify-task-nojq jq の無い機械で python3 で引かない rc=$rc err=$(cat "$T/err")"
+sp "$T/none" stopped rep.md d --dispatch-id ctx_4c; rc=$?
+{ [ "$rc" -eq 1 ] && [ ! -s "$T/log.try" ] && grep -qF 'jq も python3 も無い' "$T/err"; } || echo "FAIL notify-task-notool jq も python3 も無いことを言って送らずに exit 1 にならない rc=$rc try=$(cat "$T/log.try") err=$(cat "$T/err")"
+SNDIR="$T/pyc"; rm -f "$T/pymark"; sn "$T/nojq" - done "$T/R/rep.md" d --dispatch-id ctx_4d; SNDIR=""
+[ ! -e "$T/pymark" ] || echo "FAIL notify-task-isolated task の id を引く python3 が作業ディレクトリの json.py を読み込んだ"
+for d in ctx_gone1 ctx_notask1 ctx_down1; do
+  sn - - done rep.md d --dispatch-id "$d"; rc=$?
+  case "$d" in ctx_gone1) why='was not found' ;; ctx_down1) why='Orca runtime is unavailable.' ;; *) why="$d" ;; esac
+  grep -qF "$why" "$T/err" || echo "FAIL notify-task-why 引けない理由（${d}・${why}）が文に無い err=$(cat "$T/err")"
+  grep -qF "task=task_" "$T/err" && echo "FAIL notify-task-why 引けなかったと言いながら task の id を出した（${d}） err=$(cat "$T/err")"
+  [ "$(grep -c . "$T/log.show")" = 1 ] || echo "FAIL notify-task-once Orca に 2 回聞いた（${d}） show=$(cat "$T/log.show")"
+  { [ "$rc" -eq 1 ] && [ ! -s "$T/log.try" ] && [ "$(grep -c . "$T/err")" = 1 ] && grep -qF -- '--task-id' "$T/err" && grep -qF "$d" "$T/err"; } || echo "FAIL notify-task-missing 引けない Dispatch（${d}）で、足りないものを言って exit 1 にならない rc=$rc try=$(cat "$T/log.try") err=$(cat "$T/err")"
+done
+# Orca が黙ったとき、上限の秒で「返らない」と言って送らずに exit 1（上限の値は文字で確かめ、止まり方は 1 秒に縮めた複製で測る）
+grep -q '^TASK_LIMIT_SEC=15$' "$N" || echo "FAIL notify-task-limit-15 TASK_LIMIT_SEC が 15 秒でない"
+mkdir -p "$(dirname "$N")/../bin9"; SNBIN="$(dirname "$N")/../bin9/hirai-notify"; sed 's/^TASK_LIMIT_SEC=.*$/TASK_LIMIT_SEC=1/' "$N" > "$SNBIN"
+t0=$SECONDS; sn - - done rep.md d --dispatch-id ctx_slow1; rc=$?; t0=$((SECONDS - t0)); SNBIN=""
+{ [ "$rc" -eq 1 ] && [ "$t0" -lt 6 ] && [ ! -s "$T/log.try" ] && grep -qF '1 秒で返らない' "$T/err" && [ "$(grep -c . "$T/err")" = 1 ]; } || echo "FAIL notify-task-limit Orca が黙っても上限で止まらない rc=$rc ${t0} 秒 try=$(cat "$T/log.try") err=$(cat "$T/err")"
+sn - - stopped rep.md d --dispatch-id ctx_gone3 --task-id task_ctx_gone3; rc=$?
+{ [ "$rc" -eq 0 ] && got '--task-id task_ctx_gone3' && [ ! -s "$T/log.show" ]; } || echo "FAIL notify-task-arg-stopped stopped が渡した --task-id を使わない rc=$rc err=$(cat "$T/err")"
+sn - HIRAI_DISPATCH_ID=ctx_gone4 done rep.md d --task-id task_ctx_gone4; rc=$?
+{ [ "$rc" -eq 0 ] && got '--task-id task_ctx_gone4' && got '--dispatch-id ctx_gone4'; } || echo "FAIL notify-task-arg-env 環境変数の Dispatch と --task-id の組を使えない rc=$rc err=$(cat "$T/err")"
+sn - - done rep.md d --dispatch-id ctx_gone2 --task-id task_ctx_gone2; rc=$?
+{ [ "$rc" -eq 0 ] && got '--task-id task_ctx_gone2' && [ ! -s "$T/log.show" ]; } || echo "FAIL notify-task-arg 渡した --task-id を使わないか、Orca に聞いた rc=$rc show=$(cat "$T/log.show") err=$(cat "$T/err")"
+sn - - question rep.md q --dispatch-id ctx_6; rc=$?
+{ [ "$rc" -eq 0 ] && got '--type question' && [ ! -s "$T/log.show" ]; } || echo "FAIL notify-question-no-lookup question で task を聞いたか送れない rc=$rc show=$(cat "$T/log.show")"
+for a in "question rep.md q --task-id task_x --dispatch-id ctx_7" "waiting w --task-id task_x --dispatch-id ctx_7" "done rep.md d --to run:R --task-id task_x" "done rep.md d --task-id task_x" "done rep.md d --dispatch-id ctx_7 --task-id"; do
+  sn - ORCA_TERMINAL_HANDLE=h\ FAKE_DISPATCH=ctx_7 $a; rc=$?
+  { [ "$rc" -eq 2 ] && [ ! -s "$T/log.try" ]; } || echo "FAIL notify-task-usage 使えない --task-id（${a}）を exit 2 にしない rc=$rc log=$(cat "$T/log")"
+done
+sn - - waiting w --to run:R; rc=$?
+{ [ "$rc" -eq 0 ] && got '--type question' && got '--to run:R'; } || echo "FAIL notify-waiting-question Dispatch の無い waiting を Orca が受ける種類で送らない rc=$rc log=$(cat "$T/log") err=$(cat "$T/err")"
+echo run:F > "$T/R/.claude/state/coordinator"; sn - - waiting w; rc=$?; rm -f "$T/R/.claude/state/coordinator"
+{ [ "$rc" -eq 0 ] && got '--type question' && got '--to run:F'; } || echo "FAIL notify-waiting-file 控え（.claude/state/coordinator）へ送る waiting を question で送らない rc=$rc log=$(cat "$T/log") err=$(cat "$T/err")"
+sn - HIRAI_DISPATCH_ID=ctx_8 waiting w; rc=$?
+{ [ "$rc" -eq 0 ] && got '--type escalation' && got '--dispatch-id ctx_8'; } || echo "FAIL notify-waiting-env 環境変数の Dispatch の waiting が escalation でない rc=$rc log=$(cat "$T/log") err=$(cat "$T/err")"
+sn - - waiting w --dispatch-id ctx_gone5; rc=$?
+{ [ "$rc" -eq 0 ] && [ ! -s "$T/log.show" ]; } || echo "FAIL notify-waiting-no-lookup waiting で task の id を聞いた rc=$rc show=$(cat "$T/log.show") err=$(cat "$T/err")"
+sn - - stopped rep.md d --to run:R; rc=$?
+{ [ "$rc" -eq 0 ] && got '--type status' && got '--to run:R'; } || echo "FAIL notify-stopped-to 宛先へ送る stopped が status でない rc=$rc log=$(cat "$T/log")"
+env -u ORCA_WORKTREE_ID HC_NOTIFY=orca CLAUDE_PROJECT_DIR="$T/R" bash "$(dirname "$N")/../scripts/orca-context.sh" 2>/dev/null | grep -qF 'Task の id も --task-id で渡す' || echo "FAIL notify-ctx-task-id 開始の 1 行に --task-id が無い"
+sn - "ORCA_TERMINAL_HANDLE=h FAKE_DISPATCH=ctx_9" waiting w; rc=$?
+{ [ "$rc" -eq 0 ] && got '--type escalation' && ! got '--to'; } || echo "FAIL notify-waiting-escalation 宛先を省く waiting（差出人の端末に Dispatch がある）を escalation で送らない rc=$rc log=$(cat "$T/log") err=$(cat "$T/err")"
+sn - ORCA_TERMINAL_HANDLE=h waiting w; rc=$?
+{ [ "$rc" -eq 1 ] && [ ! -s "$T/log" ]; } || echo "FAIL notify-waiting-nowhere 宛先も Dispatch も無い waiting を送ったことにした rc=$rc log=$(cat "$T/log")"
+sn - - waiting w --dispatch-id ctx_8; rc=$?
+{ [ "$rc" -eq 0 ] && got '--type escalation' && got '--dispatch-id ctx_8'; } || echo "FAIL notify-waiting-escalation Dispatch の id を渡した waiting が escalation でない rc=$rc err=$(cat "$T/err")"
+: > "$T/log"; pd 'ls' sq2 | env -u HIRAI_DISPATCH_ID -u HIRAI_COORDINATOR ORCA_TERMINAL_HANDLE=h FAKE_DISPATCH=ctx_9 PATH="$T/strict:$PATH" FAKE_LOG="$T/log" CLAUDE_PLUGIN_DATA="$T/dataq" bash "$H" >/dev/null 2>"$T/err"
+{ got '--type escalation' && [ ! -s "$T/err" ]; } || echo "FAIL notify-waiting-escalation 担当の hook（宛先なし）の知らせが escalation でない log=$(cat "$T/log") err=$(cat "$T/err")"
+: > "$T/log"; pd 'ls' sq1 | env -u HIRAI_DISPATCH_ID PATH="$T/strict:$PATH" FAKE_LOG="$T/log" HIRAI_COORDINATOR=run:C CLAUDE_PLUGIN_DATA="$T/dataq" bash "$H" >/dev/null 2>"$T/err"
+{ got '--type question' && [ ! -s "$T/err" ]; } || echo "FAIL notify-waiting-question hook の知らせが Orca に断られる log=$(cat "$T/log") err=$(cat "$T/err")"
 exit 0
 R6NOTIFY
   ( cd "$s" && bash notify-test.sh "$s/hooks/notify-attention.sh" "$s/bin/hirai-notify" 2>&1 | grep '^FAIL' )
@@ -826,6 +960,31 @@ notify-rest-excludes-tmp|bin/hirai-notify|s# | grep -vE '[^']*'##
 notify-cdpath-relative-file|bin/hirai-notify|s/CDPATH= builtin cd -- "\$(dirname "\$file")" >\/dev\/null 2>&1 \&\& builtin pwd -P/cd "$(dirname "$file")" \&\& pwd -P/
 notify-python-isolated|bin/hirai-notify|s/python3 -I -c/python3 -c/
 notify-home-coordinator|bin/hirai-notify|s/\[ ! -f "\$lib" \] || t=/false \&\& t=/
+notify-task-id|bin/hirai-notify|s/--task-id "\$task" //
+notify-task-id|bin/hirai-notify|s/worker-show --dispatch/worker-show --nope/
+notify-task-python|bin/hirai-notify|s/^  \[ -n "\$pair" \] || pair=/  : || pair=/
+notify-task-missing|bin/hirai-notify|s/^  task="\$(task_of_dispatch "\$dispatch")" || exit 1$/  task="$(task_of_dispatch "$dispatch" 2>\/dev\/null)" || task=task_unknown/
+notify-task-missing|bin/hirai-notify|s/^  task="\$(task_of_dispatch "\$dispatch")" || exit 1$/  task="$(task_of_dispatch "$dispatch")" || true/
+notify-task-id|bin/hirai-notify|s/worker-show --dispatch "\$1" --json/worker-show --dispatch "$1"/
+notify-task-why|bin/hirai-notify|s/\.error\.message/.error.nope/;s/get("message")/get("nope")/
+notify-task-limit-15|bin/hirai-notify|s/^TASK_LIMIT_SEC=15$/TASK_LIMIT_SEC=600/
+notify-task-limit|bin/hirai-notify|s/\[ "\$SECONDS" -lt "\$end" \]/true/
+notify-task-notool|bin/hirai-notify|s/jq も python3 も無い/答えが読めない/
+notify-task-isolated|bin/hirai-notify|s/python3 -I -c/python3 -c/
+notify-task-arg-stopped|bin/hirai-notify|s/ \&\& \[ -n "\$dispatch" \] \&\& \[ -z "\$task" \]; then/ \&\& [ -n "$dispatch" ] \&\& { [ -z "$task" ] || [ "$kind" = stopped ]; }; then/
+notify-task-arg-env|bin/hirai-notify|s/^if \[ -n "\$arg_task" \] \&\& { \[ -z "\$dispatch" \]/if [ -n "$arg_task" ] \&\& { [ -z "$arg_dispatch" ]/
+notify-waiting-no-lookup|bin/hirai-notify|s/^if { \[ "\$kind" = "done" \] || \[ "\$kind" = "stopped" \]; } \&\& \[ -n/if [ "$kind" != question ] \&\& [ -n/
+notify-waiting-file|bin/hirai-notify|s/^wtype=escalation; \[ -z "\$to" \]/wtype=escalation; [ -z "$to" ] || [ -n "$coordinator_file" ]/
+notify-waiting-env|bin/hirai-notify|s/^wtype=escalation; \[ -z "\$to" \]/wtype=escalation; { [ -z "$to" ] \&\& [ -z "${HIRAI_DISPATCH_ID:-}" ]; }/
+notify-stopped-to|bin/hirai-notify|s/stopped)  args=(--type status/stopped)  args=(--type escalation/
+notify-ctx-task-id|scripts/orca-context.sh|s/ も --task-id で渡す//
+notify-task-arg|bin/hirai-notify|s/ \&\& \[ -n "\$dispatch" \] \&\& \[ -z "\$task" \]; then/ \&\& [ -n "$dispatch" ]; then/
+notify-question-no-lookup|bin/hirai-notify|s/^if { \[ "\$kind" = "done" \] || \[ "\$kind" = "stopped" \]; } \&\& \[ -n/if [ -n/
+notify-task-usage|bin/hirai-notify|s/^if \[ -n "\$arg_task" \] \&\& .*; then$/if false; then/
+notify-task-jq|bin/hirai-notify|s/command -v jq >\/dev\/null 2>\&1 \&\& pair=/false \&\& pair=/
+notify-task-nojq|bin/hirai-notify|s/^  \[ -n "\$pair" \] || pair=/  : || pair=/
+notify-waiting-question|bin/hirai-notify|s/|| wtype=question$/|| wtype=escalation/
+notify-waiting-escalation|bin/hirai-notify|s/^wtype=escalation; /wtype=question; /
 X
       ;;
     worktrees)
@@ -870,6 +1029,8 @@ r6_suite() {
   if [ "${HARNESS_SMOKE_QUICK:-}" = 1 ]; then r6_mutants "$1" | grep -c . >> "$R6_SKIP_FILE"; return 0; fi
   while IFS='|' read -r tag rel ex; do
     [ -n "$tag" ] || continue
+    # jq の道の壊し方は、jq の無い機械では確かめようがない（python3 の道だけが動く）
+    case "$tag" in notify-task-jq) command -v jq >/dev/null 2>&1 || continue ;; esac
     out="$($fn "$rel" "$ex" 2>&1)"
     r6_must_fail "$tag" "$out" || printf 'NOFAIL 壊した複製 (%s) で %s が FAIL しない (確かめが空振り): %s\n' "$rel" "$tag" "$(printf '%s' "$out" | head -1)"
   done < <(r6_mutants "$1")
@@ -1572,6 +1733,16 @@ def wired(ev, matcher):
                and any("notify-attention.sh" in x.get("command", "") for x in e.get("hooks", [])) for e in h.get(ev, []))
 sys.exit(0 if wired("Notification", "permission_prompt") and wired("PermissionDenied", "") else 1)
 PYEOF
+  # 見張り (PreToolUse) と開始の 1 行 (SessionStart) の制限は 30 秒 (5 秒では、負荷の平均 269 の機械で 6.3 秒かかって打ち切られ、Write が止まらずに通った・2026-11-24)。
+  # 秒と、打ち切られたときの動き (通る) が README にある
+  local hk_bad=""
+  hook_secs() { python3 -I -c 'import json,sys
+h=json.load(open(sys.argv[1]))["hooks"]
+print(" ".join(str(x.get("timeout")) for e in h.get(sys.argv[2],[]) for x in e.get("hooks",[]) if sys.argv[3] in x.get("command","")))' "$1" "$2" "$3"; }
+  hk_bad="$(hook_secs "$ROOT/hooks/hooks.json" PreToolUse worktree-guard.sh)/$(hook_secs "$ROOT/hooks/hooks.json" SessionStart session-start.sh)"
+  [ "$hk_bad" = "30/30" ] || bad="$bad [見張りと開始の 1 行の制限が 30 秒でない] PreToolUse/SessionStart=${hk_bad}"
+  { grep -qF '見張り（`worktree-guard.sh`）の制限は 30 秒' "$ROOT/README.md" && grep -qF '打ち切られた操作は通ります' "$ROOT/README.md"; } \
+    || bad="$bad [README に見張りの制限の秒と、打ち切られたときの動きが無い]"
   # 6 巡目: guard の入れ子の worktree・heredoc・日本語・大小の path・別 worktree、orca-context のサブディレクトリ表示。壊した複製 4 通りで FAIL することも見る。
   local r6g; r6g="$(r6_suite guard)"; [ -z "$r6g" ] || bad="$bad [6 巡目の guard・orca-context] $r6g"
   if [ -n "$bad" ]; then fail 2 "止める手段と fail-open" "$bad"; return; fi
@@ -2932,13 +3103,13 @@ JSONEOF
   local nw nbin nlog nrepo nsub nabs nrc nline nb=""
   nw="$(mkt)"; nbin="$nw/bin"; nlog="$nw/orca.log"; nrepo="$nw/repo"; nsub="$nrepo/apps/api"
   mkdir -p "$nbin" "$nsub" "$nrepo/.claude" "$nw/home"; git -C "$nrepo" init -q 2>/dev/null
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$nlog" > "$nbin/orca"; chmod +x "$nbin/orca"
+  fake_orca "$nbin/orca"
   printf 'notify: "orca"  # c\n' > "$nrepo/.claude/mode.yml"
   printf 'q\n' > "$nrepo/.tmp-q.md"; nabs="$(cd "$nrepo" && pwd -P)/.tmp-q.md"
   # nrun <引数...> -> サブ dir から /bin/bash で打つ。exit は nrc、記録は nlog
   nrun() {
     : > "$nlog"
-    ( cd "$nsub" && env -i HOME="$nw/home" PATH="$nbin:/usr/bin:/bin" LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 ${NENV:-NOP=1} \
+    ( cd "$nsub" && env -i HOME="$nw/home" PATH="$nbin:/usr/bin:/bin" LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 FAKE_LOG="$nlog" ${NENV:-NOP=1} \
         /bin/bash "$ROOT/bin/hirai-notify" "$@" ) >/dev/null 2>&1
     nrc=$?
   }
@@ -2953,10 +3124,10 @@ JSONEOF
   nrun stopped ../../.tmp-q.md 要約C --dispatch-id d1
   nline="$(cat "$nlog")"
   { [ "$nrc" -eq 0 ] && printf '%s' "$nline" | grep -qF -- "--report-path ${nabs}" && printf '%s' "$nline" | grep -qF -- '--outcome failed' \
-      && printf '%s' "$nline" | grep -qF -- '--dispatch-id d1'; } || nb="$nb [stopped --dispatch-id] exit=${nrc} 記録=[${nline}]"
+      && printf '%s' "$nline" | grep -qF -- '--dispatch-id d1' && printf '%s' "$nline" | grep -qF -- '--task-id task_d1'; } || nb="$nb [stopped --dispatch-id] exit=${nrc} 記録=[${nline}]"
   nrun done ../../.tmp-q.md 要約D --to run:X --dispatch-id d2
   nline="$(cat "$nlog")"
-  { [ "$nrc" -eq 0 ] && printf '%s' "$nline" | grep -qF -- '--dispatch-id d2' && ! printf '%s' "$nline" | grep -qF -- '--to run:X'; } \
+  { [ "$nrc" -eq 0 ] && printf '%s' "$nline" | grep -qF -- '--dispatch-id d2' && printf '%s' "$nline" | grep -qF -- '--task-id task_d2' && ! printf '%s' "$nline" | grep -qF -- '--to run:X'; } \
     || nb="$nb [--to と --dispatch-id の両方] --dispatch-id を採らない exit=${nrc} 記録=[${nline}]"
   NENV="HIRAI_DISPATCH_ID=d-OLD" nrun question ../../.tmp-q.md 要約E --to run:NEW
   nline="$(cat "$nlog")"
@@ -2968,17 +3139,18 @@ JSONEOF
   { [ "$nrc" -eq 2 ] && [ ! -s "$nlog" ]; } || nb="$nb [値の無い --dispatch-id] exit=${nrc} (期待 2・送らない)"
   nrun done 要約G ../../.tmp-q.md --to run:R1
   { [ "$nrc" -eq 2 ] && [ ! -s "$nlog" ]; } || nb="$nb [<file> と <要約> の取り違え] exit=${nrc} (期待 2・送らない)"
-  # (g-2) hirai-notify waiting: --type escalation・件名は既定「権限の確認で止まっています」か --subject・本文は <git の root>｜<要約>。
+  # (g-2) hirai-notify waiting: 宛先へ送るときは --type question（Orca は Dispatch の無い escalation を断る）・Dispatch の id を渡すときは escalation。
+  # 件名は既定「権限の確認で止まっています」か --subject・本文は <git の root>｜<要約>。
   # --subject は waiting だけ (exit 2)・宛先が無ければ exit 1 で送らない。
   local nroot; nroot="$(cd "$nrepo" && pwd -P)"
   nrun waiting 要約W --to run:R1
   nline="$(cat "$nlog")"
-  { [ "$nrc" -eq 0 ] && printf '%s' "$nline" | grep -qF -- '--type escalation' && printf '%s' "$nline" | grep -qF -- '--subject 権限の確認で止まっています' \
+  { [ "$nrc" -eq 0 ] && printf '%s' "$nline" | grep -qF -- '--type question' && printf '%s' "$nline" | grep -qF -- '--subject 権限の確認で止まっています' \
       && printf '%s' "$nline" | grep -qF -- "--body ${nroot}｜要約W" && printf '%s' "$nline" | grep -qF -- '--to run:R1'; } \
     || nb="$nb [waiting --to] exit=${nrc} 記録=[${nline}]"
   nrun waiting 要約W --subject 分類器が止めました --dispatch-id d9
   nline="$(cat "$nlog")"
-  { [ "$nrc" -eq 0 ] && printf '%s' "$nline" | grep -qF -- '--subject 分類器が止めました' && printf '%s' "$nline" | grep -qF -- '--dispatch-id d9'; } \
+  { [ "$nrc" -eq 0 ] && printf '%s' "$nline" | grep -qF -- '--type escalation' && printf '%s' "$nline" | grep -qF -- '--subject 分類器が止めました' && printf '%s' "$nline" | grep -qF -- '--dispatch-id d9'; } \
     || nb="$nb [waiting --subject] exit=${nrc} 記録=[${nline}]"
   nrun waiting 要約W
   { [ "$nrc" -eq 1 ] && [ ! -s "$nlog" ]; } || nb="$nb [waiting 宛先なし] exit=${nrc} (期待 1・送らない)"
@@ -2994,8 +3166,10 @@ JSONEOF
   NENV="HIRAI_COORDINATOR=run:ENV" nrun done ../../.tmp-q.md 要約N
   { [ "$nrc" -eq 0 ] && grep -qF -- '--to run:ENV' "$nlog" && ! grep -qF 'run:FILE' "$nlog"; } || nb="$nb [環境変数が state/coordinator に勝たない] exit=${nrc} 記録=[$(cat "$nlog")]"
   rm -f "$nrepo/.claude/state/coordinator"
-  NENV="ORCA_TERMINAL_HANDLE=h1" nrun done ../../.tmp-q.md 要約N
+  NENV="ORCA_TERMINAL_HANDLE=h1 FAKE_DISPATCH=ctx_h" nrun done ../../.tmp-q.md 要約N
   { [ "$nrc" -eq 0 ] && [ -s "$nlog" ] && ! grep -qF -- '--to' "$nlog"; } || nb="$nb [ORCA_TERMINAL_HANDLE だけのとき --to を省いて送らない] exit=${nrc} 記録=[$(cat "$nlog")]"
+  NENV="ORCA_TERMINAL_HANDLE=h1" nrun done ../../.tmp-q.md 要約N
+  { [ "$nrc" -eq 1 ] && [ ! -s "$nlog" ]; } || nb="$nb [宛先も Dispatch も無いのに送ったことにした] exit=${nrc} 記録=[$(cat "$nlog")]"
 
   # (g-3) hooks/notify-attention.sh: 偽の orca・使い捨てのリポ・/bin/bash 3.2。判断を変えない (標準出力なし・exit 0)。
   local na_out na_err na_rc
@@ -3003,7 +3177,7 @@ JSONEOF
   # na_run <HC_NOTIFY の値> <stdin の JSON> -> nlog を空にして hook を打つ。exit は na_rc、標準出力は na_out、標準エラーは na_err
   na_run() {
     : > "$nlog"
-    printf '%s' "$2" | env -i HOME="$nw/home" PATH="$nbin:/usr/bin:/bin" LANG=en_US.UTF-8 HC_NOTIFY="$1" HIRAI_COORDINATOR="${NA_TO-run:R1}" \
+    printf '%s' "$2" | env -i HOME="$nw/home" PATH="$nbin:/usr/bin:/bin" LANG=en_US.UTF-8 FAKE_LOG="$nlog" HC_NOTIFY="$1" HIRAI_COORDINATOR="${NA_TO-run:R1}" \
       CLAUDE_PLUGIN_DATA="$nw/data" /bin/bash "$ROOT/hooks/notify-attention.sh" >"$na_out" 2>"$na_err"
     na_rc=$?
   }
@@ -3015,7 +3189,7 @@ JSONEOF
   { [ "$na_rc" -eq 0 ] && [ ! -s "$nlog" ] && [ ! -s "$na_out" ]; } || nb="$nb [notify-attention: notify off] exit=${na_rc} 送った=[$(cat "$nlog")]"
   na_run orca "$j_perm"
   nline="$(cat "$nlog")"
-  { [ "$na_rc" -eq 0 ] && [ ! -s "$na_out" ] && [ "$(grep -c . "$nlog")" -eq 1 ] && printf '%s' "$nline" | grep -qF -- '--type escalation' \
+  { [ "$na_rc" -eq 0 ] && [ ! -s "$na_out" ] && [ "$(grep -c . "$nlog")" -eq 1 ] && printf '%s' "$nline" | grep -qF -- '--type question' \
       && printf '%s' "$nline" | grep -qF -- '権限の確認で止まっています' && printf '%s' "$nline" | grep -qF -- "${nroot}｜Claude needs your permission to use Bash"; } \
     || nb="$nb [notify-attention: permission_prompt が 1 通] exit=${na_rc} 記録=[${nline}]"
   na_run orca "$j_perm"
@@ -3025,7 +3199,7 @@ JSONEOF
   j_deny="{\"hook_event_name\":\"PermissionDenied\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"${cmd70}\",\"env\":{\"K\":\"TOPSECRET-ENV\"}},\"reason\":\"blocked TOKEN=TOPSECRET-R1 and ghp_aaaaaaaaaaaaaaaaaaaaaaaa1234\",\"cwd\":\"$nrepo\",\"session_id\":\"s3\"}"
   na_run orca "$j_deny"
   nline="$(cat "$nlog")"
-  { [ "$na_rc" -eq 0 ] && [ ! -s "$na_out" ] && [ "$(grep -c . "$nlog")" -eq 1 ] && printf '%s' "$nline" | grep -qF -- '--type escalation' \
+  { [ "$na_rc" -eq 0 ] && [ ! -s "$na_out" ] && [ "$(grep -c . "$nlog")" -eq 1 ] && printf '%s' "$nline" | grep -qF -- '--type question' \
       && printf '%s' "$nline" | grep -qF -- '分類器が止めました' && printf '%s' "$nline" | grep -qF -- 'Bash｜blocked NAME=… and …'; } \
     || nb="$nb [notify-attention: PermissionDenied が 1 通] exit=${na_rc} 記録=[${nline}]"
   printf '%s' "$nline" | grep -qE 'TOPSECRET|ghp_|--key|scripts/x\.js|zzz' && nb="$nb [notify-attention: コマンドの本文・値・長い英数字の並びを送った] 記録=[${nline}]"
@@ -3046,7 +3220,7 @@ JSONEOF
   { [ "$na_rc" -eq 0 ] && [ ! -s "$nlog" ] && [ ! -s "$na_out" ]; } || nb="$nb [notify-attention: StopFailure で notify off が送った] 記録=[$(cat "$nlog")]"
   na_run orca "$j_sf"
   nline="$(cat "$nlog")"
-  { [ "$na_rc" -eq 0 ] && [ ! -s "$na_out" ] && [ "$(grep -c . "$nlog")" -eq 1 ] && printf '%s' "$nline" | grep -qF -- '--type escalation' \
+  { [ "$na_rc" -eq 0 ] && [ ! -s "$na_out" ] && [ "$(grep -c . "$nlog")" -eq 1 ] && printf '%s' "$nline" | grep -qF -- '--type question' \
       && printf '%s' "$nline" | grep -qF -- 'API エラーで止まりました（server_error）' && printf '%s' "$nline" | grep -qF -- "${nroot}｜Request timed out"; } \
     || nb="$nb [notify-attention: StopFailure が 1 通] exit=${na_rc} 記録=[${nline}]"
   na_run orca "$j_sf"
@@ -3196,6 +3370,10 @@ PYEOF
   rm -rf "$nw"
   [ -z "$nb" ] || pr_bad="$pr_bad hirai-notify・notify-attention・hirai-pr-asset:${nb}"
 
+  # 移行の手順の合格の条件に、版の数字（hirai-lite v3.0.0 など）を決め打ちしない（版を上げるたびに「先へ進まない」で止まる）
+  grep -rnE 'hirai-lite v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/commands" "$ROOT/README.md" "$ROOT/docs" 2>/dev/null | grep -q . \
+    && pr_bad="$pr_bad 版の決め打ち: $(grep -rnoE 'hirai-lite v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/commands" "$ROOT/README.md" "$ROOT/docs" 2>/dev/null | head -1)"
+  grep -qF '10 秒を超えると何も出さずに打ち切られ' "$ROOT/README.md" || pr_bad="$pr_bad README に知らせの hook が 10 秒で打ち切られることが無い"
   # (h) 3.0.0 の直しが残っている: pr-retarget は bin/ にあり scripts/ に無い (Bash ツールでは土台の bin/ が PATH に入る) /
   # 承認ビューの節の本体は足すプラグインにあり土台の approval-template には指しだけ / 設計の起点は 3 行以内
   [ -x "$ROOT/bin/hirai-pr-retarget" ] || pr_bad="$pr_bad bin/hirai-pr-retarget が実行できない"
