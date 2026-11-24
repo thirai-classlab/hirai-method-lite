@@ -448,7 +448,7 @@ CL="$T/P/.tmp/clone"; git -C "$CL" -c user.email=a@b -c user.name=a commit -q --
 git -C "$CL" worktree add -q "$CL/.claude/worktrees/agent-z" -b z
 ed "$CL/.claude/worktrees/agent-z/b.txt" | chk ALLOW tmp-clone-worktree-edit HC_WORKTREE=block
 bs "$T/P" "git -C $CL/.claude/worktrees/agent-z commit -am x" | chk ALLOW tmp-clone-worktree-commit HC_WORKTREE=block
-# 絶対 path の GIT_DIR がある環境でも、5 秒の hook の上限より早く終わって止める
+# 絶対 path の GIT_DIR がある環境でも、hook の上限 (30 秒) よりずっと早く終わって止める
 o="$(ed "$T/P/sub/f.txt" | env GIT_DIR="$T/P/.git" python3 -I -c 'import subprocess,sys
 try: sys.stdout.write(subprocess.run(["bash",sys.argv[1]],stdin=sys.stdin,capture_output=True,text=True,timeout=4).stdout)
 except subprocess.TimeoutExpired: print("TIMEOUT")' "$G")"
@@ -1666,6 +1666,16 @@ def wired(ev, matcher):
                and any("notify-attention.sh" in x.get("command", "") for x in e.get("hooks", [])) for e in h.get(ev, []))
 sys.exit(0 if wired("Notification", "permission_prompt") and wired("PermissionDenied", "") else 1)
 PYEOF
+  # 見張り (PreToolUse) と開始の 1 行 (SessionStart) の制限は 30 秒 (5 秒では、負荷の平均 269 の機械で 6.3 秒かかって打ち切られ、Write が止まらずに通った・2026-11-24)。
+  # 秒と、打ち切られたときの動き (通る) が README にある
+  local hk_bad=""
+  hook_secs() { python3 -I -c 'import json,sys
+h=json.load(open(sys.argv[1]))["hooks"]
+print(" ".join(str(x.get("timeout")) for e in h.get(sys.argv[2],[]) for x in e.get("hooks",[]) if sys.argv[3] in x.get("command","")))' "$1" "$2" "$3"; }
+  hk_bad="$(hook_secs "$ROOT/hooks/hooks.json" PreToolUse worktree-guard.sh)/$(hook_secs "$ROOT/hooks/hooks.json" SessionStart session-start.sh)"
+  [ "$hk_bad" = "30/30" ] || bad="$bad [見張りと開始の 1 行の制限が 30 秒でない] PreToolUse/SessionStart=${hk_bad}"
+  { grep -qF '見張り（`worktree-guard.sh`）の制限は 30 秒' "$ROOT/README.md" && grep -qF '打ち切られた操作は通ります' "$ROOT/README.md"; } \
+    || bad="$bad [README に見張りの制限の秒と、打ち切られたときの動きが無い]"
   # 6 巡目: guard の入れ子の worktree・heredoc・日本語・大小の path・別 worktree、orca-context のサブディレクトリ表示。壊した複製 4 通りで FAIL することも見る。
   local r6g; r6g="$(r6_suite guard)"; [ -z "$r6g" ] || bad="$bad [6 巡目の guard・orca-context] $r6g"
   if [ -n "$bad" ]; then fail 2 "止める手段と fail-open" "$bad"; return; fi
@@ -3091,6 +3101,8 @@ JSONEOF
   rm -f "$nrepo/.claude/state/coordinator"
   NENV="ORCA_TERMINAL_HANDLE=h1 FAKE_DISPATCH=ctx_h" nrun done ../../.tmp-q.md 要約N
   { [ "$nrc" -eq 0 ] && [ -s "$nlog" ] && ! grep -qF -- '--to' "$nlog"; } || nb="$nb [ORCA_TERMINAL_HANDLE だけのとき --to を省いて送らない] exit=${nrc} 記録=[$(cat "$nlog")]"
+  NENV="ORCA_TERMINAL_HANDLE=h1" nrun done ../../.tmp-q.md 要約N
+  { [ "$nrc" -eq 1 ] && [ ! -s "$nlog" ]; } || nb="$nb [宛先も Dispatch も無いのに送ったことにした] exit=${nrc} 記録=[$(cat "$nlog")]"
 
   # (g-3) hooks/notify-attention.sh: 偽の orca・使い捨てのリポ・/bin/bash 3.2。判断を変えない (標準出力なし・exit 0)。
   local na_out na_err na_rc
@@ -3101,8 +3113,6 @@ JSONEOF
     printf '%s' "$2" | env -i HOME="$nw/home" PATH="$nbin:/usr/bin:/bin" LANG=en_US.UTF-8 FAKE_LOG="$nlog" HC_NOTIFY="$1" HIRAI_COORDINATOR="${NA_TO-run:R1}" \
       CLAUDE_PLUGIN_DATA="$nw/data" /bin/bash "$ROOT/hooks/notify-attention.sh" >"$na_out" 2>"$na_err"
     na_rc=$?
-  NENV="ORCA_TERMINAL_HANDLE=h1" nrun done ../../.tmp-q.md 要約N
-  { [ "$nrc" -eq 1 ] && [ ! -s "$nlog" ]; } || nb="$nb [宛先も Dispatch も無いのに送ったことにした] exit=${nrc} 記録=[$(cat "$nlog")]"
   }
   local long cmd70 j_perm j_deny
   # GS-2: コマンドの本文は送らない。先頭のコマンド名だけ (VAR=値 は VAR=…)。reason は NAME=値 と 20 字以上の英数字の並びを伏せる

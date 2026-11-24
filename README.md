@@ -173,7 +173,8 @@ GitHub Project でやることを回すリポだけが入れます。
   - `cd <別のリポ> && git commit` は `cd` を追わず、**会話の cwd のリポ**で判定します。別のリポへ commit するときは `git -C <dir> commit` を使ってください（拒否の文言にも 1 行出します）
   - `git -C` の引数に変数やコマンド置換（`$DIR`・`$(...)`）を含む形は、値を解決できないので**通します**
   - **読み切れないコマンドは、止める側に倒さず通します**（`_meta.md` 条 5 の例外は編集と commit だけ）。通る例: 二重引用符の中のバッククォートの `git commit`（`echo "`git commit -m x`"`）、`bash -c $'git commit -m x'`、`git -C "$DIR" commit`（`-C` の先が変数）、`$GIT commit`（コマンド名が変数）、heredoc や pipe で bash に渡す `git commit`（`bash <<'EOF'`）、別の道具（スクリプト）が中で打つ `git commit`。`eval "git commit …"`・`bash -c 'git commit …'`・`$(…)` の中の `git commit` は中身を調べて止めます
-  - 別々の commit を入れた `$( )` が 400 個を超えると、読むのに時間がかかり hook の 5 秒を超えます（超えたら hook は失敗として扱われ、止まりません）
+  - **見張り（`worktree-guard.sh`）の制限は 30 秒**です（`hooks/hooks.json` の `timeout`。Claude Code の既定は 600 秒）。超えると Claude Code が hook を打ち切って出力を捨て、**打ち切られた操作は通ります**（`PreToolUse` の時間切れは止めません。[hooks の「Timeouts」](https://code.claude.com/docs/en/hooks#timeouts)）。普段は 0.1 秒ほどで終わりますが、負荷の平均が 269（16 コア）の機械で 6.3 秒かかり、3.0.0 の 5 秒では Write が止まらずに通りました（2026-11-24）。会話の開始の 1 行（`session-start.sh`）の制限も 30 秒です。時間切れを止める側に倒す形（`onFailure: "block"`・Claude Code 2.1.295 以上）は入れていません
+  - 別々の commit を入れた `$( )` が約 1,000 個を超えると、読むのに 30 秒を超えることがあります（2026-11-24 の実測で 400 個 9 秒・1,000 個 25 秒。超えたら上のとおり止まりません）
   - 外側のリポの `.tmp/` と `.claude/state/` の下は、その写し自身の `mode.yml` が `worktree: block` でも止めません（そこに作った別の clone・worktree の編集と commit は、その clone の toplevel が対象です）
 
 ### PR の本文と画面のキャプチャ
