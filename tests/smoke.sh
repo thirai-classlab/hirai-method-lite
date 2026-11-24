@@ -3332,9 +3332,16 @@ JSONEOF
   # (g-4) hirai-pr-asset: 使い捨ての bare リポへ。branch pr-assets を作る・積み増す・作業ツリーと HEAD を動かさない・
   # remote を読めない / 無い / GitHub でないと exit 1・URL の中の認証情報を出さない・/bin/bash 3.2。
   # remote の URL は PATH の頭の git が PA_URL を答え、実際の読み書きは bare リポへ行く。
-  local pw pa_rc pa_bad="" pa_head pa_st pa_out pa_url pa_n
+  local pw pa_rc pa_bad="" pa_head pa_st pa_out pa_url pa_n pa_fail=""
   pw="$(mkt)"; mkdir -p "$pw/img" "$pw/work" "$pw/bare.git" "$pw/gitbin"
-  printf '#!/bin/sh\nif [ "$1 $2" = "remote get-url" ] && [ -n "${PA_URL:-}" ]; then printf "%%s\\n" "$PA_URL"; exit 0; fi\nexec /usr/bin/git "$@"\n' > "$pw/gitbin/git"; chmod +x "$pw/gitbin/git"
+  cat > "$pw/gitbin/git" <<'PAGIT'
+#!/bin/sh
+# PA_FAIL の 1 語（remote・ls-remote・fetch・push）で、token 入りの文を stderr に出して 128 で終わる
+if [ -n "${PA_FAIL:-}" ] && [ "$1" = "$PA_FAIL" ]; then echo "fatal: could not read Password for 'https://SECRETTOKEN@github.com': Device not configured" >&2; exit 128; fi
+if [ "$1 $2" = "remote get-url" ] && [ -n "${PA_URL:-}" ]; then printf "%s\n" "$PA_URL"; exit 0; fi
+exec /usr/bin/git "$@"
+PAGIT
+  chmod +x "$pw/gitbin/git"
   git init -q --bare "$pw/bare.git" 2>/dev/null
   printf 'x' > "$pw/img/a.png"; printf 'y' > "$pw/img/b.png"
   ( cd "$pw/work" && git init -q 2>/dev/null && printf 'f\n' > f.txt && git add f.txt \
@@ -3344,7 +3351,7 @@ JSONEOF
   # pa_run <dir> <引数...> -> exit は pa_rc、標準出力は pa_out
   pa_run() {
     local d="$1"; shift
-    pa_out="$( cd "$d" && env -i HOME="$pw" PATH="$pw/gitbin:/usr/bin:/bin" PA_URL="$pa_url" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@e GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@e \
+    pa_out="$( cd "$d" && env -i HOME="$pw" PATH="$pw/gitbin:/usr/bin:/bin" PA_URL="$pa_url" PA_FAIL="${pa_fail:-}" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@e GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@e \
       /bin/bash "$ROOT/bin/hirai-pr-asset" "$@" 2>"$pw/pa.err" )"
     pa_rc=$?
   }
@@ -3374,6 +3381,17 @@ JSONEOF
     { [ "$pa_rc" -eq 1 ] && [ -z "$pa_out" ] && ! grep -q SECRETTOKEN "$pw/pa.err" && [ "$(git -C "$pw/bare.git" rev-list --count pr-assets 2>/dev/null)" = "$pa_n" ]; } \
       || pa_bad="$pa_bad [GitHub でない remote] exit=${pa_rc} out=${pa_out%%SECRET*}"
   done
+  # git が token 入りの文で失敗しても（get-url・ls-remote・fetch・push）、--remote に URL を渡しても、stderr に token を出さずに exit 1
+  pa_url=https://github.com/o/r.git
+  for pa_fail in remote ls-remote fetch push; do
+    pa_run "$pw/work" 5 "$pw/img/a.png"
+    { [ "$pa_rc" -eq 1 ] && [ -z "$pa_out" ] && [ -s "$pw/pa.err" ] && ! grep -q SECRETTOKEN "$pw/pa.err"; } \
+      || pa_bad="$pa_bad [${pa_fail} の失敗の文] exit=${pa_rc} err=$(sed 's/SECRETTOKEN/TOKEN が出た/g' "$pw/pa.err" | head -1)"
+  done
+  pa_fail=""; pa_url=""
+  pa_run "$pw/work" --remote https://SECRETTOKEN@github.com/o/r.git 5 "$pw/img/a.png"
+  { [ "$pa_rc" -eq 1 ] && [ -s "$pw/pa.err" ] && ! grep -q SECRETTOKEN "$pw/pa.err"; } \
+    || pa_bad="$pa_bad [--remote に URL] exit=${pa_rc} err=$(sed 's/SECRETTOKEN/TOKEN が出た/g' "$pw/pa.err" | head -1)"
   pa_url=https://github.com/o/r.git
   git -C "$pw/work" remote set-url origin "$pw/missing.git" 2>/dev/null
   pa_run "$pw/work" 5 "$pw/img/a.png"

@@ -28,9 +28,10 @@ done
 
 branch="pr-assets"
 mask() { sed -E 's#(https?://)[^/]*@#\1#g'; }
-url="$(git remote get-url "$remote" 2>&1)" || { echo "remote を読めない（${remote}）: $(printf '%s' "$url" | mask)" >&2; exit 1; }
+shown="$(printf '%s' "$remote" | mask)"   # --remote に URL を渡されても、表示には認証情報を出さない
+url="$(git remote get-url "$remote" 2>&1)" || { echo "remote を読めない（${shown}）: $(printf '%s' "$url" | mask)" >&2; exit 1; }
 slug="$(printf '%s\n' "$url" | mask | sed -E 's#^(git@github\.com:|ssh://git@github\.com/|https://github\.com/)##; s#/$##; s#\.git$##')"
-[[ "$slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "${remote} の URL から GitHub の owner/repo を読めない（URL は出さない）。--remote で GitHub の remote を指す" >&2; exit 1; }
+[[ "$slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "${shown} の URL から GitHub の owner/repo を読めない（URL は出さない）。--remote で GitHub の remote を指す" >&2; exit 1; }
 
 parent=""
 rc=0; out="$(git ls-remote --exit-code --heads "$remote" "refs/heads/$branch" 2>&1)" || rc=$?
@@ -38,7 +39,7 @@ case "$rc" in
   0) out="$(git fetch -q "$remote" "refs/heads/$branch" 2>&1)" || { echo "pr-assets を取れない: $(printf '%s' "$out" | mask)" >&2; exit 1; }
      parent="$(git rev-parse FETCH_HEAD)" ;;
   2) ;;  # まだ無い → 最初の commit を作る
-  *) echo "remote を読めない（${remote}・exit ${rc}）: $(printf '%s' "$out" | mask)" >&2; exit 1 ;;
+  *) echo "remote を読めない（${shown}・exit ${rc}）: $(printf '%s' "$out" | mask)" >&2; exit 1 ;;
 esac
 
 idx="$(mktemp -u "${TMPDIR:-/tmp}/pr-asset-index.XXXXXX")"
@@ -51,7 +52,7 @@ done
 tree="$(GIT_INDEX_FILE="$idx" git write-tree)"
 msg="pr-assets: #${pr} に画像 ${#} 枚"
 if [ -n "$parent" ]; then commit="$(git commit-tree "$tree" -p "$parent" -m "$msg")"; else commit="$(git commit-tree "$tree" -m "$msg")"; fi
-git push -q "$remote" "$commit:refs/heads/$branch"
+out="$(git push -q "$remote" "$commit:refs/heads/$branch" 2>&1)" || { echo "push できない（${shown}）: $(printf '%s' "$out" | mask)" >&2; exit 1; }
 
 for f in "$@"; do
   name="$(basename "$f")"
