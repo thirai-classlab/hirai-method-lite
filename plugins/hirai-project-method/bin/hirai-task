@@ -162,12 +162,15 @@ memos / today / after-merge）:
     → align → 一覧（memos・unblocked）と警告行（orphans・stuck・wave-holds・
     merged-designs・no-issue の merge・user-actions）の順に呼ぶ。警告行は
     書き込まない（単独の一覧スクリプトにもしない）。
-    完了を書くのは closed かつ Status が 完了 でない task だけ（書くのは Status=完了 のみ。
-    done --not-planned が書く Status と同じ値）。align・close-parents と同じ書き込みの許可に従い、
-    書く前に対象を 1 行出し（「8 件のうち 5 件」の形）、item id と選択肢 id を先に引いてから issue の state を
-    読み直し、閉じていなければ飛ばして、読み直した直後に item_id を渡して書く。書いた番号を 1 行で出す。
-    この repo の行だけを書く。書けた件数の上限は 5、試す件数の上限は 15（失敗・飛ばしは書けた枠に数えない。
-    超えた分は次の today）。1 件書けなくても理由を出してほかを続けるが、403・429 なら残りを打ち切る。
+    完了を書くのは、closed で今の Status が 進行中・レビュー中・空、かつ [操作]・[User] でない task だけ
+    （書くのは Status=完了 のみ。done --not-planned が書く Status と同じ値）。目印の task と、承認待ち・判断待ち・
+    依存待ち・着手可・保留 のまま閉じた行は stuck に番号と題を出すだけ（誤って閉じた・実行していないものがありうる）。
+    align・close-parents と同じ書き込みの許可に従い、書く前に件数を 1 行出し、item id と選択肢 id を先に引いてから
+    state・種別・Status・題を読み直し（GraphQL 1 回）、書く相手でなければ飛ばして、読み直した直後に item_id を渡して書く。
+    1 件書くたびに「完了にした: #n（前の Status → 完了）題」を出す。この repo の行だけを書く（この絞りは完了の
+    書き込みだけ。align・close-parents は別 repo の行を絞らない）。1 回に書けた 5 件・45 秒まで（失敗・飛ばしは
+    書けた枠に数えない）。次の today は、試した番号の続きから（共有の控え gh-closed-done-cursor.json）。1 件書けなくても
+    理由を出してほかを続けるが、rate limit・権限の 403 なら残りを打ち切る（rate limit の回は align も一覧だけ）。
     書けない行は stuck に残り、別 repo の行は repo 名を添えて出す。journal が書けなくても警告 1 行で続ける。
     `today | head` で出力先が閉じても（BrokenPipeError）stdout を捨てて続ける。
       ・orphans: OPEN の行だけを見る。Project に居ない issue（repo の open issue 一覧
@@ -202,9 +205,9 @@ memos / today / after-merge）:
 
   状態の置き場所: gh-fields.json・gh-fields-rest.json・gh-task-journal.jsonl は
     checkout の git ディレクトリの下の `hirai-task/`、
-    gh-comments-since.json・gh-merged-designs-since.json は、全 worktree で共有する
+    gh-comments-since.json・gh-merged-designs-since.json・gh-closed-done-cursor.json は、全 worktree で共有する
     git の common-dir の下の `hirai-task/`（_shared_state_dir）に置く。作業ツリーの外なので
-    追跡されず、.gitignore も要らない。共有の 2 ファイルは
+    追跡されず、.gitignore も要らない。共有の 3 ファイルは
     `{"<repo>[#<project番号>]": {...}}` の形で、複数リポ・複数 Project を 1 ファイルで
     区別する。読めない・壊れているときは警告を出し、その回は「何も基準が無い」側
     （既定の遡りへ）に倒す。
@@ -333,13 +336,16 @@ _WRITE_INTERVAL_SECONDS = 8.5
 
 
 class GhError(Exception):
-    def __init__(self, message: str, code: int = 1):
+    """detail は gh が返した失敗の文だけ（path・issue 番号を含まない）。rate limit の判定は message でなく detail を見る。"""
+
+    def __init__(self, message: str, code: int = 1, detail: str = ''):
         super().__init__(message)
         self.code = code
+        self.detail = detail
 
 
-def die(message: str, code: int = 1) -> None:
-    raise GhError(message, code)
+def die(message: str, code: int = 1, *, detail: str = '') -> None:
+    raise GhError(message, code, detail)
 
 
 # 書き込み（REST の GET 以外・GraphQL の mutation）を 1 回でも呼んだか。
@@ -369,7 +375,7 @@ def rest(method: str, path: str, body: dict | None = None, *, ok_fail: bool = Fa
         message = (err or out).strip()
         if ok_fail:
             return {'_error': message}
-        die(f'gh api {method} {path} が失敗した: {message}', 1)
+        die(f'gh api {method} {path} が失敗した: {message}', 1, detail=message)
     text = out.strip()
     if not text:
         return {}
@@ -387,7 +393,7 @@ def rest_paginated(path: str) -> list:
         'api', '--paginate', path, '-H', 'X-GitHub-Api-Version: 2022-11-28',
     ])
     if rc != 0:
-        die(f'gh api --paginate {path} が失敗した: {(err or out).strip()}', 1)
+        die(f'gh api --paginate {path} が失敗した: {(err or out).strip()}', 1, detail=(err or out).strip())
     text = out.strip()
     if not text:
         return []
@@ -409,7 +415,7 @@ def graphql(query: str, variables: dict | None = None) -> dict:
     if rc == 0 and query.lstrip().startswith('mutation'):
         _state['wrote'] = True
     if rc != 0:
-        die(f'gh api graphql が失敗した（exit {rc}）: {(err or out).strip()}', 1)
+        die(f'gh api graphql が失敗した（exit {rc}）: {(err or out).strip()}', 1, detail=(err or out).strip())
     text = out.strip()
     if not text.startswith('{'):
         die(f'gh api graphql が JSON を返さなかった（レート制限・認証を疑う）: {text or err}', 1)
@@ -418,7 +424,7 @@ def graphql(query: str, variables: dict | None = None) -> dict:
     except json.JSONDecodeError as exc:
         die(f'gh api graphql の応答を JSON として読めなかった（{exc}）: {text}', 1)
     if payload.get('errors'):
-        die(f'gh api graphql がエラーを返した: {payload["errors"]}', 1)
+        die(f'gh api graphql がエラーを返した: {payload["errors"]}', 1, detail=json.dumps(payload['errors'], ensure_ascii=False))
     data = payload.get('data')
     if data is None:
         die(f'gh api graphql が data を返さなかった: {text}', 1)
@@ -1234,12 +1240,34 @@ def ready_block_reason(
 
 
 def is_closed_not_done(item: dict) -> bool:
-    """閉じているのに Status が 完了 でない行（today が 完了 を書く相手。stuck の警告も同じ判定）。"""
+    """閉じているのに Status が 完了 でない行（stuck の警告。today が 完了 を書く相手はこの一部）。"""
     return item.get('state') == 'CLOSED' and item.get('status') != DONE_STATUS
 
 
-def closed_not_done_rows(items: list[dict]) -> list[dict]:
-    return [i for i in task_items(items) if is_closed_not_done(i)]
+# today が 完了 を書く前の Status。ほかの Status（承認待ち・判断待ち・依存待ち・着手可・保留）のまま閉じた行は、
+# 誤って閉じたものがありうるので書かず、stuck に番号と題を出すだけ（人が見て直す）。
+CLOSED_DONE_FROM = (IN_PROGRESS_STATUS, REVIEW_STATUS, '')
+
+
+def closed_done_blocker(title: str, kind: str, status: str) -> str:
+    """today が 完了 を書かない理由（書くなら空）。板の行と、書く直前に読み直した行の両方に当てる。"""
+    if kind in EXCLUDE_KINDS:
+        return f'{KIND_FIELD}が {kind}'
+    mark = next((m for m in MARKS if has_mark(title, m)), '')
+    if mark:
+        return f'{mark} の task'
+    if status not in CLOSED_DONE_FROM:
+        return f'Status が {status}'
+    return ''
+
+
+def closed_done_targets(items: list[dict]) -> list[dict]:
+    """today が 完了 を書く行（この repo の、閉じた task のうち closed_done_blocker が空のもの）。"""
+    return [
+        i for i in task_items(items)
+        if is_closed_not_done(i) and _same_repo(i, REPO)
+        and not closed_done_blocker(i.get('title') or '', i.get('kind') or '', i.get('status') or '')
+    ]
 
 
 def ready_warnings(items: list[dict], extras: dict[int, dict] | None = None) -> list[str]:
@@ -1633,18 +1661,24 @@ def _guard_status_write(
         die(f'#{number} は着手可にしない: {reason}', 2)
 
 
-def kind_fix_command(number: int) -> str:
-    """種別が空の行を直すコマンド（orphans の「直す:」と set・start の警告が同じ文を使う）。"""
-    return f"hirai-task set {number} {KIND_FIELD} {TASK_KIND}（feature・wave・設計メモならその値）"
+def kind_fix_line(number: int) -> str:
+    """種別が空の行の直し方（orphans と set・start の警告が同じ文を使う。注は前に置き、コロンの後ろはそのまま打てる）。"""
+    return f'直す（feature・wave・設計メモならその値）: hirai-task set {number} {KIND_FIELD} {TASK_KIND}'
 
 
-def warn_if_kind_empty(item: dict, number: int) -> None:
+def project_has_kind_field(project_number: int) -> bool:
+    """Project に種別の項目があるか（無い Project では、種別を足す案内を出さない）。読めなければ True。"""
+    try:
+        mapping = _load_rest_fields_cache() or {}
+        return KIND_FIELD in mapping or KIND_FIELD in sync_fields_rest(project_number)
+    except GhError:
+        return True
+
+
+def warn_if_kind_empty(project_number: int, item: dict, number: int) -> None:
     """相手の種別が空なら stderr に警告 1 行（止めない。exit code は変えない。orphans の「種別なし」と同じ直し方）。"""
-    if not item['fields'].get(KIND_FIELD, ''):
-        print(
-            f'警告: #{number} は{KIND_FIELD}が空。直すには {kind_fix_command(number)}',
-            file=sys.stderr,
-        )
+    if not item['fields'].get(KIND_FIELD, '') and project_has_kind_field(project_number):
+        print(f'警告: #{number} は{KIND_FIELD}が空。{kind_fix_line(number)}', file=sys.stderr)
 
 
 def cmd_set(number: int, field: str, value: str) -> int:
@@ -1658,7 +1692,7 @@ def cmd_set(number: int, field: str, value: str) -> int:
     if field == 'Status':
         _guard_status_write(project_number, item, number, value)
     if field != KIND_FIELD:
-        warn_if_kind_empty(item, number)
+        warn_if_kind_empty(project_number, item, number)
     write_single_select_rest(project_number, number, field, value)
     print(f'#{number} {field}={value}')
     return 0
@@ -1729,7 +1763,7 @@ def cmd_start(number: int, approved: str | None, reread: bool = False) -> int:
     item = _require_item(project_number, number)
     _reject_wave_feature(item, number, 'start')
     _reject_closed(item, number, 'start')
-    warn_if_kind_empty(item, number)
+    warn_if_kind_empty(project_number, item, number)
     waived = []
     if item['blocked_by_open']:
         blocking, waived = split_start_blockers(project_number, item)
@@ -1945,6 +1979,7 @@ def append_body_line(number: int, item: dict, line: str) -> None:
 # selftest から time.sleep を差し替えられるようにする（実の待ち時間を持たせずに
 # ポーリングの経路そのものを検査するため）。
 sleep_fn = time.sleep
+clock_fn = time.monotonic
 
 
 def wait_for_item_status(project_number: int, number: int, *, attempts: int = 30, delay: float = 2.0) -> dict:
@@ -4334,9 +4369,26 @@ def _apply_close_parents_plan(plan: dict, project_number: int) -> None:
 
 
 CLOSED_DONE_WRITE_LIMIT = 5  # 1 回の today で 完了 を書けた件数の上限（失敗・飛ばしは数えない）。
-CLOSED_DONE_TRY_LIMIT = 15  # 1 回の today で試す件数の上限。today への上乗せを約 45 秒に抑える（書けた 5 件 × 8.5 秒 ＋ 失敗の分）。
+# 1 回の today で書き込みに使う秒の上限。次の 1 件を始めるとき（前の書き込みからの待ちを足して）これを超えるなら止める。
+# 始めた 1 件は最後まで行うので、上乗せは最大でこの秒＋ 1 件分（REST 2 回・GraphQL 1 回）。
+CLOSED_DONE_SECONDS = 45
 _REASON_LIMIT = 200
-_RATE_LIMIT_RE = re.compile(r'\b(?:403|429)\b|secondary rate limit', re.IGNORECASE)
+_RATE_LIMIT_RE = re.compile(r'rate limit|\(HTTP 429\)', re.IGNORECASE)
+_DENIED_RE = re.compile(r'\(HTTP 403\)')
+STOP_RATE, STOP_DENIED = 'rate', 'denied'
+# 打ち切った理由 → (文の頭, 次にすること)
+_STOP_LINES = {
+    STOP_RATE: ('rate limit のため', '時間をおいて today をやり直すこと'),
+    STOP_DENIED: ('403（権限）のため', 'token の権限を見ること（待っても直らない）'),
+}
+
+
+def gh_stop_reason(exc: GhError) -> str:
+    """残りの行も同じ理由で落ちる失敗なら、その種類（rate limit・権限の 403）。ほかは空。
+    gh の失敗の文（detail）だけを見る（message には issue 番号の 403・429 が入りうる）。"""
+    if _RATE_LIMIT_RE.search(exc.detail):
+        return STOP_RATE
+    return STOP_DENIED if _DENIED_RE.search(exc.detail) else ''
 
 
 def _say(text: str) -> None:
@@ -4363,55 +4415,83 @@ def _short_reason(exc: Exception) -> str:
 
 class ClosedDoneResult(NamedTuple):
     fixed: list[int]  # 書けた番号
-    failed: list[tuple[int, str]]  # (書けなかった番号, 理由 1 行)
-    skipped: list[tuple[int, str]]  # (飛ばした番号, 理由 1 行)
-    untried: list[dict]  # 上限・打ち切りで試さなかった行（次の today の対象）
-    rate_limited: bool  # 403・429 で残りを打ち切った
+    rate_limited: bool  # rate limit で残りを打ち切った（この回の align は一覧だけにする）
 
 
-def _apply_closed_done(project_number: int, rows: list[dict]) -> ClosedDoneResult:
-    """閉じたのに完了でない行へ Status=完了 だけを書く（done と同じ値。閉じた理由が not planned でも
-    done --not-planned が書く Status は 完了）。item id と選択肢 id を先に引き、そのあとで issue の今の state を
-    REST で読み直して、閉じていなければ（板を読んだあとに reopen された）飛ばす。読み直しと書き込みの間に
-    検索を挟まない（item_id= を渡す）。1 件落ちても理由を残してほかを続けるが、403・429 なら残りを打ち切る。
-    書けた件数が CLOSED_DONE_WRITE_LIMIT、試した件数が CLOSED_DONE_TRY_LIMIT に達したら止める。"""
+def _write_one_closed_done(project_number: int, number: int) -> tuple[str, str, str]:
+    """1 件へ Status=完了 だけを書き、(書かなかった理由, 書く前の Status, 題) を返す（書けたら理由は空）。
+    item id と選択肢 id を先に引き、そのあとで state・種別・Status・題を読み直して、書く相手でなければ書かない
+    （板を読んだあとに reopen された・人が動かした）。読み直しと書き込みの間に検索を挟まない（item_id= を渡す）。"""
+    item_id = rest_item_id(project_number, number, attempts=1)  # 閉じた行は作った直後でないので、検索の遅れを待たない
+    rest_option_id(project_number, 'Status', DONE_STATUS)
+    now = _require_item(project_number, number)
+    status, title = now['fields'].get('Status', ''), now['title']
+    if now['state'] != 'CLOSED':
+        return ('今は open のため（reopen された）' if now['state'] == 'OPEN' else f"今は {now['state'] or '不明'} のため"), status, title
+    blocker = closed_done_blocker(title, now['fields'].get(KIND_FIELD, ''), status)
+    if blocker:
+        return f'今は {blocker} のため', status, title
+    write_single_select_rest(project_number, number, 'Status', DONE_STATUS, item_id=item_id)
+    return '', status, title
+
+
+def _apply_closed_done(project_number: int, rows: list[dict]) -> tuple[list[int], list[dict], str]:
+    """rows へ 1 件ずつ 完了 を書き、(書けた番号, 試さなかった行, 打ち切った理由) を返す。1 件ごとに 1 行を出す
+    （時間切れで止められても、何を書いたかが残る）。1 件落ちても理由を残してほかを続けるが、rate limit・権限の 403 なら
+    残りを打ち切る。書けた件数が CLOSED_DONE_WRITE_LIMIT に達したか、経過が CLOSED_DONE_SECONDS を超えるなら止める。"""
     fixed: list[int] = []
-    failed: list[tuple[int, str]] = []
-    skipped: list[tuple[int, str]] = []
-    rate_limited = False
-    tried = 0
+    stop, tried, waiting = '', 0, 0.0
+    started = clock_fn()
     for row in rows:
-        if len(fixed) >= CLOSED_DONE_WRITE_LIMIT or tried >= CLOSED_DONE_TRY_LIMIT or rate_limited:
+        if stop or len(fixed) >= CLOSED_DONE_WRITE_LIMIT or clock_fn() - started + waiting >= CLOSED_DONE_SECONDS:
             break
+        if waiting:  # 書き込みの間だけ待つ（最後の書き込みのあとは待たない）
+            sleep_fn(waiting)
+            waiting = 0.0
         tried += 1
         number = row['number']
         try:
-            item_id = rest_item_id(project_number, number)
-            rest_option_id(project_number, 'Status', DONE_STATUS)
-            current = rest('GET', f'repos/{REPO}/issues/{number}')
-            if not isinstance(current, dict):
-                failed.append((number, f'issue の応答が想定外の形だった: {str(current)[:80]}'))
-                continue
-            state = current.get('state')
-            if state != 'closed':
-                reason = '今は open のため（reopen された）' if state == 'open' else f"今は {state or '不明'} のため"
-                skipped.append((number, reason))
-                continue
-            write_single_select_rest(project_number, number, 'Status', DONE_STATUS, item_id=item_id)
+            reason, before, title = _write_one_closed_done(project_number, number)
         except GhError as exc:
-            failed.append((number, _short_reason(exc)))
-            rate_limited = bool(_RATE_LIMIT_RE.search(str(exc)))
+            _say(f'  {DONE_STATUS}にできなかった: #{number}（{_short_reason(exc)}）')
+            stop = gh_stop_reason(exc)
+            continue
+        if reason:
+            _say(f'  飛ばした: #{number}（{reason}）')
             continue
         try:
             _append_journal({
-                'op': 'close-sync', 'number': number, 'to': DONE_STATUS, 'from': row.get('status') or '',
+                'op': 'close-sync', 'number': number, 'to': DONE_STATUS, 'from': before,
                 'repo': REPO, 'project': project_number,
             })
         except OSError as exc:
             print(f'警告: #{number} の journal を書けなかった（{exc}）。完了は書いた', file=sys.stderr)
         fixed.append(number)
-        sleep_fn(_WRITE_INTERVAL_SECONDS)
-    return ClosedDoneResult(fixed, failed, skipped, rows[tried:], rate_limited)
+        waiting = _WRITE_INTERVAL_SECONDS
+        _say(f'  {DONE_STATUS}にした: #{number}（{before or "空"} → {DONE_STATUS}）{title[:60]}')
+    return fixed, rows[tried:], stop
+
+
+CLOSED_DONE_CURSOR_CACHE = os.path.join(_shared_state_dir(), 'gh-closed-done-cursor.json')
+
+
+def rotate_closed_done(rows: list[dict], last: int) -> list[dict]:
+    """番号の順に並べ、前の today が最後に試した番号（last）の次から始める（書けない行が先頭に並んでも、
+    何回か today を回せば後ろの行に届く）。"""
+    ordered = sorted(rows, key=lambda r: r['number'])
+    return [r for r in ordered if r['number'] > last] + [r for r in ordered if r['number'] <= last]
+
+
+def _load_closed_done_cursor(namespace: str) -> int:
+    last = _load_namespaced(CLOSED_DONE_CURSOR_CACHE, namespace).get('last')
+    return last if isinstance(last, int) else 0
+
+
+def _save_closed_done_cursor(namespace: str, last: int) -> None:
+    try:
+        _save_namespaced(CLOSED_DONE_CURSOR_CACHE, namespace, {'last': last})
+    except OSError as exc:
+        print(f'警告: 完了を試した位置を控えられなかった（{exc}）。次の today は同じ所から試す', file=sys.stderr)
 
 
 def with_done_status(items: list[dict], numbers: list[int]) -> list[dict]:
@@ -4426,33 +4506,27 @@ def with_done_status(items: list[dict], numbers: list[int]) -> list[dict]:
     ]
 
 
-def sync_closed_done(project_number: int, items: list[dict], *, write_allowed: bool) -> list[int]:
-    """today の見回り: 閉じたのに完了でない task に Status=完了 を書き、書いた番号を 1 行で出す。
-    書き込みの許可が無いときは何もしない（行は stuck に出る）。対象はこの repo の行だけ
-    （別 repo の同じ番号を書かない）。書けた件数は CLOSED_DONE_WRITE_LIMIT、試す件数は
-    CLOSED_DONE_TRY_LIMIT まで（失敗・飛ばしは書けた枠に数えない）。
-    戻り値は書けた番号（呼び出し側が with_done_status で items に反映する。書けなかった行は
-    stuck に残る）。"""
-    rows = [i for i in closed_not_done_rows(items) if _same_repo(i, REPO)]
+def sync_closed_done(project_number: int, items: list[dict], *, write_allowed: bool) -> ClosedDoneResult:
+    """today の見回り: 閉じたのに完了でない task（closed_done_targets）へ Status=完了 を書き、1 件 1 行で出す。
+    書き込みの許可が無いときは何もしない（行は stuck に出る）。書けた件数は CLOSED_DONE_WRITE_LIMIT、
+    使う時間は CLOSED_DONE_SECONDS まで。書けた番号は、呼び出し側が with_done_status で items に反映する
+    （書けなかった行・書く相手でない行は stuck に残る）。"""
+    rows = closed_done_targets(items)
     if not rows or not write_allowed:
-        return []
-    # 書く前に対象を出して flush する（時間切れで止められても、何を書いていたかが残る）。
-    head = rows[:CLOSED_DONE_WRITE_LIMIT]
-    names = '・'.join('#%d' % r['number'] for r in head)
-    of_total = f'{len(rows)} 件のうち {len(head)} 件' if len(rows) > len(head) else f'{len(rows)} 件'
-    _say(f'閉じたのに完了でない {of_total}を{DONE_STATUS}にする: {names}')
-    result = _apply_closed_done(project_number, rows)
-    if result.fixed:
-        _say(f"閉じたのに完了でない {len(result.fixed)} 件を{DONE_STATUS}にした: {'・'.join(f'#{n}' for n in result.fixed)}")
-    for number, reason in result.failed:
-        _say(f'  {DONE_STATUS}にできなかった: #{number}（{reason}）')
-    for number, reason in result.skipped:
-        _say(f'  飛ばした: #{number}（{reason}）')
-    if result.rate_limited:
-        _say(f'  403・429（rate limit）のため残り {len(result.untried)} 件は打ち切った。時間をおいて today をやり直すこと')
-    elif result.untried:
-        _say(f'  残り {len(result.untried)} 件は次の today で{DONE_STATUS}にする')
-    return result.fixed
+        return ClosedDoneResult([], False)
+    namespace = f'{REPO}#{project_number}'
+    rows = rotate_closed_done(rows, _load_closed_done_cursor(namespace))
+    _say(f'閉じたのに完了でない task を{DONE_STATUS}にする（対象 {len(rows)} 件・1 回 {CLOSED_DONE_WRITE_LIMIT} 件まで）')
+    fixed, untried, stop = _apply_closed_done(project_number, rows)
+    tried = rows[:len(rows) - len(untried)]
+    if tried:
+        _save_closed_done_cursor(namespace, tried[-1]['number'])
+    if stop and untried:
+        why, advice = _STOP_LINES[stop]
+        _say(f'  {why}残り {len(untried)} 件は打ち切った。{advice}')
+    elif untried:
+        _say(f'  残り {len(untried)} 件は次の today で{DONE_STATUS}にする')
+    return ClosedDoneResult(fixed, stop == STOP_RATE)
 
 
 # ── today の警告行（書き込まない・単独の一覧スクリプトにしない） ────
@@ -4468,7 +4542,7 @@ def orphan_rows(items: list[dict]) -> list[dict]:
         if not kind:
             row = {'number': i['number'], 'title': i.get('title', ''), 'why': '種別なし'}
             if _same_repo(i, REPO):  # 別 repo の行へ、この repo の番号で直すコマンドを出さない
-                row['fix'] = kind_fix_command(i['number'])
+                row['fix'] = kind_fix_line(i['number'])
             rows.append(row)
             continue
         if kind in ('task', FEATURE_KIND) and i.get('parent_number') is None:
@@ -4740,7 +4814,7 @@ def cmd_close_parents(as_json: bool = False, *, items: list[dict] | None = None)
     return 0
 
 
-def cmd_align(as_json: bool = False, *, items: list[dict] | None = None) -> int:
+def cmd_align(as_json: bool = False, *, items: list[dict] | None = None, write: bool = True) -> int:
     project_number = discover_project_number()
     if items is None:
         items = fetch_all_items(project_number)
@@ -4764,7 +4838,7 @@ def cmd_align(as_json: bool = False, *, items: list[dict] | None = None) -> int:
     else:
         _print_align_plan(plan)
     # --json は dry-run 専用（cmd_close_parents と同じ理由）。
-    if not as_json and align_write_allowed(items):
+    if not as_json and write and align_write_allowed(items):
         _apply_align_plan(project_number, plan)
     return 0
 
@@ -4919,11 +4993,13 @@ def cmd_today() -> int:
         items = fetch_all_items(project_number)
     # 閉じたのに完了でない行を 完了 にする（書くのは Status=完了 だけ。あとの段は書いたあとの items を見る）。
     synced = sync_closed_done(project_number, items, write_allowed=write_allowed)
-    items = with_done_status(items, synced)
-    cmd_align(items=items)
-    if align_write_allowed(items):
+    items = with_done_status(items, synced.fixed)
+    if synced.rate_limited:
+        _say('  align は一覧だけにした（rate limit の最中に書き込みを重ねない）')
+    cmd_align(items=items, write=not synced.rate_limited)
+    if not synced.rate_limited and align_write_allowed(items):
         # 取り直した板に 完了 の書き込みがまだ映らなくても、書いた行は 完了 として見る。
-        items = with_done_status(fetch_all_items(project_number), synced)
+        items = with_done_status(fetch_all_items(project_number), synced.fixed)
     _print_memos(items)
     cmd_unblocked(items=items)
 
@@ -4953,13 +5029,14 @@ def cmd_today() -> int:
     _save_since_cache(MERGED_DESIGNS_SINCE_CACHE, REPO, new_since)
     no_issue_line = no_issue_merge_line(closed_prs)
     user_actions = user_action_rows(items)
+    has_kind_field = any(o.get('fix') for o in orphans) and project_has_kind_field(project_number)
 
     if orphans or orphans_missing:
         print(f'orphans {len(orphans) + len(orphans_missing)} 件')
         for o in orphans:
             print(f"  #{o['number']:<4} {o['title'][:50]}（{o['why']}）")
-            if o.get('fix'):
-                print(f"    直す: {o['fix']}")
+            if o.get('fix') and has_kind_field:
+                print(f"    {o['fix']}")
         for n in orphans_missing:
             print(f"  #{n:<4}（Project に居ない）")
     if stuck:
