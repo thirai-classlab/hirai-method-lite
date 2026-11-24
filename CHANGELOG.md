@@ -10,6 +10,11 @@
 - **見張り（`worktree-guard.sh`）は、`worktree: block` がどこにも無ければ `git` もコマンドの読み取り（`awk`）も呼ばずに抜ける**（3.0.1 の見送り）: 見るのは環境変数 `HC_WORKTREE`（`block` 以外が入っていればそこで抜ける）・ホームの `~/.claude/mode.yml`・対象の dir（Edit・Write・NotebookEdit はファイルの dir、`git commit` は cwd と `CLAUDE_PROJECT_DIR`）とその祖先の `.claude/mode.yml`。`git -C`・`--git-dir`・`--work-tree` のあるコマンドだけは、対象を知るために読み取ってから、対象の dir を同じ見方で見て `git` の前に抜ける。止める・通すの判定は変えない（3.0.1 の見張りと、使い捨てのリポ 13・環境変数・ホーム・cwd・コマンドの組 4,000 通りで突き合わせて違い 0。うち 3.0.1 が止めたのは 1,217）。例外は 1 つ: `core.worktree` でよその dir を作業ツリーにしたリポは、その先の `mode.yml` を見ない。既定の dir（`-C` などの無い commit の対象）を決める `git` は 1 回だけ呼ぶ（入れ子ごとに呼んでいた）。二重引用符の `"$( )"` を並べたコマンドの限界は約 1,000 個から約 2,500 個になった（README の数も測り直した）。`git -C` の先の `symlink/..` は、`git` と同じく symlink の先の親と読む
 - **知らせの hook 3 本（Notification・StopFailure・PermissionDenied）の制限を 10 秒から 30 秒に**（3.0.1 の見送り）: 負荷の高い機械で打ち切られると、知らせが何も出さずに消える。README の秒も直した
 - **検査**: 早い exit は `tests/smoke.sh` の見張りの確かめに足した（偽の `git`・`awk` を PATH の頭に置き、呼んだ記録が無いことと、block のリポでは記録が残ることを見る。漏らさない側は ホーム・環境変数・祖先・`CLAUDE_PROJECT_DIR`・`-C`・`--git-dir`・`--work-tree`・引用符で割った書き方・symlink・`mode.yml` の書き方。壊した複製 16 通りを追加）。壊した複製 `guard-outer-gitignored` は、`return 1` を持つ関数の全部に当たって見張りごと壊していたので、外側の `.gitignore` を見る形だけに絞った。知らせの hook の秒は case 2
+- **導入先で要る操作**: `/plugin marketplace update hirai-lite` → 端末で `claude plugin update hirai-lite@hirai-lite --scope <入れた範囲>`（足すプラグインも入れたリポは続けて `claude plugin update hirai-project-method@hirai-lite --scope <入れた範囲>`） → 会話の開き直し。届いたかは `claude plugin list` の版で見る（土台は `3.1.0` か `3.1.0-<12 桁>`、足すプラグインは `1.1.0` か `1.1.0-<12 桁>`。`3.0.1`・`1.0.0` で始まる版は未適用）。**足すプラグインを入れたリポの土台は、`main` の merge commit に tag `hirai-lite--v3.1.0` が打たれて push されるまで届かない**（打つまで update は成功の表示のまま 3.0.1 に留まる）
+- **取り込んだあとにすること（配る側）**: `main` の merge commit に tag を 2 つ打って push する（3.0.1 は土台の 1 つだけだった。足すプラグインの版も上がる）。順に 1 行ずつ:
+  - `git tag -a hirai-lite--v3.1.0 <merge commit> -m "hirai-lite 3.1.0" && git push origin hirai-lite--v3.1.0`
+  - `git tag -a hirai-project-method--v1.1.0 <merge commit> -m "hirai-project-method 1.1.0" && git push origin hirai-project-method--v1.1.0`
+  - 打てたかは `git ls-remote --tags origin` に、2 つの tag と `^{}` の行（merge commit の sha）が出ることで見る
 
 ## v3.0.1
 heyapro-app で 3.0.0 を実物の Orca（1.4.229）と動かして見つかった、知らせ 2 つと見張りの時間切れを直した（heyapro-app の issue #1966。確かめの記録は #1959・#1960）。

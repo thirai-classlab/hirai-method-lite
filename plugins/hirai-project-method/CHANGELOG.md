@@ -10,6 +10,8 @@
 - **no-issue の merge**: 直近 7 日に `no-issue` ラベルで merge された PR を「no-issue の merge（7 日）N 件: #a・#b」の 1 行で出す（0 件なら出さない。ただし 100 件で見切れているときは 0 件でも「0 件」と出す）。既定の branch 向けの PR だけを数える（設計の PR も入る）。merged-designs が読む closed の PR 100 件を共有し、API は増えない。100 件で 7 日に届かないときは「（7 日・直近の closed PR 100 件まで）」と添える。ラベル名は `NO_ISSUE_LABEL` の 1 か所。
 - **merged-designs**: 本文の印 `pr-template-design-v1` に加え、「種別: 設計・決定の文書」の行（土台 3.1.0 の PR の雛形）でも設計の PR を見分ける。
 - **検査**: `hirai_task_selftest.py` に、完了を書く・書けない 1 件＋書ける 1 件・許可なし・0 件と feature・not planned と同じ値・書く直前の読み直しが 404・403・state なし・null・open のとき・検索の間の reopen・rate limit での打ち切り・失敗が枠を食わない・出力先が閉じたとき・journal の失敗・種別なしの直し・set と start の警告・no-issue の 0 件／3 件／6 日前／8 日前／境目／100 件で切れる・closed の PR を 1 回だけ読む、などを足した。偽の板の行は url を持ち、別 repo の同じ番号・書く間に開き直される場合・journal・8.5 秒おき・書く順・GraphQL の回数・today の引数も見る（実装を 1 か所ずつ壊した写しで落ちることを確かめた）。
+- **注だけの直し**: `scripts/ghp-path.sh` の注 2 か所の「5 秒」を、土台の今の SessionStart の制限（3.0.1 から 30 秒）に直した（動きは変わらない）。
+- **導入先で要る操作**: `/plugin marketplace update hirai-lite` → 端末で `claude plugin update hirai-lite@hirai-lite --scope <入れた範囲>` と `claude plugin update hirai-project-method@hirai-lite --scope <入れた範囲>` → 会話の開き直し。届いたかは `claude plugin list` の `hirai-project-method` の版が `1.1.0`（または `1.1.0-<12 桁>`）かで見る。配る側は `main` の merge commit に tag を 2 つ（`hirai-lite--v3.1.0`・`hirai-project-method--v1.1.0`）打って push する。土台への依存は `hirai-lite >=3.0.0` のまま。
 
 ## v1.0.0
 hirai-lite 2.9.0 の GitHub Project の部品を、土台（hirai-lite 3.0.0）から分けて足すプラグインにした。設計: hirai-lite の設計「hirai-lite を土台にし、GitHub Project のタスク管理を hirai-project-method に分ける」（2026-11-23 承認）。
