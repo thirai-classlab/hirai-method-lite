@@ -6,6 +6,7 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
   読む側: ready / pending / blocked / show <issue> / memos / unblocked / coverage / impact <draft>
   書く側: new / add / set / start / review / done / reopen（approve は廃止）/ design-merge <draft>（file だけ書く）
   会話の最初と merge の直後: comments / close-parents / align / today / after-merge
+  進みと割り振り: load（全体の %・担当ごとの順番と進捗率の表。--json・--changed・--cached）／ assign <issue> <作業のセッション> [順]（手元の控え）。start・assign は Assignees が空なら自分を入れる
   全体像: board（HTML・--text の木・--summary の要約。--publish <issue> で要約を issue の目印の間に書く）
   立ち上げ: setup（GitHub Project の作成・紐づけ・項目・ビュー。既定は計画だけで、--apply で書く。scripts/hirai_project_setup.py）
   カード: card <issue> [--sync]（承認・判断・人の作業のカードを読んで形を確かめ、承認カードを項目「ひとこと」「推奨」に写す）／ card --lint（読むだけ）
@@ -5135,6 +5136,7 @@ def cmd_after_merge(pr_number: int) -> int:
         for c in all_candidates:
             print(f"  #{c['number']:<4}（{c['kind']}・子 {c['children_total']} 件）")
     cmd_unblocked(items=items)
+    print_load_after(_patch_closed(*closing_numbers))
     return 0
 
 
@@ -5455,6 +5457,360 @@ def cmd_board(opts: dict) -> int:
     return 0
 
 
+# ── load（全体の進みと、振っているタスクの順番・進捗率。描くのは scripts/hirai_load.py） ──
+# 板は board と同じ控え（10 分）を使い、GraphQL を増やさない。PR と CI は 1 回の問い合わせで引く。
+# だれの task かは GitHub の Assignees で持つ（Project に項目は足さない）。自分の作業のセッションの名前と順番は
+# 手元の控え（git の管理ディレクトリの下）で持つ。
+LOAD_PR_CACHE = os.path.join(_shared_state_dir(), 'gh-load-prs.json')
+LOAD_STATE = os.path.join(_shared_state_dir(), 'load-last.json')  # 前回出した段・担当・順番（--changed が比べる）
+LOAD_ASSIGN = os.path.join(_shared_state_dir(), 'load-assign.json')  # 自分の作業のセッションの割り振り（名前・順番）
+LOAD_PR_LIMIT = 50
+LOAD_OWNER_MAX = 40
+LOAD_ASSIGNEE_MAX = 50  # 1 回の問い合わせで Assignees を引く task の数
+LOAD_EXIT_UNCHANGED = 3  # --changed で動いた所が無い（表を 1 行も出さない）
+_LOAD_USAGE = '使い方: hirai-task load [--json] [--changed] [--cached | --refresh] [--if-coordinator]'
+_ASSIGN_USAGE = '使い方: hirai-task assign <issue> <担当> [順]'
+_LOAD_PR_NODE = '''number isDraft mergeable author { login }
+        closingIssuesReferences(first: 10) { nodes { number repository { nameWithOwner } } }'''
+def _load_pr_query(numbers: list[int]) -> str:
+    """PR と、Assignees を引く task（alias）を 1 本の問い合わせにする。"""
+    aliases = ''.join(f'\n  a{i}: issue(number: {int(n)}) {{ number assignees(first: 10) {{ nodes {{ login }} }} }}'
+                      for i, n in enumerate(numbers[:LOAD_ASSIGNEE_MAX]))
+    return _LOAD_PR_QUERY.replace('  repository(owner:$owner, name:$name) {', '  repository(owner:$owner, name:$name) {' + aliases, 1)
+
+
+_LOAD_PR_QUERY = '''
+query($owner:String!, $name:String!, $first:Int!) {
+  viewer { login }
+  repository(owner:$owner, name:$name) {
+    open: pullRequests(states: OPEN, first: $first, orderBy: {field: CREATED_AT, direction: DESC}) {
+      totalCount
+      nodes {
+        ''' + _LOAD_PR_NODE + '''
+        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+      }
+    }
+    merged: pullRequests(states: MERGED, first: $first, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        ''' + _LOAD_PR_NODE + '''
+      }
+    }
+  }
+}
+'''
+
+
+def _mode_setting(key: str) -> str:
+    """mode.yml の 1 項目を、プロジェクト → ホームの順に引く（nightly_ci と同じ読み方）。読めないときは RuntimeError。"""
+    for path in (os.path.join(_root(), '.claude', 'mode.yml'), os.path.expanduser('~/.claude/mode.yml')):
+        value = _yml_file_value(path, key)
+        if value:
+            return value
+    return ''
+
+
+def _load_module():
+    scripts_dir = os.path.join(_plugin_root(), 'scripts')
+    if not os.path.isfile(os.path.join(scripts_dir, 'hirai_load.py')):
+        die(f'描く側が見つからない: {scripts_dir}/hirai_load.py', 1)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    import hirai_load
+    return hirai_load
+
+
+def _load_pr_row(node: dict) -> dict:
+    commits = ((node.get('commits') or {}).get('nodes') or [{}])
+    rollup = ((commits[0].get('commit') or {}).get('statusCheckRollup') or {}) if commits else {}
+    closes = [c['number'] for c in ((node.get('closingIssuesReferences') or {}).get('nodes') or [])
+              if c.get('number') is not None and ((c.get('repository') or {}).get('nameWithOwner') or REPO).lower() == REPO.lower()]
+    return {'number': node.get('number'), 'draft': bool(node.get('isDraft')), 'conflict': node.get('mergeable') == 'CONFLICTING',
+            'author': (node.get('author') or {}).get('login') or '', 'closes': closes, 'checks': rollup.get('state') or ''}
+
+
+def fetch_load_prs(numbers: list[int] | tuple = ()) -> dict:
+    """開いている PR（CI の集約の状態つき）と、直近に merge した PR と、numbers の Assignees を、1 回の GraphQL で引く。"""
+    wanted = list(numbers)[:LOAD_ASSIGNEE_MAX]
+    data = graphql(_load_pr_query(wanted), {'owner': OWNER, 'name': REPO_NAME, 'first': LOAD_PR_LIMIT})
+    repo = data.get('repository') or {}
+    if len(numbers) > LOAD_ASSIGNEE_MAX:
+        print(f'警告: 担当の無い候補が {len(numbers)} 件あり、先頭の {LOAD_ASSIGNEE_MAX} 件だけ Assignees を見た', file=sys.stderr)
+    assignees = {str(n): [a['login'] for a in (((repo.get(f'a{i}') or {}).get('assignees') or {}).get('nodes') or []) if a]
+                 for i, n in enumerate(wanted)}
+    opened, merged = repo.get('open') or {}, repo.get('merged') or {}
+    nodes = [n for n in (opened.get('nodes') or []) if n]
+    if isinstance(opened.get('totalCount'), int) and opened['totalCount'] > len(nodes):
+        print(f'警告: 開いている PR が {opened["totalCount"]} 本あり、新しい {len(nodes)} 本だけで数えた', file=sys.stderr)
+    return {'key': _board_key(), 'repo': REPO, 'fetched_epoch': time.time(),
+            'me': ((data.get('viewer') or {}).get('login')) or '', 'assignees': assignees,
+            'open': [_load_pr_row(n) for n in nodes],
+            'merged': [_load_pr_row(n) for n in (merged.get('nodes') or []) if n]}
+
+
+def _cached_load_prs() -> dict | None:
+    data = _load_shared_json(LOAD_PR_CACHE)
+    if data.get('key') != _board_key() or data.get('repo') != REPO or not isinstance(data.get('open'), list) \
+            or not isinstance(data.get('merged'), list):
+        return None
+    return data
+
+
+def fetch_deadline_open(date: str) -> int | None:
+    """本文に「期限: <日付>」の行がある open の issue の数（検索は候補を絞るだけで、本文の行で数える）。
+    日付に触れただけの issue は数えない。取れない・打ち切られたときは None。"""
+    line_re = re.compile(r'^[\s>*+-]*期限\**\s*[:：]\**\s*' + re.escape(date) + r'(?!\d)', re.M)
+    query = urllib.parse.quote(f'repo:{REPO} is:issue is:open in:body "{date}"')
+    count, page = 0, 1
+    while page <= 10:
+        data = rest('GET', f'search/issues?q={query}&per_page=100&page={page}', ok_fail=True)
+        if '_error' in data or data.get('incomplete_results') or not isinstance(data.get('items'), list):
+            return None
+        count += sum(1 for i in data['items'] if 'pull_request' not in i and line_re.search(i.get('body') or ''))
+        if page * 100 >= int(data.get('total_count') or 0):
+            return count
+        page += 1
+    return None
+
+
+def _load_settings(prs: dict | None, *, network: bool) -> dict:
+    """mode.yml の load_deadline（YYYY-MM-DD）・load_deadline_label・load_mainline・load_mainline_label。
+    無い設定は空にして、その行・印を出さない。日付の形が違うときは期限の行だけ出さない。"""
+    date = _mode_setting('load_deadline')
+    label = _mode_setting('load_deadline_label') or '期限'
+    if date and not re.fullmatch(r'\d{4}-\d{2}-\d{2}', date):
+        print(f'警告: load_deadline は YYYY-MM-DD で書く（{date}）。期限の行は出さない', file=sys.stderr)
+        date = ''
+    count = None
+    if date:
+        cached = prs or {}
+        if network:
+            count = fetch_deadline_open(date)
+        elif cached.get('deadline_date') == date:
+            count = cached.get('deadline_open')
+    return {'deadline_date': date, 'deadline_label': label, 'deadline_open': count,
+            'mainline': _mode_setting('load_mainline'), 'mainline_label': _mode_setting('load_mainline_label') or '本線'}
+
+
+def _load_assignments() -> dict:
+    """手元の控えにある、自分の作業のセッションの割り振り {番号: {owner（セッションの名前）, order}}。"""
+    table = _load_shared_json(LOAD_ASSIGN).get('assign')
+    out = {}
+    for key, value in (table if isinstance(table, dict) else {}).items():
+        if re.fullmatch(r'\d+', str(key)) and isinstance(value, dict) and str(value.get('owner') or '').strip():
+            order = value.get('order')
+            out[int(key)] = {'owner': str(value['owner']), 'order': order if isinstance(order, (int, float)) else None}
+    return out
+
+
+def _assignee_candidates(issues: list[dict]) -> list[int]:
+    """Assignees を見る task: open で 進行中・レビュー中 の行（だれの task か・担当の居ない行を出すため）。"""
+    return [i['number'] for i in issues if i.get('kind') not in EXCLUDE_KINDS and i.get('state') != 'CLOSED'
+            and i.get('status') in (IN_PROGRESS_STATUS, REVIEW_STATUS)]
+
+
+def _any_board_cache() -> dict | None:
+    """控えを、古さを問わずに読む（--cached。形・リポ・Project の指定が違えば None）。"""
+    if not os.path.isfile(BOARD_CACHE):
+        return None
+    snap, _problem = _read_board_json(BOARD_CACHE)
+    return snap if snap is not None and snap['key'] == _board_key() and snap['repo'] == REPO else None
+
+
+def load_model(opts: dict, patch=None) -> dict:
+    """表の材料を組む。patch は、今の会話が書いた変更（start・done・after-merge）を控えに重ねる関数。"""
+    load = _load_module()
+    if opts['cached']:
+        snap, how = _any_board_cache(), 'cached'
+        prs = _cached_load_prs()
+        if snap is None or prs is None:
+            raise GhError('控えが無い', LOAD_EXIT_UNCHANGED)
+    else:
+        snap, how = _board_snapshot({'from': None, 'refresh': opts['refresh'], 'publish': None})
+        prs = fetch_load_prs(_assignee_candidates([i for i in snap['items'] if i.get('type') == 'Issue' and _same_repo(i, REPO)]))
+        prs['deadline_date'] = prs['deadline_open'] = None
+    settings = _load_settings(prs, network=not opts['cached'])
+    if not opts['cached']:
+        prs['deadline_date'], prs['deadline_open'] = settings['deadline_date'], settings['deadline_open']
+        _write_atomic(LOAD_PR_CACHE, json.dumps(prs, ensure_ascii=False))
+    view = board_view(snap, how)
+    if patch is not None:
+        patch(view)
+    model = load.build(view, prs, _load_assignments(), settings)
+    model['age_minutes'] = view['age_minutes']
+    return model
+
+
+def _save_load_state(model: dict) -> None:
+    _write_atomic(LOAD_STATE, json.dumps({'key': _board_key(), 'signature': model['signature']}, ensure_ascii=False))
+
+
+def _previous_load() -> dict | None:
+    data = _load_shared_json(LOAD_STATE)
+    return data if data.get('key') == _board_key() else None
+
+
+def parse_load_args(tail: list[str]) -> dict:
+    opts = {'json': False, 'changed': False, 'cached': False, 'refresh': False, 'if-coordinator': False}
+    for arg in tail:
+        name = arg[2:] if arg.startswith('--') else ''
+        if name not in opts or opts[name]:
+            die(_LOAD_USAGE, 2)
+        opts[name] = True
+    if opts['cached'] and opts['refresh']:
+        die(_LOAD_USAGE, 2)
+    return opts
+
+
+def cmd_load(opts: dict) -> int:
+    """進みと割り振りの表（読むだけ）。--changed は前回と比べて動いたときだけ出し、動いていなければ 1 行も出さず exit 3。"""
+    if not REPO:
+        die(_NO_REPO_MESSAGE, 2)
+    if opts['if-coordinator'] and not is_coordinator():  # hook が呼ぶ。コーディネーターでない会話では何も出さない
+        return LOAD_EXIT_UNCHANGED
+    load = _load_module()
+    try:
+        model = load_model(opts)
+    except GhError as exc:
+        if opts['cached'] and exc.code == LOAD_EXIT_UNCHANGED:
+            return LOAD_EXIT_UNCHANGED  # 控えだけで読めない（hook は何も出さない）
+        raise
+    if opts['changed'] and not load.changed(model, _previous_load()):
+        return LOAD_EXIT_UNCHANGED
+    if opts['json']:
+        print(json.dumps(model, ensure_ascii=False, indent=2))
+    else:
+        print(load.render(model), end='')
+        if opts['cached'] and model['age_minutes'] >= BOARD_CACHE_SECONDS // 60:
+            print(f"（控え: {model['age_minutes']} 分前）")
+    _save_load_state(model)
+    return 0
+
+
+def is_coordinator() -> bool:
+    """コーディネーターの会話か。`HC_NOTIFY=off` で開いた（土台の hirai-notify と同じ印）・`notify: orca` と
+    `tasks: github-project` のリポ・Orca の端末・linked worktree でない、の全部がそろうときだけ真。
+    担当の会話（linked worktree）・Orca の無い人（端末の印が無い）・GitHub Project で回さないリポでは偽。"""
+    if os.environ.get('HC_NOTIFY', '').strip() != 'off' or not os.environ.get('ORCA_TERMINAL_HANDLE', '').strip():
+        return False
+    try:
+        if _mode_setting('tasks') != 'github-project' or _mode_setting('notify') != 'orca':
+            return False
+    except RuntimeError:
+        return False
+    git_dir, common_dir = _git_dir('--git-dir'), _git_dir('--git-common-dir')
+    return bool(git_dir and common_dir and git_dir == common_dir)
+
+
+def print_load_after(patch=None) -> None:
+    """割り振り・着手・完了のあとに、コーディネーターの会話にだけ同じ表を出す。
+    板は今ある控え（古さを問わない）に今の変更を重ね、PR だけ 1 回引く。
+    書いた操作の結果は変えない: 取れなければ 1 行だけ標準エラーに出して戻る。"""
+    if not is_coordinator():
+        return
+    try:
+        snap = _any_board_cache()
+        if snap is None:
+            print('（進みの表: 控えが無い。`hirai-task load` で出す）')
+            return
+        load = _load_module()
+        prs = fetch_load_prs(_assignee_candidates([i for i in snap['items'] if i.get('type') == 'Issue' and _same_repo(i, REPO)]))
+        settings = _load_settings(prs, network=True)
+        prs['deadline_date'], prs['deadline_open'] = settings['deadline_date'], settings['deadline_open']
+        _write_atomic(LOAD_PR_CACHE, json.dumps(prs, ensure_ascii=False))
+        view = board_view(snap, 'cached')
+        if patch is not None:
+            patch(view)
+        model = load.build(view, prs, _load_assignments(), settings)
+        print()
+        print(load.render(model), end='')
+        _save_load_state(model)
+    except Exception as exc:  # noqa: BLE001 - 表が出せないことで、書いた操作の結果を変えない
+        print(f'（進みの表を出せなかった: {type(exc).__name__}: {exc}）', file=sys.stderr)
+
+
+def _patch_status(status: str, *numbers: int):
+    """view の issue の Status を変える関数（閉じた扱いにするときは closed=True の版を使う）。"""
+    def apply(view: dict) -> None:
+        for i in view['issues']:
+            if i.get('number') in numbers:
+                i['status'] = status
+    return apply
+
+
+def _patch_closed(*numbers: int):
+    def apply(view: dict) -> None:
+        for i in view['issues']:
+            if i.get('number') in numbers:
+                i['status'], i['state'] = DONE_STATUS, 'CLOSED'
+    return apply
+
+
+def _parse_assign_order(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        die(f'順は数字で書く（受け取った値: {text}）', 2)
+    if value != value or value in (float('inf'), float('-inf')):
+        die('順は有限の数で書く', 2)
+    return value
+
+
+def viewer_login() -> str:
+    """gh で動かしている GitHub ユーザーの login。"""
+    return str((rest('GET', 'user') or {}).get('login') or '')
+
+
+def ensure_assignee(number: int) -> None:
+    """Assignees が空なら動かしている GitHub ユーザーを入れ、ほかの人が入っていたら警告を 1 行出す。
+    上書き・追加・停止はしない。確かめられないときは標準エラーに 1 行出し、着手や割り振りの結果は変えない。"""
+    try:
+        issue = rest('GET', f'repos/{REPO}/issues/{number}')
+        logins = [a['login'] for a in (issue.get('assignees') or []) if isinstance(a, dict) and a.get('login')]
+        me = viewer_login()
+        if not me:
+            raise RuntimeError('動かしている GitHub ユーザーが分からない')
+        if not logins:
+            result = rest('POST', f'repos/{REPO}/issues/{number}/assignees', {'assignees': [me]})
+            got = [a.get('login') for a in (result.get('assignees') or []) if isinstance(a, dict)]
+            if me in got:
+                print(f'#{number} の Assignees が空だったので {me} を入れた')
+            else:
+                print(f'警告: #{number} の Assignees に {me} を入れられなかった（このリポの書き込みの権限を確かめる）', file=sys.stderr)
+            return
+        others = [x for x in logins if x != me]
+        if not others:
+            return
+        linked = [p for p in (fetch_load_prs().get('open') or []) if number in p['closes'] and p['author'] in others]
+        tail = '・開いている PR ' + '・'.join(f"#{p['number']}" for p in linked) if linked else '・開いている PR なし'
+        also = 'あなたも入っている。' if me in logins else ''
+        print(f'警告: #{number} は {"・".join(others)} の task（{also}Assignees {"・".join(logins)}{tail}）。上書きしない')
+    except Exception as exc:  # noqa: BLE001 - Assignees の確かめで、着手や割り振りの結果を変えない
+        print(f'（#{number} の Assignees を確かめられなかった: {type(exc).__name__}: {exc}）', file=sys.stderr)
+
+
+def cmd_assign(argv: list[str]) -> int:
+    """task に作業のセッションの名前と順番を割り振る。手元の控えに書き、Assignees が空なら自分を入れ、
+    ほかの人なら警告する（Project の項目は足さない・書かない）。"""
+    if len(argv) not in (2, 3):
+        die(_ASSIGN_USAGE, 2)
+    number = _parse_issue_number(argv[0])
+    owner = ' '.join(argv[1].split())
+    if not owner or len(owner) > LOAD_OWNER_MAX or not owner.isprintable():
+        die(f'担当は {LOAD_OWNER_MAX} 字までの 1 行で書く', 2)
+    order = _parse_assign_order(argv[2]) if len(argv) == 3 else None
+    project_number = discover_project_number()
+    item = _require_item(project_number, number)
+    _reject_wave_feature(item, number, 'assign')
+    _reject_closed(item, number, 'assign')
+    table = _load_shared_json(LOAD_ASSIGN)
+    assign = table.get('assign') if isinstance(table.get('assign'), dict) else {}
+    _save_shared_json(LOAD_ASSIGN, {'assign': {**assign, str(number): {'owner': owner, 'order': order}}})
+    print(f'#{number} {owner}' + (f'・順 {order:g}' if order is not None else '') + f'（手元の控え: {LOAD_ASSIGN}）')
+    ensure_assignee(number)
+    print_load_after()
+    return 0
+
+
 # ── カード（承認・判断・人の作業）。形の決まりは scripts/hirai_card.py、正本は approval-template.md ──
 CARD_HEADLINE_FIELD = 'ひとこと'  # 承認カードの「決めること」を写す項目（TEXT）。ボードの承認ビューで読む
 CARD_RECOMMEND_FIELD = '推奨'  # 承認カードの「推奨」を写す項目（単一選択: 承認する・条件つき・承認しない）
@@ -5749,6 +6105,7 @@ def main(argv: list[str]) -> int:
         '           coverage | impact <draft の path> | design-merge <draft の path>\n'
         '           comments | close-parents [--json] | align [--json] | unblocked | memos\n'
         '           today | after-merge <PR番号>\n'
+        '           load [--json] [--changed] [--cached | --refresh] [--if-coordinator] | assign <issue> <担当> [順]\n'
         '           board [--text [--wave N|--feature N|--task N] | [--summary] [--publish <issue>]]'
         ' [--out <path>] [--refresh | --from <json>]\n'
         '           setup [--title <名前>] [--from-template <owner>/<番号>] [--apply] [--json]\n'
@@ -5766,6 +6123,8 @@ def main(argv: list[str]) -> int:
         return cmd_design_merge(tail)
     if sub == 'board':  # 引数は gh より先に確かめる。--from は repo の判定も要らない（cmd_board が見る）。
         return cmd_board(parse_board_args(tail))
+    if sub == 'load':  # 引数は gh より先に確かめる。
+        return cmd_load(parse_load_args(tail))
     if sub == 'setup':  # 既定は計画だけ。--apply で書く。repo・Project の判定と前提の検査はモジュールが持つ。
         return _load_setup_module().main(tail)
     if not REPO:
@@ -5806,7 +6165,12 @@ def main(argv: list[str]) -> int:
                 approved, flags = flags[1], flags[2:]
             else:
                 die(usage_start, 2)
-        return cmd_start(_parse_issue_number(tail[0]), approved, reread)
+        number = _parse_issue_number(tail[0])
+        rc = cmd_start(number, approved, reread)
+        if rc == 0:
+            ensure_assignee(number)
+            print_load_after(_patch_status(IN_PROGRESS_STATUS, number))
+        return rc
     if sub == 'review':
         if len(tail) != 1:
             die('使い方: hirai-task review <issue 番号>', 2)
@@ -5815,7 +6179,13 @@ def main(argv: list[str]) -> int:
         if len(tail) not in (1, 3) or (len(tail) == 3 and tail[1] != '--not-planned'):
             die('使い方: hirai-task done <issue> [--not-planned <理由>]', 2)
         reason = tail[2] if len(tail) == 3 else None
-        return cmd_done(_parse_issue_number(tail[0]), reason)
+        number = _parse_issue_number(tail[0])
+        rc = cmd_done(number, reason)
+        if rc == 0:
+            print_load_after(_patch_closed(number))
+        return rc
+    if sub == 'assign':
+        return cmd_assign(tail)
     if sub == 'reopen':
         if len(tail) != 2:
             die('使い方: hirai-task reopen <issue> <status>', 2)

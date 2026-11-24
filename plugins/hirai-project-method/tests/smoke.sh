@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hirai-project-method 自己検証 smoke (6 case)。1 件でも FAIL なら exit 1。
+# hirai-project-method 自己検証 smoke (7 case)。1 件でも FAIL なら exit 1。
 # このプラグインだけの確かめ。土台 (hirai-lite) の確かめはリポジトリ直下の tests/smoke.sh。
 #
 #   ROOT = このスクリプトの 1 つ上 (プラグインのルート)
@@ -23,7 +23,7 @@ trap 'for d in "${tmpdirs[@]:-}"; do [ -n "$d" ] && rm -rf "$d"; done' EXIT
 case_1() {
   local missing="" f
   for f in bin/hirai-task scripts/ghp-path.sh scripts/hirai_board.py scripts/hirai_card.py scripts/hirai_project_setup.py \
-           scripts/hirai_task_selftest.py commands/board.md commands/project-setup.md skills/github-project/SKILL.md \
+           scripts/hirai_task_selftest.py scripts/hirai_load.py commands/board.md commands/project-setup.md skills/github-project/SKILL.md hooks/hooks.json hooks/coordinator-load.sh \
            docs/rules-reference/project-setup.md docs/rules-reference/glossary.md .claude-plugin/plugin.json VERSION; do
     [ -f "$ROOT/$f" ] || missing="$missing $f"
   done
@@ -35,7 +35,7 @@ case_1() {
   local stale
   stale="$(grep -n "tasks-path\.sh\|HARNESS_V2_ENTRY_NAME\|hirai-lite-v2" "$ROOT/bin/hirai-task" "$ROOT"/scripts/*.py "$ROOT"/commands/*.md "$ROOT"/skills/*/SKILL.md "$ROOT"/docs/rules-reference/*.md | head -3)"
   [ -z "$stale" ] || { fail 1 "旧 tasks-path.sh・2.x の entry 名の指しが残っていない" "$stale"; return; }
-  pass 1 "部品が揃っている (command 2・skill 1・旧い指しなし)"
+  pass 1 "部品が揃っている (command 2・skill 1・hook 1・旧い指しなし)"
 }
 
 # case 2: 版と依存 (VERSION = plugin.json の version。dependencies に hirai-lite >=3.0.0。カタログの entry があれば版が一致)
@@ -129,5 +129,41 @@ case_6() {
   pass 6 "ghp-path.sh は bash 3.2 の書き方で構文が通る"
 }
 
-for n in 1 2 3 4 5 6; do "case_$n"; done
+# case 7: コーディネーターの hook（止めない・60 行以内・控えだけ・コーディネーターの知らせのときだけ出る）
+case_7() {
+  local h="$ROOT/hooks/coordinator-load.sh" cfg="$ROOT/hooks/hooks.json" s out rc lines bad=""
+  bash -n "$h" || { fail 7 "coordinator-load.sh の構文" "bash -n が落ちた"; return; }
+  python3 -m json.tool "$cfg" >/dev/null 2>&1 || { fail 7 "hooks.json が JSON" "読めない"; return; }
+  lines="$(wc -l < "$h" | tr -d ' ')"
+  [ "$lines" -le 60 ] || { fail 7 "hook は 60 行以内" "$lines 行"; return; }
+  s="$(mk)"; mkdir -p "$s/hooks" "$s/bin" "$s/repo" "$s/fake"
+  cp "$h" "$s/hooks/"
+  printf '%s\n' '#!/usr/bin/env bash' 'echo "$@" >> "$FAKE_LOG"' 'case "${FAKE_RC:-0}" in 0) printf "| 甲 | 土台 | #1 | 20%% |\n";; *) exit "${FAKE_RC}";; esac' > "$s/bin/hirai-task"
+  printf '%s\n' '#!/usr/bin/env bash' 'echo GH >> "$FAKE_LOG"; exit 1' > "$s/fake/gh"
+  chmod +x "$s/bin/hirai-task" "$s/fake/gh"
+  # run <env...> -- <コマンド文字列> : hook を回し、out・rc・log を残す
+  run7() { # run7 <HC_NOTIFY> <ORCA_TERMINAL_HANDLE> <FAKE_RC> <tool_name> <command>
+    : > "$s/log"
+    out="$(python3 -c 'import json,sys;print(json.dumps({"tool_name":sys.argv[1],"tool_input":{"command":sys.argv[2]},"cwd":sys.argv[3]}))' "$4" "$5" "$s/repo" \
+      | env -i PATH="$s/fake:$PATH" HOME="$s" HC_NOTIFY="$1" ORCA_TERMINAL_HANDLE="$2" FAKE_RC="$3" FAKE_LOG="$s/log" CLAUDE_PLUGIN_ROOT="$s" bash "$s/hooks/coordinator-load.sh" 2>&1)"; rc=$?
+  }
+  run7 off term_1 0 Bash "orca orchestration check --wait"
+  { [ "$rc" = 0 ] && printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["hookSpecificOutput"]["hookEventName"]=="PostToolUse"; assert "#1" in d["hookSpecificOutput"]["additionalContext"]'; } \
+    || bad="$bad 知らせを受けたのに表が出ない(rc=$rc out=$out);"
+  grep -q -- 'load --changed --cached --if-coordinator' "$s/log" || bad="$bad 渡した引数が違う($(cat "$s/log"));"
+  run7 off term_1 0 Bash "hirai-notify done a b"; [ -n "$out" ] || bad="$bad hirai-notify のとき出ない;"
+  run7 orca term_1 0 Bash "orca orchestration check"; [ -z "$out" ] && [ "$rc" = 0 ] || bad="$bad 担当(HC_NOTIFY≠off)で出た;"
+  run7 off "" 0 Bash "orca orchestration check"; [ -z "$out" ] && [ "$rc" = 0 ] || bad="$bad Orca の端末でないのに出た;"
+  run7 off term_1 0 Bash "echo hi"; [ -z "$out" ] && [ "$rc" = 0 ] || bad="$bad 関係ないコマンドで出た;"
+  run7 off term_1 0 Read "orca orchestration check"; [ -z "$out" ] && [ "$rc" = 0 ] || bad="$bad Bash 以外で出た;"
+  run7 off term_1 3 Bash "orca orchestration check"; [ -z "$out" ] && [ "$rc" = 0 ] || bad="$bad 動きなし(exit 3)で出た;"
+  run7 off term_1 1 Bash "orca orchestration check"; [ -z "$out" ] && [ "$rc" = 0 ] || bad="$bad 失敗(exit 1)で出たか落ちた;"
+  grep -q GH "$s/log" && bad="$bad gh を叩いた;"
+  out="$(printf 'not json' | env -i PATH="$s/fake:$PATH" HOME="$s" HC_NOTIFY=off ORCA_TERMINAL_HANDLE=t CLAUDE_PLUGIN_ROOT="$s" bash "$s/hooks/coordinator-load.sh" 2>&1)"; rc=$?
+  { [ "$rc" = 0 ] && [ -z "$out" ]; } || bad="$bad 壊れた入力で落ちたか出た;"
+  [ -z "$bad" ] || { fail 7 "コーディネーターの hook" "$bad"; return; }
+  pass 7 "コーディネーターの知らせのときだけ表を足し、担当・他の会話・失敗・動きなしでは何も出さず exit 0"
+}
+
+for n in 1 2 3 4 5 6 7; do "case_$n"; done
 [ "$FAILED" -eq 0 ] && echo "ALL PASS" || { echo "FAILED"; exit 1; }

@@ -1,5 +1,5 @@
 ---
-description: GitHub Project の全体像と、どこで何件止まっているか（承認待ち・判断待ち・依存待ち・保留・レビュー中・着手できない理由・人の作業）と、あなたの番（承認・判断・人の作業のカードの決めることと推奨）を出す。進捗を聞かれたとき（スマートフォンから Remote Control で聞かれたときも）に使う。読むだけで、publish を付けたときだけ進捗用 issue の本文を書く。
+description: GitHub Project の全体像と、どこで何件止まっているか（承認待ち・判断待ち・依存待ち・保留・レビュー中・着手できない理由・人の作業）と、あなたの番（承認・判断・人の作業のカードの決めることと推奨）を出す。**どこで何件止まっているか**を聞かれたとき（スマートフォンから Remote Control で聞かれたときも）に使う。全体の %・担当ごとの順番と進捗率は skill `github-project` の「進みと割り振りの表」（`hirai-task load`）。読むだけで、publish を付けたときだけ進捗用 issue の本文を書く。
 argument-hint: "[text [wave|feature|task <n>] | html | refresh | publish <issue番号>]"
 ---
 
@@ -34,7 +34,7 @@ GitHub Project のやること（wave → feature → task）を `hirai-task boa
 
 ## スマートフォンから聞かれたとき
 
-Claude アプリ（Remote Control）からは、文で「進捗を見せて」と届くことが多い。そのときも引数なしと同じにする。`--summary` は 1 行 40 字前後・表は 2〜3 列に収めてあるので、そのまま出す。HTML のパスはスマートフォンでは開けないので、最後の 1 行は `詳しい版は PC で /hirai-project-method:board html` に替える（手元の端末から聞かれたか分からないときは、パスの行のままでよい）。
+Claude アプリ（Remote Control）からは、文で届くことが多い。「どこで止まっている?」「何件待ち?」なら引数なしと同じにし、「進捗を見せて」「進捗は?」なら skill `github-project` の「進みと割り振りの表」（`hirai-task load`）を使う。`--summary` は 1 行 40 字前後・表は 2〜3 列に収めてあるので、そのまま出す。HTML のパスはスマートフォンでは開けないので、最後の 1 行は `詳しい版は PC で /hirai-project-method:board html` に替える（手元の端末から聞かれたか分からないときは、パスの行のままでよい）。
 
 ## 判定できる終了条件
 
