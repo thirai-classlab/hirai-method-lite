@@ -3355,6 +3355,10 @@ PYEOF
   rm -rf "$nw"
   [ -z "$nb" ] || pr_bad="$pr_bad hirai-notify・notify-attention・hirai-pr-asset:${nb}"
 
+  # 移行の手順の合格の条件に、版の数字（hirai-lite v3.0.0 など）を決め打ちしない（版を上げるたびに「先へ進まない」で止まる）
+  grep -rnE 'hirai-lite v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/commands" "$ROOT/README.md" "$ROOT/docs" 2>/dev/null | grep -q . \
+    && pr_bad="$pr_bad 版の決め打ち: $(grep -rnoE 'hirai-lite v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/commands" "$ROOT/README.md" "$ROOT/docs" 2>/dev/null | head -1)"
+  grep -qF '10 秒を超えると何も出さずに打ち切られ' "$ROOT/README.md" || pr_bad="$pr_bad README に知らせの hook が 10 秒で打ち切られることが無い"
   # (h) 3.0.0 の直しが残っている: pr-retarget は bin/ にあり scripts/ に無い (Bash ツールでは土台の bin/ が PATH に入る) /
   # 承認ビューの節の本体は足すプラグインにあり土台の approval-template には指しだけ / 設計の起点は 3 行以内
   [ -x "$ROOT/bin/hirai-pr-retarget" ] || pr_bad="$pr_bad bin/hirai-pr-retarget が実行できない"
