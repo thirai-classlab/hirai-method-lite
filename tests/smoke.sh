@@ -508,7 +508,20 @@ bs "$Q" "git --work-tree $T/P commit -m x" | off DENY early-work-tree X=1
 for c in "git -\"C\" $T/P commit -m x" "git -\\C $T/P commit -m x" "git -\\
 C $T/P commit -m x" "git --git-\"dir\"=$T/P/.git commit -m x"; do bs "$Q" "$c" | off DENY early-quoted-flag X=1; done
 ln -s "$T/P/sub" "$T/lnksub"
-bs "$T/lnksub" 'git commit -m x' | chk DENY early-symlink-commit HOME="$T/h0" CLAUDE_PROJECT_DIR="$T/lnksub"
+ed "$T/P/README.md" | off DENY early-root-edit X=1
+bs "$Q" "git -'C' $T/P commit -m x" | off DENY early-single-quote X=1
+bs "$Q" "$(printf 'git\t-C\t%s\tcommit -m x' "$T/P")" | off DENY early-tab-flag X=1
+bs "$T/lnksub" 'git commit -m x' | chk DENY early-symlink-cwd HOME="$T/h0" CLAUDE_PROJECT_DIR="$Q"
+bs "$T/plain" 'git commit -m x' | chk DENY early-symlink-proj HOME="$T/h0" CLAUDE_PROJECT_DIR="$T/lnksub"
+git init -q "$T/ML"; mkdir -p "$T/ML/.claude" "$T/shared"; printf 'worktree: block\n' > "$T/shared/mode.yml"; ln -s "$T/shared/mode.yml" "$T/ML/.claude/mode.yml"
+ed "$T/ML/a.txt" | off DENY early-mode-symlink X=1
+ed "$Q/sub/f.txt" | off DENY early-env-newline "HC_WORKTREE=block
+"
+# locale で読めないバイトがあっても、-C などの字を探す前に切れない (その locale が無い機械では飛ばす)
+for l in ja_JP.eucJP zh_CN.GB18030; do
+  locale -a 2>/dev/null | grep -qx "$l" || continue
+  bs "$Q" "git commit -m 'あ'; git -C $T/P commit -m x" | off DENY early-locale LC_ALL=$l
+done
 ed "$T/lnksub/f.txt" | off DENY early-symlink-edit X=1
 bs "$Q" "git -C $T/lnksub/.. commit -m x" | off DENY early-symlink-dotdot X=1
 mkdir -p "$Q/.claude"
@@ -996,7 +1009,8 @@ guard-tmp-clone-worktree-edit|hooks/worktree-guard.sh|s/^    cur="\$otop"$/    r
 guard-early-edit|hooks/worktree-guard.sh|s/^    could_block "\$fdir" || exit 0$/    :/
 guard-early-commit|hooks/worktree-guard.sh|s/ \*-C\*|\*git-dir\*|\*work-tree\*) ;; \*) exit 0 ;; esac/ *) ;; esac/
 guard-early-dash-C-off|hooks/worktree-guard.sh|s/^  could_block "\$(phys "\$dir")" || return 0$/  :/
-guard-early-env-off|hooks/worktree-guard.sh|/^case "\${HC_WORKTREE:-}" in .*block) ;; /d
+guard-early-env-off|hooks/worktree-guard.sh|s/^  \[ "\$HC_WORKTREE" = block \] || exit 0$/  :/
+guard-early-env-newline|hooks/worktree-guard.sh|/^  HC_WORKTREE="\$(printf /d
 guard-early-edit|hooks/worktree-guard.sh|s/case "\${l%%#\*}" in/case "$l" in/
 guard-early-home-block|hooks/worktree-guard.sh|/^  may_block "\${HOME:-/d
 guard-early-env-block|hooks/worktree-guard.sh|/^  \[ "\${HC_WORKTREE:-}" = block \] \&\& return 0$/d
@@ -1005,8 +1019,14 @@ guard-early-project-dir|hooks/worktree-guard.sh|s/if could_block "\$(phys "\$cwd
 guard-early-other-repo|hooks/worktree-guard.sh|s/ \*-C\*|\*git-dir\*|\*work-tree\*) ;;/ *git-dir*|*work-tree*) ;;/
 guard-early-git-dir|hooks/worktree-guard.sh|s/ \*-C\*|\*git-dir\*|\*work-tree\*) ;;/ *-C*|*work-tree*) ;;/
 guard-early-work-tree|hooks/worktree-guard.sh|s/ \*-C\*|\*git-dir\*|\*work-tree\*) ;;/ *-C*|*git-dir*) ;;/
-guard-early-quoted-flag|hooks/worktree-guard.sh|s/case "\$(printf .%s. "\$cmd" | tr -d .*)" in \*-C/case "$cmd" in *-C/
-guard-early-symlink-commit|hooks/worktree-guard.sh|s/if could_block "\$(phys "\$cwd")" "\$(phys "\(.*\)")"; then$/if could_block "$cwd" "\1"; then/
+guard-early-quoted-flag|hooks/worktree-guard.sh|s/case "\$(printf .%s. "\$cmd" | LC_ALL=C tr -d .*)" in \*-C/case "$cmd" in *-C/
+guard-early-root-edit|hooks/worktree-guard.sh|s/^    could_block "\$fdir" || exit 0$/    could_block "${fdir%\/*}" || exit 0/
+guard-early-single-quote|hooks/worktree-guard.sh|s/tr -d '"\\047/tr -d '"/
+guard-early-tab-flag|hooks/worktree-guard.sh|s/ in \*-C\*|/ in *" -C "*|/
+guard-early-symlink-cwd|hooks/worktree-guard.sh|s/if could_block "\$(phys "\$cwd")"/if could_block "$cwd"/
+guard-early-symlink-proj|hooks/worktree-guard.sh|s/"\$(phys "\${CLAUDE_PROJECT_DIR:-\$cwd}")"; then$/"${CLAUDE_PROJECT_DIR:-$cwd}"; then/
+guard-early-mode-symlink|hooks/worktree-guard.sh|s/^  \[ -f "\$1" \] \&\& \[ -r "\$1" \] || return 1$/  [ -f "$1" ] \&\& [ -r "$1" ] \&\& [ ! -L "$1" ] || return 1/
+guard-early-locale|hooks/worktree-guard.sh|s/| LC_ALL=C tr -d/| tr -d/
 guard-early-symlink-dotdot|hooks/worktree-guard.sh|s/builtin cd -P -- "\$d"/builtin cd -- "$d"/
 guard-early-mode-forms|hooks/worktree-guard.sh|s/ || \[ -n "\$l" \]; do/; do/
 X
@@ -1098,6 +1118,8 @@ r6_suite() {
     [ -n "$tag" ] || continue
     # jq の道の壊し方は、jq の無い機械では確かめようがない（python3 の道だけが動く）
     case "$tag" in notify-task-jq) command -v jq >/dev/null 2>&1 || continue ;; esac
+    # locale の壊し方は、その locale の無い機械では確かめようがない
+    case "$tag" in guard-early-locale) locale -a 2>/dev/null | grep -qxE 'ja_JP\.eucJP|zh_CN\.GB18030' || continue ;; esac
     out="$($fn "$rel" "$ex" 2>&1)"
     r6_must_fail "$tag" "$out" || printf 'NOFAIL 壊した複製 (%s) で %s が FAIL しない (確かめが空振り): %s\n' "$rel" "$tag" "$(printf '%s' "$out" | head -1)"
   done < <(r6_mutants "$1")

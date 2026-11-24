@@ -12,7 +12,7 @@
 #   .tmp/・.claude/state/。外側のリポの下にあるときは外側の .tmp/・.claude/state/ の下だけ）・git switch / git checkout・git commit --dry-run / --help。
 #   `worktree: off`（既定）と `warn` では何もしない。
 # 早い exit: 環境変数 HC_WORKTREE・ホームの mode.yml・対象の dir とその祖先の mode.yml のどこにも block が無ければ、git も走査（awk）も
-#   呼ばずに抜ける（git の toplevel は対象の dir かその祖先なので、git に聞かずに分かる。core.worktree でよそを指すリポは、その先の mode.yml を見ない）。
+#   呼ばずに抜ける（git の toplevel は対象の dir かその祖先なので、git に聞かずに分かる。core.worktree でよそを指すリポと、submodule の git dir〔.git/modules/<名>〕の中からの操作は、その先の mode.yml を見ない）。
 #   git -C・--git-dir・--work-tree のあるコマンドだけは、対象を知るために走査してから、同じ見方で git の前に抜ける。
 # Orca の worktree の判定: 環境変数 ORCA_WORKTREE_ID があり、決めたリポの --git-dir と --git-common-dir が違い
 #   （= リンクされた worktree）、ORCA_WORKTREE_ID が path を含むなら、その path の --git-common-dir が決めたリポと同じで、
@@ -30,8 +30,11 @@ input=""
 [ -t 0 ] || input="$(cat 2>/dev/null)" || input=""
 [ -n "$input" ] || exit 0
 
-# 環境変数が block 以外なら、どのリポでも止めない（値の決め方は環境変数が先）
-case "${HC_WORKTREE:-}" in ''|block) ;; *) exit 0 ;; esac
+# 環境変数が block 以外なら、どのリポでも止めない（値の決め方は環境変数が先。値の末尾の改行は落として読む）
+if [ -n "${HC_WORKTREE:-}" ]; then
+  HC_WORKTREE="$(printf '%s' "$HC_WORKTREE")"
+  [ "$HC_WORKTREE" = block ] || exit 0
+fi
 
 HAVE_JQ=0; HAVE_PY=0
 command -v jq >/dev/null 2>&1 && HAVE_JQ=1
@@ -503,8 +506,9 @@ case "$tool" in
     if could_block "$(phys "$cwd")" "$(phys "${CLAUDE_PROJECT_DIR:-$cwd}")"; then
       git -C "$cwd" rev-parse --show-toplevel >/dev/null 2>&1 || dflt="${CLAUDE_PROJECT_DIR:-$cwd}"
     else
-      # 対象をほかの dir へ向ける字が無ければ走査もしない（引用符・バックスラッシュ・改行で割った形も拾う）
-      case "$(printf '%s' "$cmd" | tr -d '"\047\\\n')" in *-C*|*git-dir*|*work-tree*) ;; *) exit 0 ;; esac
+      # 対象をほかの dir へ向ける字が無ければ走査もしない（引用符・バックスラッシュ・改行で割った形も拾う）。
+      # LC_ALL=C: macOS の tr は locale で読めないバイトに当たると、そこで出力を切る（EUC 系の locale で -C を見落とす）
+      case "$(printf '%s' "$cmd" | LC_ALL=C tr -d '"\047\\\n')" in *-C*|*git-dir*|*work-tree*) ;; *) exit 0 ;; esac
     fi
     check_command "$cmd" 0
     exit 0
