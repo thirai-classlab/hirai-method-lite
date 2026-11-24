@@ -1810,11 +1810,14 @@ print(" ".join(str(x.get("timeout")) for e in h.get(sys.argv[2],[]) for x in e.g
   [ "$hk_bad" = "30/30" ] || bad="$bad [見張りと開始の 1 行の制限が 30 秒でない] PreToolUse/SessionStart=${hk_bad}"
   { grep -qF '見張り（`worktree-guard.sh`）の制限は 30 秒' "$ROOT/README.md" && grep -qF '打ち切られた操作は通ります' "$ROOT/README.md"; } \
     || bad="$bad [README に見張りの制限の秒と、打ち切られたときの動きが無い]"
+  # 知らせの hook 3 本 (Notification・StopFailure・PermissionDenied) の制限も 30 秒 (打ち切られると何も出さずに知らせが消える)
+  hk_bad="$(hook_secs "$ROOT/hooks/hooks.json" Notification notify-attention.sh)/$(hook_secs "$ROOT/hooks/hooks.json" StopFailure notify-attention.sh)/$(hook_secs "$ROOT/hooks/hooks.json" PermissionDenied notify-attention.sh)"
+  [ "$hk_bad" = "30/30/30" ] || bad="$bad [知らせの hook の制限が 30 秒でない] Notification/StopFailure/PermissionDenied=${hk_bad}"
   # 6 巡目: guard の入れ子の worktree・heredoc・日本語・大小の path・別 worktree、orca-context のサブディレクトリ表示。壊した複製 4 通りで FAIL することも見る。
   local r6g; r6g="$(r6_suite guard)"; [ -z "$r6g" ] || bad="$bad [6 巡目の guard・orca-context] $r6g"
   if [ -n "$bad" ]; then fail 2 "止める手段と fail-open" "$bad"; return; fi
 
-  pass 2 "context-budget.sh は既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% ちょうどで発火 / loop-reminder.sh は置き場 6 通りで loop のときだけ ${lines} 行を出し normal では 1 バイトも出さない (要点 4 つ入り・全行 [harness] 始まり) / HC_LOOP_REMINDER=off・大文字 LOOP・壊れた/読めない mode.yml・共通ライブラリ不在でも exit 0 無出力 / worktree-guard.sh は worktree: block のとき、Orca の worktree でない会話からの git に入るファイルの Edit・Write と git commit を止めて worktree の作り方を出し (6 場合)、.tmp・リポの外・git switch・git checkout -b・読み取り・Orca の worktree の編集と commit・off・warn は通し (9 場合)、壊れた入力は fail-open、mode.yml の項目で働き、hooks.json の PreToolUse に結ばれている / 守るリポは cwd ではなく操作の対象 (git -C・Edit の file_path) で決め (別リポ・cwd が非リポ 7 場合)、git commit の形 12 と引用符つき -C・バックスラッシュ改行を止め、heredoc の本文・--dry-run・--help・.tmp/・.claude/state/ は止めず、/bin/bash 3.2 でも止め、jq 無しは python3 で読み、どちらも無ければ止めずに orca-context が「止まりません」と言う / block が環境変数・ホーム・対象とその祖先の mode.yml のどこにも無ければ git も awk も呼ばずに抜け、あれば漏らさず止める"
+  pass 2 "context-budget.sh は既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% ちょうどで発火 / loop-reminder.sh は置き場 6 通りで loop のときだけ ${lines} 行を出し normal では 1 バイトも出さない (要点 4 つ入り・全行 [harness] 始まり) / HC_LOOP_REMINDER=off・大文字 LOOP・壊れた/読めない mode.yml・共通ライブラリ不在でも exit 0 無出力 / worktree-guard.sh は worktree: block のとき、Orca の worktree でない会話からの git に入るファイルの Edit・Write と git commit を止めて worktree の作り方を出し (6 場合)、.tmp・リポの外・git switch・git checkout -b・読み取り・Orca の worktree の編集と commit・off・warn は通し (9 場合)、壊れた入力は fail-open、mode.yml の項目で働き、hooks.json の PreToolUse に結ばれている / 守るリポは cwd ではなく操作の対象 (git -C・Edit の file_path) で決め (別リポ・cwd が非リポ 7 場合)、git commit の形 12 と引用符つき -C・バックスラッシュ改行を止め、heredoc の本文・--dry-run・--help・.tmp/・.claude/state/ は止めず、/bin/bash 3.2 でも止め、jq 無しは python3 で読み、どちらも無ければ止めずに orca-context が「止まりません」と言う / block が環境変数・ホーム・対象とその祖先の mode.yml のどこにも無ければ git も awk も呼ばずに抜け、あれば漏らさず止める / hook の制限は 見張り・開始の 1 行・知らせの 3 本とも 30 秒"
 }
 
 # ---------- case 3: 閾値超過で 1 度だけ発火 ----------
@@ -3440,7 +3443,7 @@ PYEOF
   # 移行の手順の合格の条件に、版の数字（hirai-lite v3.0.0 など）を決め打ちしない（版を上げるたびに「先へ進まない」で止まる）
   grep -rnE 'hirai-lite v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/commands" "$ROOT/README.md" "$ROOT/docs" 2>/dev/null | grep -q . \
     && pr_bad="$pr_bad 版の決め打ち: $(grep -rnoE 'hirai-lite v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/commands" "$ROOT/README.md" "$ROOT/docs" 2>/dev/null | head -1)"
-  grep -qF '10 秒を超えると何も出さずに打ち切られ' "$ROOT/README.md" || pr_bad="$pr_bad README に知らせの hook が 10 秒で打ち切られることが無い"
+  grep -qF '30 秒を超えると何も出さずに打ち切られ' "$ROOT/README.md" || pr_bad="$pr_bad README に知らせの hook が 30 秒で打ち切られることが無い"
   # (h) 3.0.0 の直しが残っている: pr-retarget は bin/ にあり scripts/ に無い (Bash ツールでは土台の bin/ が PATH に入る) /
   # 承認ビューの節の本体は足すプラグインにあり土台の approval-template には指しだけ / 設計の起点は 3 行以内
   [ -x "$ROOT/bin/hirai-pr-retarget" ] || pr_bad="$pr_bad bin/hirai-pr-retarget が実行できない"
