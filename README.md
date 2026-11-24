@@ -179,7 +179,7 @@ GitHub Project でやることを回すリポだけが入れます。
 
 ### PR の本文と画面のキャプチャ
 
-PR の本文は 4 種別（見える変更 / 見えない変更 / 設計・決定の文書 / release）の型で書きます。頭の 4 行（種別・利用者への影響・決めてほしいこと・task）のすぐ下に「何のため・どう解決するか」（困っていること・目的・どう解決するか・採らなかった案。前 → 後の mermaid の図 1 枚）を置き、何が変わるか → 基本設計の全体像のどこが変わるか（図とリンクだけ）→ 壊れうる所と戻し方 → テスト、と抽象から具体の順に書きます。雛形は `templates/pull_request_template.md` で、`/hirai-lite:init` が導入先の `.github/pull_request_template.md` に**無ければ**置きます（あれば触りません）。背景と各節の書き方は `docs/rules-reference/git-and-pr.md` の §9、規範は `rules/code.md` の「PR」の節です。画面を変えた PR は前後のキャプチャを、画面が変わる設計の PR はこれからの見た目の絵を、`hirai-pr-asset <PR 番号> <png ...>` で branch `pr-assets` に置き、出た Markdown の 1 行を「何が変わるか」に貼ります（作業ツリーの branch は動かしません。押し先は git の remote から引き、読めないと exit 1）。
+PR の本文の型は、導入先に PR の雛形か本文を見る検査があれば、そちらが先です。雛形も検査も無いときだけ、4 種別（見える変更 / 見えない変更 / 設計・決定の文書 / release）の型で書きます。頭の 4 行（種別・利用者への影響・決めてほしいこと・task）のすぐ下に「何のため・どう解決するか」（困っていること・目的・どう解決するか・採らなかった案。前 → 後の mermaid の図 1 枚）を置き、何が変わるか → 基本設計の全体像のどこが変わるか（図とリンクだけ）→ 壊れうる所と戻し方 → テスト、と抽象から具体の順に書きます。雛形は `templates/pull_request_template.md` で、`/hirai-lite:init` が導入先の `.github/pull_request_template.md` に**無ければ**置きます（あれば触りません）。背景と各節の書き方は `docs/rules-reference/git-and-pr.md` の §9、規範は `rules/code.md` の「PR」の節です。画面を変えた PR は前後のキャプチャを、画面が変わる設計の PR はこれからの見た目の絵を、`hirai-pr-asset <PR 番号> <png ...>` で branch `pr-assets` に置き、出た Markdown の 1 行を「何が変わるか」に貼ります（作業ツリーの branch は動かしません。押し先は git の remote から引き、読めない・GitHub の owner/repo を読めないと、押さずに exit 1。URL の中の認証情報は、貼る 1 行にも失敗の文にも出しません）。
 
 ## やること管理（GitHub Project）・コンソール・スマートフォン
 

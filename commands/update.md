@@ -155,7 +155,7 @@ git status --short
 ```
 
 - `VERSION` が手順 0 で控えた値より新しくなっていること。smoke（`HARNESS_SMOKE_QUICK=1` の短い版。壊した複製の確かめは飛ばし、1〜4 分で終わる。負荷の高い機械では 8 分ほどかかる。Bash の timeout は 600000〔10 分〕にして打つか、背景で回す）が全 case PASS / exit 0 であること（FAIL が出たら更新を止め、内容を報告する。全部の確かめは開発のときに `bash "$P/tests/smoke.sh"`）。`git status --short` に `CLAUDE.md` `docs/` `.claude/rules/` の変更が出ていないこと。
-  版が変わらない場合は、既に最新か、`claude plugin update` の後に再起動していない。`claude plugin list` で導入済みの版を確認する。
+  版が変わらない場合は、既に最新か、`claude plugin update` の後に再起動していない。`claude plugin list` で導入済みの版を確認する。足すプラグイン `hirai-project-method` も入れたリポの土台は、配る側が tag `hirai-lite--v<版>` を打つまで上がらない（update は成功の表示のまま。待つか、配る側に知らせる）。
 
 ## 手順 6: 利用者へ報告する
 

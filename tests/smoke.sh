@@ -3516,9 +3516,11 @@ PYEOF
   [ -z "$nb" ] || pr_bad="$pr_bad hirai-notify・notify-attention・hirai-pr-asset:${nb}"
 
   # PR の本文の型は、導入先の雛形・検査が先。プラグインの 4 種別は、どれも無いときだけ (commit.md・code.md・git-and-pr.md が同じ文)
-  for f in commands/commit.md rules/code.md docs/rules-reference/git-and-pr.md; do
+  for f in commands/commit.md rules/code.md docs/rules-reference/git-and-pr.md README.md; do
     grep -qF '雛形も検査も無いときだけ' "$ROOT/$f" || pr_bad="$pr_bad ${f} に、導入先の雛形・検査を先に使う決まり（雛形も検査も無いときだけ 4 種別）が無い"
   done
+  # 版が変わらない理由: 足すプラグインを入れたリポの土台は、配る側が tag を打つまで上がらない (update.md の手順 5)
+  grep -qF '配る側が tag `hirai-lite--v<版>` を打つまで上がらない' "$ROOT/commands/update.md" || pr_bad="$pr_bad update.md に、tag を打つまで土台が上がらないことが無い"
   # 戻し方: 足すプラグインを入れたリポの土台は、tag が残る間は下がらない (README)
   grep -qF 'tag が残る間は下がりません' "$ROOT/README.md" || pr_bad="$pr_bad README に、足すプラグインを入れたリポの土台が revert だけでは下がらないことが無い"
   # 移行の手順の合格の条件に、版の数字（hirai-lite v3.0.0 など）を決め打ちしない（版を上げるたびに「先へ進まない」で止まる）
