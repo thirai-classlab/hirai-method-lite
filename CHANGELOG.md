@@ -4,6 +4,16 @@
 
 更新のしかたは [README の「更新する」](README.md#更新する既定では自動で新しくなりません)。**既定では自動更新しない**（v1.13.0 から opt-in で自動にできる）。
 
+## v3.0.1
+heyapro-app で 3.0.0 を実物の Orca（1.4.229）と動かして見つかった、知らせ 2 つと見張りの時間切れを直した（heyapro-app の issue #1966。確かめの記録は #1959・#1960）。
+
+- **`hirai-notify done`・`stopped` の `worker_done` に task の id を添える**: Orca は task の id の無い `worker_done` を `worker_done requires taskId.` で断り、担当の Dispatch が終わりにならなかった。task の id は新しい引数 `--task-id`（前置きの文の Task の id）、無ければ Dispatch の id から `orca orchestration worker-show --dispatch <id> --json` で引く（`.result.dispatch.taskId`。jq か python3）。どちらでも引けなければ、足りないものを stderr に出して **送らずに exit 1**。`--task-id` は、Dispatch の在る `done`・`stopped` のほかで打つと exit 2
+- **宛先（`--to`・`HIRAI_COORDINATOR`・控え）へ送る `hirai-notify waiting` は `--type question`**（`escalation` から変更）: Orca は、動いている Dispatch の無い差出人の `escalation` を断って「Rejected escalation」の `status` に変える。`question` は断らず、待ち受け `check --wait --types worker_done,escalation,question` で拾える。`--dispatch-id`（か `HIRAI_DISPATCH_ID`）を渡した `waiting` と、宛先を省いた `waiting` は `escalation` のまま（宛先を省くと、Orca が差出人の端末の Dispatch から Run を引き、`escalation` に Dispatch の id を足す。`question` には足さない）
+- **見張り（`worktree-guard.sh`）と開始の 1 行（`session-start.sh`）の hook の制限を 5 秒から 30 秒に**: 負荷の平均が 269（16 コア）のとき見張りに 6.3 秒かかって打ち切られ、`worktree: block` の本体の会話の Write が止まらずに通った（普段は 0.1 秒ほど）。開始の 1 行も同じ理由で出なかった。打ち切られた操作が通ること（Claude Code の動き）は変えず、README に書いた。`$( )` の限界の数も測り直した（約 1,000 個で 30 秒）
+- **開始の 1 行（`notify: orca`）** に、`done`・`stopped` は前置きの Task の id も `--task-id` で渡すことを足した（渡せば Orca に聞かずに送れ、Orca が一時止まっているときの `send` の再試行が効く）
+- **検査**: 実物の Orca の断り方（`worker_done` に task の id が無い・Dispatch の task と違う・Dispatch の無い `escalation`・宛先が引けない）を写した偽の Orca を `tests/smoke.sh` に足し、case 10 と壊した複製の確かめ（notify に 10 通り追加）で見る。hook の制限の秒は case 2
+- **導入先で要る操作**: `claude plugin update hirai-lite@hirai-lite --scope <入れた範囲>` と会話の開き直しだけ。足すプラグイン（依存は `hirai-lite >=3.0.0`）は 1.0.0 のまま
+
 ## v3.0.0
 1.x（`hirai-lite`・1.16.0）と 2.x（`hirai-lite-v2`・2.9.0）の続き。**土台を `hirai-lite` に戻し、GitHub Project のタスク管理を足すプラグイン `hirai-project-method`（1.0.0）に分けた。** 配る系列は `main` の 1 本になり、2.x（`v2` ブランチ）は退役して凍結する（新しい版は出さない。`CHANGELOG.md` の 2.x の記録はそのまま残す）。破壊的変更を含むので 3.0.0 に上げる。設計の正本は rmp-app の `.tmp/harness/design-split.md`（2026-11-23 承認）。
 
