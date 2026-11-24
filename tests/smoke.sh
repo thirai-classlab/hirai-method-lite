@@ -465,6 +465,70 @@ case "$o" in *deny*) echo "ok   git-dir-env" ;; *) echo "FAIL guard-git-dir-env 
 # ~/.claude が git のリポの中への symlink でも、記憶の置き場は止めない
 mkdir -p "$T/hs/dotfiles/claude/projects"; git init -q "$T/hs/dotfiles"; ln -s "$T/hs/dotfiles/claude" "$T/hs/.claude"
 ed "$T/hs/.claude/projects/m.md" | chk ALLOW home-claude-symlink HC_WORKTREE=block HOME="$T/hs"
+# 早い exit: 環境変数・ホーム・対象の mode.yml のどこにも block が無ければ、git も走査 (awk) も呼ばずに抜ける
+Q="$T/Q"; git init -q "$Q"; mkdir -p "$Q/sub" "$T/spy" "$T/h0" "$T/hb/.claude"; echo x > "$Q/sub/f.txt"; printf 'worktree: block\n' > "$T/hb/.claude/mode.yml"
+for c in git awk; do printf '#!/bin/sh\necho %s >> "%s/spy.log"\nexec "%s" "$@"\n' "$c" "$T" "$(command -v "$c")" > "$T/spy/$c"; chmod +x "$T/spy/$c"; done
+# spy <名前> <呼んでよい道具 (無ければ -)> [VAR=値 ...]: 無出力で通り、git・awk のうち呼んだものが <呼んでよい道具> と同じ
+spy() {
+  local name="$1" want="$2" got; shift 2
+  : > "$T/spy.log"
+  got="$(cat | env PATH="$T/spy:$PATH" HOME="$T/h0" "$@" bash "$G" 2>&1)"
+  [ -z "$got" ] || { echo "FAIL guard-$name 通すのに出力がある: $got"; fail=1; return; }
+  got="$(sort -u "$T/spy.log" | tr '\n' ' ')"; got="${got% }"; got="${got:--}"
+  if [ "$got" = "$want" ]; then echo "ok   $name ($got)"; else echo "FAIL guard-$name 呼んだ道具 (want $want got $got)"; fail=1; fi
+}
+bs "$T/P" 'git commit -m x' | env PATH="$T/spy:$PATH" HOME="$T/h0" bash "$G" >/dev/null 2>&1
+[ "$(sort -u "$T/spy.log" 2>/dev/null | tr '\n' ' ')" = "awk git " ] || { echo "FAIL guard-early-spy-control block のリポの commit で git と awk を呼んだ記録が無い (見る仕組みが空振り)"; fail=1; }
+for m in '' 'mode: normal\n' 'worktree: off   # off / warn / block\n' '# worktree: block にすると止まる\nworktree: warn\n'; do
+  rm -f "$Q/.claude/mode.yml"; [ -z "$m" ] || { mkdir -p "$Q/.claude"; printf "$m" > "$Q/.claude/mode.yml"; }
+  ed "$Q/sub/f.txt" | spy early-edit - X=1
+  ed "$Q/new/dir/n.txt" | spy early-edit-new - X=1
+  bs "$Q/sub" 'git add -A && git commit -m "Co-Authored-By: x"' | spy early-commit - CLAUDE_PROJECT_DIR="$Q"
+  bs "$Q" "git -C $Q/sub commit -m x" | spy early-dash-C-off awk CLAUDE_PROJECT_DIR="$Q"
+done
+for m in off warn; do
+  ed "$T/P/sub/f.txt" | spy early-env-off - HC_WORKTREE=$m
+  bs "$T/P" "git -C $T/P commit -m x" | spy early-env-off - HC_WORKTREE=$m
+done
+# 早い exit で block を漏らさない: 環境変数・ホーム・祖先・CLAUDE_PROJECT_DIR・-C などの先・symlink の先・mode.yml の書き方
+off() { chk "$@" HOME="$T/h0" CLAUDE_PROJECT_DIR="$Q"; }
+rm -f "$Q/.claude/mode.yml"
+ed "$Q/sub/f.txt" | chk DENY early-home-block HOME="$T/hb"
+bs "$Q" 'git commit -m x' | chk DENY early-home-block-commit HOME="$T/hb" CLAUDE_PROJECT_DIR="$Q"
+ed "$Q/sub/f.txt" | off DENY early-env-block HC_WORKTREE=block
+bs "$Q" 'git commit -m x' | off DENY early-env-block-commit HC_WORKTREE=block
+ed "$T/P/sub/f.txt" | off DENY early-env-empty HC_WORKTREE=
+ed "$T/P/sub/new/dir/n.txt" | off DENY early-ancestor X=1
+bs "$T/P/sub" 'git commit -m x' | off DENY early-ancestor-commit X=1
+bs "$T/plain" 'git commit -m x' | chk DENY early-project-dir HOME="$T/h0" CLAUDE_PROJECT_DIR="$T/P/sub"
+bs "$Q" "git -C $T/P commit -m x" | off DENY early-other-repo X=1
+bs "$Q" "bash -c 'git -C $T/P commit -m x'" | off DENY early-other-repo-sub X=1
+bs "$Q" "git --git-dir=$T/P/.git commit -m x" | off DENY early-git-dir X=1
+bs "$Q" "git --work-tree $T/P commit -m x" | off DENY early-work-tree X=1
+for c in "git -\"C\" $T/P commit -m x" "git -\\C $T/P commit -m x" "git -\\
+C $T/P commit -m x" "git --git-\"dir\"=$T/P/.git commit -m x"; do bs "$Q" "$c" | off DENY early-quoted-flag X=1; done
+ln -s "$T/P/sub" "$T/lnksub"
+ed "$T/P/README.md" | off DENY early-root-edit X=1
+bs "$Q" "git -'C' $T/P commit -m x" | off DENY early-single-quote X=1
+bs "$Q" "$(printf 'git\t-C\t%s\tcommit -m x' "$T/P")" | off DENY early-tab-flag X=1
+bs "$T/lnksub" 'git commit -m x' | chk DENY early-symlink-cwd HOME="$T/h0" CLAUDE_PROJECT_DIR="$Q"
+bs "$T/plain" 'git commit -m x' | chk DENY early-symlink-proj HOME="$T/h0" CLAUDE_PROJECT_DIR="$T/lnksub"
+git init -q "$T/ML"; mkdir -p "$T/ML/.claude" "$T/shared"; printf 'worktree: block\n' > "$T/shared/mode.yml"; ln -s "$T/shared/mode.yml" "$T/ML/.claude/mode.yml"
+ed "$T/ML/a.txt" | off DENY early-mode-symlink X=1
+ed "$Q/sub/f.txt" | off DENY early-env-newline "HC_WORKTREE=block
+"
+# locale で読めないバイトがあっても、-C などの字を探す前に切れない (その locale が無い機械では飛ばす)
+for l in ja_JP.eucJP zh_CN.GB18030; do
+  locale -a 2>/dev/null | grep -qx "$l" || continue
+  bs "$Q" "git commit -m 'あ'; git -C $T/P commit -m x" | off DENY early-locale LC_ALL=$l
+done
+ed "$T/lnksub/f.txt" | off DENY early-symlink-edit X=1
+bs "$Q" "git -C $T/lnksub/.. commit -m x" | off DENY early-symlink-dotdot X=1
+mkdir -p "$Q/.claude"
+for m in 'worktree:block' 'mode: loop\r\nworktree: "block"\r\n' "# c\n  worktree: 'block' # c"; do
+  printf "$m" > "$Q/.claude/mode.yml"
+  ed "$Q/sub/f.txt" | off DENY early-mode-forms X=1
+done
 exit $fail
 R6GUARD
   cat > "$s/ctx-test.sh" <<'R6CTX'
@@ -930,7 +994,7 @@ guard-dash-C-base|hooks/worktree-guard.sh|s/\[ -n "\$cdl" \] \&\& \[ "\$dirset" 
 guard-arith-paren-subshell|hooks/worktree-guard.sh|/function skip_arith/,/^  }/s/^        else break$/        else { p++; return 1 }/
 guard-for-arith|hooks/worktree-guard.sh|s/|until|for|then|do/|until|then|do/
 guard-many-subst-slow|hooks/worktree-guard.sh|s/case "\$a" in \*commit\*) ;; \*) continue ;; esac//
-guard-outer-gitignored|hooks/worktree-guard.sh|s/^  return 1$/  git -C "$otop" check-ignore -q -- "$rel" 2>\/dev\/null/
+guard-outer-gitignored|hooks/worktree-guard.sh|/^outer_ignored()/,/^}/s/^    cur="\$otop"$/    git -C "$otop" check-ignore -q -- "$rel" 2>\/dev\/null \&\& return 0; cur="$otop"/
 guard-tmp-clone-commit|hooks/worktree-guard.sh|s/outer_ignored "\$top" \&\& return 0/:/
 guard-tmp-clone-edit|hooks/worktree-guard.sh|s/outer_ignored "\$top" "\$rel" \&\& exit 0/:/
 ctx-subdir-shows-block|scripts/orca-context.sh|s/rev-parse --show-toplevel/rev-parse --show-cdup/
@@ -942,6 +1006,29 @@ guard-home-claude-git-edit|hooks/worktree-guard.sh|s/under_home_claude "\$abs" \
 guard-home-claude-git-commit|hooks/worktree-guard.sh|s/under_home_claude "\$(phys "\$dir")" \&\& return 0/:/
 guard-home-git-edit|hooks/worktree-guard.sh|s/home_scope "\$top" \&\& exit 0/:/
 guard-tmp-clone-worktree-edit|hooks/worktree-guard.sh|s/^    cur="\$otop"$/    return 1/
+guard-early-edit|hooks/worktree-guard.sh|s/^    could_block "\$fdir" || exit 0$/    :/
+guard-early-commit|hooks/worktree-guard.sh|s/ \*-C\*|\*git-dir\*|\*work-tree\*) ;; \*) exit 0 ;; esac/ *) ;; esac/
+guard-early-dash-C-off|hooks/worktree-guard.sh|s/^  could_block "\$(phys "\$dir")" || return 0$/  :/
+guard-early-env-off|hooks/worktree-guard.sh|s/^  \[ "\$HC_WORKTREE" = block \] || exit 0$/  :/
+guard-early-env-newline|hooks/worktree-guard.sh|/^  HC_WORKTREE="\$(printf /d
+guard-early-edit|hooks/worktree-guard.sh|s/case "\${l%%#\*}" in/case "$l" in/
+guard-early-home-block|hooks/worktree-guard.sh|/^  may_block "\${HOME:-/d
+guard-early-env-block|hooks/worktree-guard.sh|/^  \[ "\${HC_WORKTREE:-}" = block \] \&\& return 0$/d
+guard-early-ancestor|hooks/worktree-guard.sh|s/case "\$d" in \*\/\*) d="\${d%\/\*}" ;; \*) break ;; esac/break/
+guard-early-project-dir|hooks/worktree-guard.sh|s/if could_block "\$(phys "\$cwd")" .*; then$/if could_block "$(phys "$cwd")"; then/
+guard-early-other-repo|hooks/worktree-guard.sh|s/ \*-C\*|\*git-dir\*|\*work-tree\*) ;;/ *git-dir*|*work-tree*) ;;/
+guard-early-git-dir|hooks/worktree-guard.sh|s/ \*-C\*|\*git-dir\*|\*work-tree\*) ;;/ *-C*|*work-tree*) ;;/
+guard-early-work-tree|hooks/worktree-guard.sh|s/ \*-C\*|\*git-dir\*|\*work-tree\*) ;;/ *-C*|*git-dir*) ;;/
+guard-early-quoted-flag|hooks/worktree-guard.sh|s/case "\$(printf .%s. "\$cmd" | LC_ALL=C tr -d .*)" in \*-C/case "$cmd" in *-C/
+guard-early-root-edit|hooks/worktree-guard.sh|s/^    could_block "\$fdir" || exit 0$/    could_block "${fdir%\/*}" || exit 0/
+guard-early-single-quote|hooks/worktree-guard.sh|s/tr -d '"\\047/tr -d '"/
+guard-early-tab-flag|hooks/worktree-guard.sh|s/ in \*-C\*|/ in *" -C "*|/
+guard-early-symlink-cwd|hooks/worktree-guard.sh|s/if could_block "\$(phys "\$cwd")"/if could_block "$cwd"/
+guard-early-symlink-proj|hooks/worktree-guard.sh|s/"\$(phys "\${CLAUDE_PROJECT_DIR:-\$cwd}")"; then$/"${CLAUDE_PROJECT_DIR:-$cwd}"; then/
+guard-early-mode-symlink|hooks/worktree-guard.sh|s/^  \[ -f "\$1" \] \&\& \[ -r "\$1" \] || return 1$/  [ -f "$1" ] \&\& [ -r "$1" ] \&\& [ ! -L "$1" ] || return 1/
+guard-early-locale|hooks/worktree-guard.sh|s/| LC_ALL=C tr -d/| tr -d/
+guard-early-symlink-dotdot|hooks/worktree-guard.sh|s/builtin cd -P -- "\$d"/builtin cd -- "$d"/
+guard-early-mode-forms|hooks/worktree-guard.sh|s/ || \[ -n "\$l" \]; do/; do/
 X
       ;;
     notify)
@@ -1021,16 +1108,27 @@ X
   esac
 }
 
+# r6_skip_reason <壊し方の名前> -> この機械では確かめようがない理由 (無ければ空)
+# 数で見る: `locale -a | grep -q` は、pipefail の下で locale -a が SIGPIPE (141) で落ち、locale が在っても「無い」になる
+r6_skip_reason() {
+  case "$1" in
+    # jq の道の壊し方は、jq の無い機械では確かめようがない (python3 の道だけが動く)
+    notify-task-jq) command -v jq >/dev/null 2>&1 || echo "jq が無い" ;;
+    # locale の壊し方は、その locale の無い機械では確かめようがない
+    guard-early-locale) [ "$(locale -a 2>/dev/null | grep -cxE 'ja_JP\.eucJP|zh_CN\.GB18030')" -gt 0 ] || echo "ja_JP.eucJP・zh_CN.GB18030 が無い" ;;
+  esac
+}
+
 # r6_suite <update|guard|notify|worktrees> -> 直した形で外れが 0 件、壊した複製で必ず FAIL が出ることを確かめ、問題を 1 行ずつ返す (無ければ空)
 r6_suite() {
-  local fn="r6_$1_checks" out tag rel ex
+  local fn="r6_$1_checks" out tag rel ex why
   out="$($fn 2>&1)"; [ -z "$out" ] || printf '%s\n' "$out"
   # HARNESS_SMOKE_QUICK=1 は壊した複製の確かめを飛ばす（直した形の確かめは回す）。飛ばした本数は最後に 1 行出す
   if [ "${HARNESS_SMOKE_QUICK:-}" = 1 ]; then r6_mutants "$1" | grep -c . >> "$R6_SKIP_FILE"; return 0; fi
   while IFS='|' read -r tag rel ex; do
     [ -n "$tag" ] || continue
-    # jq の道の壊し方は、jq の無い機械では確かめようがない（python3 の道だけが動く）
-    case "$tag" in notify-task-jq) command -v jq >/dev/null 2>&1 || continue ;; esac
+    why="$(r6_skip_reason "$tag")"
+    if [ -n "$why" ]; then echo "SKIP 壊した複製 ${tag}（${why}）" >&2; continue; fi
     out="$($fn "$rel" "$ex" 2>&1)"
     r6_must_fail "$tag" "$out" || printf 'NOFAIL 壊した複製 (%s) で %s が FAIL しない (確かめが空振り): %s\n' "$rel" "$tag" "$(printf '%s' "$out" | head -1)"
   done < <(r6_mutants "$1")
@@ -1743,11 +1841,14 @@ print(" ".join(str(x.get("timeout")) for e in h.get(sys.argv[2],[]) for x in e.g
   [ "$hk_bad" = "30/30" ] || bad="$bad [見張りと開始の 1 行の制限が 30 秒でない] PreToolUse/SessionStart=${hk_bad}"
   { grep -qF '見張り（`worktree-guard.sh`）の制限は 30 秒' "$ROOT/README.md" && grep -qF '打ち切られた操作は通ります' "$ROOT/README.md"; } \
     || bad="$bad [README に見張りの制限の秒と、打ち切られたときの動きが無い]"
+  # 知らせの hook 3 本 (Notification・StopFailure・PermissionDenied) の制限も 30 秒 (打ち切られると何も出さずに知らせが消える)
+  hk_bad="$(hook_secs "$ROOT/hooks/hooks.json" Notification notify-attention.sh)/$(hook_secs "$ROOT/hooks/hooks.json" StopFailure notify-attention.sh)/$(hook_secs "$ROOT/hooks/hooks.json" PermissionDenied notify-attention.sh)"
+  [ "$hk_bad" = "30/30/30" ] || bad="$bad [知らせの hook の制限が 30 秒でない] Notification/StopFailure/PermissionDenied=${hk_bad}"
   # 6 巡目: guard の入れ子の worktree・heredoc・日本語・大小の path・別 worktree、orca-context のサブディレクトリ表示。壊した複製 4 通りで FAIL することも見る。
   local r6g; r6g="$(r6_suite guard)"; [ -z "$r6g" ] || bad="$bad [6 巡目の guard・orca-context] $r6g"
   if [ -n "$bad" ]; then fail 2 "止める手段と fail-open" "$bad"; return; fi
 
-  pass 2 "context-budget.sh は既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% ちょうどで発火 / loop-reminder.sh は置き場 6 通りで loop のときだけ ${lines} 行を出し normal では 1 バイトも出さない (要点 4 つ入り・全行 [harness] 始まり) / HC_LOOP_REMINDER=off・大文字 LOOP・壊れた/読めない mode.yml・共通ライブラリ不在でも exit 0 無出力 / worktree-guard.sh は worktree: block のとき、Orca の worktree でない会話からの git に入るファイルの Edit・Write と git commit を止めて worktree の作り方を出し (6 場合)、.tmp・リポの外・git switch・git checkout -b・読み取り・Orca の worktree の編集と commit・off・warn は通し (9 場合)、壊れた入力は fail-open、mode.yml の項目で働き、hooks.json の PreToolUse に結ばれている / 守るリポは cwd ではなく操作の対象 (git -C・Edit の file_path) で決め (別リポ・cwd が非リポ 7 場合)、git commit の形 12 と引用符つき -C・バックスラッシュ改行を止め、heredoc の本文・--dry-run・--help・.tmp/・.claude/state/ は止めず、/bin/bash 3.2 でも止め、jq 無しは python3 で読み、どちらも無ければ止めずに orca-context が「止まりません」と言う"
+  pass 2 "context-budget.sh は既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% ちょうどで発火 / loop-reminder.sh は置き場 6 通りで loop のときだけ ${lines} 行を出し normal では 1 バイトも出さない (要点 4 つ入り・全行 [harness] 始まり) / HC_LOOP_REMINDER=off・大文字 LOOP・壊れた/読めない mode.yml・共通ライブラリ不在でも exit 0 無出力 / worktree-guard.sh は worktree: block のとき、Orca の worktree でない会話からの git に入るファイルの Edit・Write と git commit を止めて worktree の作り方を出し (6 場合)、.tmp・リポの外・git switch・git checkout -b・読み取り・Orca の worktree の編集と commit・off・warn は通し (9 場合)、壊れた入力は fail-open、mode.yml の項目で働き、hooks.json の PreToolUse に結ばれている / 守るリポは cwd ではなく操作の対象 (git -C・Edit の file_path) で決め (別リポ・cwd が非リポ 7 場合)、git commit の形 12 と引用符つき -C・バックスラッシュ改行を止め、heredoc の本文・--dry-run・--help・.tmp/・.claude/state/ は止めず、/bin/bash 3.2 でも止め、jq 無しは python3 で読み、どちらも無ければ止めずに orca-context が「止まりません」と言う / block が環境変数・ホーム・対象とその祖先の mode.yml のどこにも無ければ git も awk も呼ばずに抜け、あれば漏らさず止める / hook の制限は 見張り・開始の 1 行・知らせの 3 本とも 30 秒"
 }
 
 # ---------- case 3: 閾値超過で 1 度だけ発火 ----------
@@ -2845,7 +2946,7 @@ PYCMD
   # (a) 無ければ配布版と 1 バイト違わず置く (b) 在れば触らない (c) 全プロジェクト共通 (user) と
   # docs/ の無い環境には作らない、を実挙動で確かめる。手順書そのものを走らせるので、
   # 文書と実挙動が離れた時点でここが落ちる。
-  local at_blk ab ub aw abad=""
+  local at_blk ab ub aw abad="" uhit v
   at_blk='/^```bash$/ { b = ""; c = 1; next }
           c && /^```$/ { if (b ~ /rules-reference\/approval-template\.md/) { printf "%s", b; exit } c = 0; next }
           c { b = b $0 "\n" }'
@@ -2910,6 +3011,15 @@ PYCMD
       || abad="$abad /update が承認の型を足さない"
     printf 'USER-EDIT\n' >> "$aw/up/docs/rules-reference/approval-template.md"
     ( cd "$aw/up" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ub" ) >/dev/null 2>&1
+    # 雛形が 3.0.x の 9 節 (v1) のままなら outdated を 1 行出し、書き換えない。今の版・雛形なしでは出さない
+    mkdir -p "$aw/up/.github"
+    for v in v1 v2; do
+      printf '<!-- hirai-lite: pull_request_template %s -->\nx\n' "$v" > "$aw/up/.github/pull_request_template.md"
+      uhit="$( cd "$aw/up" && env CLAUDE_PLUGIN_ROOT="$ROOT" HOME="$aw/home" bash -c "$ub" 2>&1 | grep -cxF 'outdated .github/pull_request_template.md' )"
+      [ "$v:$uhit" = v1:1 ] || [ "$v:$uhit" = v2:0 ] || abad="$abad /update の手順 4 が雛形 $v で outdated を ${uhit} 回出した"
+      [ "$(wc -l < "$aw/up/.github/pull_request_template.md" | tr -d ' ')" = 2 ] || abad="$abad /update の手順 4 が雛形を書き換えた"
+    done
+    rm -f "$aw/up/.github/pull_request_template.md"
     grep -q 'USER-EDIT' "$aw/up/docs/rules-reference/approval-template.md" \
       || abad="$abad /update が既存の承認の型を上書きした"
     # (e) docs/rules-reference が無い環境 (全プロジェクト共通で入れた場合) には新設しない
@@ -3229,9 +3339,18 @@ JSONEOF
   nrun done ../../.tmp-q.md 要約H --to run:R1
   { [ "$nrc" -eq 0 ] && [ ! -s "$nlog" ]; } || nb="$nb [notify: off] exit=${nrc} 送った: $(cat "$nlog")"
   # (g-4) hirai-pr-asset: 使い捨ての bare リポへ。branch pr-assets を作る・積み増す・作業ツリーと HEAD を動かさない・
-  # remote を読めない / 無いと exit 1・/bin/bash 3.2。
-  local pw pa_rc pa_bad="" pa_head pa_st pa_out
-  pw="$(mkt)"; mkdir -p "$pw/img" "$pw/work" "$pw/bare.git"
+  # remote を読めない / 無い / GitHub でないと exit 1・URL の中の認証情報を出さない・/bin/bash 3.2。
+  # remote の URL は PATH の頭の git が PA_URL を答え、実際の読み書きは bare リポへ行く。
+  local pw pa_rc pa_bad="" pa_head pa_st pa_out pa_url pa_n pa_fail=""
+  pw="$(mkt)"; mkdir -p "$pw/img" "$pw/work" "$pw/bare.git" "$pw/gitbin"
+  cat > "$pw/gitbin/git" <<'PAGIT'
+#!/bin/sh
+# PA_FAIL の 1 語（remote・ls-remote・fetch・push）で、token 入りの文を stderr に出して 128 で終わる
+if [ -n "${PA_FAIL:-}" ] && [ "$1" = "$PA_FAIL" ]; then echo "fatal: could not read Password for 'https://SECRETTOKEN@github.com': Device not configured" >&2; exit 128; fi
+if [ "$1 $2" = "remote get-url" ] && [ -n "${PA_URL:-}" ]; then printf "%s\n" "$PA_URL"; exit 0; fi
+exec /usr/bin/git "$@"
+PAGIT
+  chmod +x "$pw/gitbin/git"
   git init -q --bare "$pw/bare.git" 2>/dev/null
   printf 'x' > "$pw/img/a.png"; printf 'y' > "$pw/img/b.png"
   ( cd "$pw/work" && git init -q 2>/dev/null && printf 'f\n' > f.txt && git add f.txt \
@@ -3241,13 +3360,14 @@ JSONEOF
   # pa_run <dir> <引数...> -> exit は pa_rc、標準出力は pa_out
   pa_run() {
     local d="$1"; shift
-    pa_out="$( cd "$d" && env -i HOME="$pw" PATH="/usr/bin:/bin" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@e GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@e \
+    pa_out="$( cd "$d" && env -i HOME="$pw" PATH="$pw/gitbin:/usr/bin:/bin" PA_URL="$pa_url" PA_FAIL="${pa_fail:-}" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@e GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@e \
       /bin/bash "$ROOT/bin/hirai-pr-asset" "$@" 2>"$pw/pa.err" )"
     pa_rc=$?
   }
+  pa_url=https://github.com/o/r.git
   pa_run "$pw/work" 5 "$pw/img/a.png"
   { [ "$pa_rc" -eq 0 ] && git -C "$pw/bare.git" rev-parse -q --verify refs/heads/pr-assets >/dev/null 2>&1 \
-      && git -C "$pw/bare.git" ls-tree -r --name-only pr-assets 2>/dev/null | grep -qx '5/a.png' && printf '%s' "$pa_out" | grep -qF '![a]('; } \
+      && git -C "$pw/bare.git" ls-tree -r --name-only pr-assets 2>/dev/null | grep -qx '5/a.png' && [ "$pa_out" = '![a](https://github.com/o/r/blob/pr-assets/5/a.png?raw=true)' ]; } \
     || pa_bad="$pa_bad [1 回目: branch を作り 5/a.png を置き貼る行を出す] exit=${pa_rc} $(cat "$pw/pa.err")"
   pa_run "$pw/work" 5 "$pw/img/b.png"
   { [ "$pa_rc" -eq 0 ] && [ "$(git -C "$pw/bare.git" rev-list --count pr-assets 2>/dev/null)" = 2 ] \
@@ -3257,10 +3377,35 @@ JSONEOF
   { [ "$(git -C "$pw/work" rev-parse HEAD 2>&1)" = "$pa_head" ] && [ "$(git -C "$pw/work" status --porcelain 2>&1)$(git -C "$pw/work" symbolic-ref HEAD 2>&1)" = "$pa_st" ] \
       && [ -z "$(git -C "$pw/work" branch --list pr-assets)" ]; } \
     || pa_bad="$pa_bad [作業ツリー・HEAD・branch が動いた]"
+  # token の入った remote でも、貼る 1 行・stderr のどちらにも token を出さない。URL の形が違っても同じ slug
+  for pa_url in 'https://x-access-token:SECRETTOKEN@github.com/o/r.git' 'https://a@SECRETTOKEN@github.com/o/r' 'git@github.com:o/r.git' 'ssh://git@github.com/o/r.git'; do
+    pa_run "$pw/work" 5 "$pw/img/a.png"
+    { [ "$pa_rc" -eq 0 ] && [ "$pa_out" = '![a](https://github.com/o/r/blob/pr-assets/5/a.png?raw=true)' ] && ! grep -q SECRETTOKEN "$pw/pa.err"; } \
+      || pa_bad="$pa_bad [remote の URL の形] exit=${pa_rc} out=${pa_out%%SECRET*}"
+  done
+  # owner/repo を読めない remote（GitHub でない）は、押さず・URL を出さずに exit 1
+  pa_n="$(git -C "$pw/bare.git" rev-list --count pr-assets 2>/dev/null)"
+  for pa_url in 'https://t:SECRETTOKEN@example.com/o/r.git' 'https://t:SECRETTOKEN@github.com/o' "$pw/bare.git" 'https://github.com/o/r/x.git'; do
+    pa_run "$pw/work" 5 "$pw/img/a.png"
+    { [ "$pa_rc" -eq 1 ] && [ -z "$pa_out" ] && ! grep -q SECRETTOKEN "$pw/pa.err" && [ "$(git -C "$pw/bare.git" rev-list --count pr-assets 2>/dev/null)" = "$pa_n" ]; } \
+      || pa_bad="$pa_bad [GitHub でない remote] exit=${pa_rc} out=${pa_out%%SECRET*}"
+  done
+  # git が token 入りの文で失敗しても（get-url・ls-remote・fetch・push）、--remote に URL を渡しても、stderr に token を出さずに exit 1
+  pa_url=https://github.com/o/r.git
+  for pa_fail in remote ls-remote fetch push; do
+    pa_run "$pw/work" 5 "$pw/img/a.png"
+    { [ "$pa_rc" -eq 1 ] && [ -z "$pa_out" ] && [ -s "$pw/pa.err" ] && ! grep -q SECRETTOKEN "$pw/pa.err"; } \
+      || pa_bad="$pa_bad [${pa_fail} の失敗の文] exit=${pa_rc} err=$(sed 's/SECRETTOKEN/TOKEN が出た/g' "$pw/pa.err" | head -1)"
+  done
+  pa_fail=""; pa_url=""
+  pa_run "$pw/work" --remote https://SECRETTOKEN@github.com/o/r.git 5 "$pw/img/a.png"
+  { [ "$pa_rc" -eq 1 ] && [ -s "$pw/pa.err" ] && ! grep -q SECRETTOKEN "$pw/pa.err"; } \
+    || pa_bad="$pa_bad [--remote に URL] exit=${pa_rc} err=$(sed 's/SECRETTOKEN/TOKEN が出た/g' "$pw/pa.err" | head -1)"
+  pa_url=https://github.com/o/r.git
   git -C "$pw/work" remote set-url origin "$pw/missing.git" 2>/dev/null
   pa_run "$pw/work" 5 "$pw/img/a.png"
   [ "$pa_rc" -eq 1 ] || pa_bad="$pa_bad [remote を読めない] exit=${pa_rc} (期待 1)"
-  git -C "$pw/work" remote remove origin 2>/dev/null
+  git -C "$pw/work" remote remove origin 2>/dev/null; pa_url=""
   pa_run "$pw/work" 5 "$pw/img/a.png"
   [ "$pa_rc" -eq 1 ] || pa_bad="$pa_bad [remote が無い] exit=${pa_rc} (期待 1)"
   pa_run "$pw/work" abc "$pw/img/a.png"
@@ -3351,14 +3496,37 @@ if any(w in visible for w in ("mermaid", "flowchart", "```", "==>")):
 if not re.search(r"<!--.*?```mermaid.*?-->", t, flags=re.S):
     sys.exit(1)
 PYEOF
+  # (g-7) PR の雛形は 4 種別の名前・頭の 4 行・必須の節・小見出し 4 つをこの順で持つ
+  python3 - "$ROOT/templates/pull_request_template.md" <<'PYEOF' || nb="$nb [pull_request_template: 種別 4 つ・頭の 4 行・必須の節・小見出しが欠けるか順が違う]"
+import re, sys
+t = open(sys.argv[1], encoding="utf-8").read()
+visible = re.sub(r"<!--.*?-->", "", t, flags=re.S)
+kinds = ("見える変更", "見えない変更", "設計・決定の文書", "release")
+want = ["## 何のため・どう解決するか", "### 困っていること", "### 目的", "### どう解決するか", "### 採らなかった案", "## 何が変わるか",
+        "## 基本設計の全体像のどこが変わるか", "## 壊れうる所と戻し方", "## テストの結果", "## 進み具合", "## 承認カード", "## 対応する issue"]
+lines = [x.rstrip() for x in visible.splitlines() if x.strip()]
+head = [x.split(":")[0] for x in lines[:4]]
+if [x for x in lines if x.startswith("#")] != want or head != ["種別", "利用者への影響", "決めてほしいこと", "task"] or lines[4] != want[0]:
+    sys.exit(1)
+if "<!--" in visible or any("\n- %s:" % k not in t for k in kinds):
+    sys.exit(1)
+PYEOF
 
   rm -rf "$nw"
   [ -z "$nb" ] || pr_bad="$pr_bad hirai-notify・notify-attention・hirai-pr-asset:${nb}"
 
+  # PR の本文の型は、導入先の雛形・検査が先。プラグインの 4 種別は、どれも無いときだけ (commit.md・code.md・git-and-pr.md が同じ文)
+  for f in commands/commit.md rules/code.md docs/rules-reference/git-and-pr.md README.md; do
+    grep -qF '雛形も検査も無いときだけ' "$ROOT/$f" || pr_bad="$pr_bad ${f} に、導入先の雛形・検査を先に使う決まり（雛形も検査も無いときだけ 4 種別）が無い"
+  done
+  # 版が変わらない理由: 足すプラグインを入れたリポの土台は、配る側が tag を打つまで上がらない (update.md の手順 5)
+  grep -qF '配る側が tag `hirai-lite--v<版>` を打つまで上がらない' "$ROOT/commands/update.md" || pr_bad="$pr_bad update.md に、tag を打つまで土台が上がらないことが無い"
+  # 戻し方: 足すプラグインを入れたリポの土台は、tag が残る間は下がらない (README)
+  grep -qF 'tag が残る間は下がりません' "$ROOT/README.md" || pr_bad="$pr_bad README に、足すプラグインを入れたリポの土台が revert だけでは下がらないことが無い"
   # 移行の手順の合格の条件に、版の数字（hirai-lite v3.0.0 など）を決め打ちしない（版を上げるたびに「先へ進まない」で止まる）
   grep -rnE 'hirai-lite v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/commands" "$ROOT/README.md" "$ROOT/docs" 2>/dev/null | grep -q . \
     && pr_bad="$pr_bad 版の決め打ち: $(grep -rnoE 'hirai-lite v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/commands" "$ROOT/README.md" "$ROOT/docs" 2>/dev/null | head -1)"
-  grep -qF '10 秒を超えると何も出さずに打ち切られ' "$ROOT/README.md" || pr_bad="$pr_bad README に知らせの hook が 10 秒で打ち切られることが無い"
+  grep -qF '30 秒を超えると何も出さずに打ち切られ' "$ROOT/README.md" || pr_bad="$pr_bad README に知らせの hook が 30 秒で打ち切られることが無い"
   # (h) 3.0.0 の直しが残っている: pr-retarget は bin/ にあり scripts/ に無い (Bash ツールでは土台の bin/ が PATH に入る) /
   # 承認ビューの節の本体は足すプラグインにあり土台の approval-template には指しだけ / 設計の起点は 3 行以内
   [ -x "$ROOT/bin/hirai-pr-retarget" ] || pr_bad="$pr_bad bin/hirai-pr-retarget が実行できない"

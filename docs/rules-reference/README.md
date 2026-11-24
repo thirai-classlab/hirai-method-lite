@@ -32,7 +32,7 @@
 | [`design-process.md`](design-process.md) | 依存の実在確認、前提崩壊時の動き方、規範の書き方、計測値の検証 | draft を起こすとき / 規範を足すとき |
 | [`task-ledger.md`](task-ledger.md) | ファイルに一覧表（台帳）を持つ形の記録。タスク構造、完了条件の書き方、一括計画、完了 commit。GitHub の形との区別つき | 台帳の形のリポで台帳を触るとき |
 | [`testing-practice.md`](testing-practice.md) | テストが嘘をつく典型、失敗の分類、並行性のテスト | テストを書く / 直すとき |
-| [`git-and-pr.md`](git-and-pr.md) | stacked PR、複合コマンド、PR 本文の渡し方、PR の本文の 9 節の型（§9） | PR を出すとき |
+| [`git-and-pr.md`](git-and-pr.md) | stacked PR、複合コマンド、PR 本文の渡し方、PR の本文の 4 種別の型（§9） | PR を出すとき |
 | [`shell-pitfalls.md`](shell-pitfalls.md) | `set -e` の leak、`grep -c` の exit code、実行ビット、コマンド解決 | bash を書くとき |
 | [`plugin-development.md`](plugin-development.md) | manifest のキー、`validate` の限界、`${CLAUDE_PLUGIN_ROOT}`、更新経路 | プラグインを触るとき |
 | [`context-and-output.md`](context-and-output.md) | コンテキスト予算の実測、出力の形について user が求めたこと | 層構成を変えるとき / 出力形式を決めるとき |

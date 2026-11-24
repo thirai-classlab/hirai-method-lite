@@ -100,7 +100,7 @@ harness_ghp_form() {
 # (呼び出し側は台帳の形にフォールバックする)。gh は呼ばない (控えを読むだけ)。
 #
 # **待ち解け (e) は常に「—」**。正しい定義 (依存待ちのうち、止めていた依存が全部
-# 閉じたもの) を、安全な GraphQL 点数・5 秒の hook 枠に収まる形で取れるかがまだ
+# 閉じたもの) を、安全な GraphQL 点数・SessionStart の hook の制限 (土台 3.0.1 から 30 秒) に収まる形で取れるかがまだ
 # 実測できていないため、harness_ghp_refresh は e を書き込まない (今後の差し替え先は
 # 同関数のコメントを参照)。時刻 (HH:MM) は件数 (a-d) を取得した時点のもので、
 # fetched_hm に書き込み時点の**手元のローカル時刻**をそのまま文字列で持つ
@@ -300,7 +300,7 @@ harness_ghp_refresh() (
 )
 
 # harness_ghp_refresh_async <mode> [root] -> harness_ghp_refresh を detach して呼ぶ。
-# SessionStart の 5 秒の hook timeout を、gh の通信で使い切らないようにする
+# SessionStart の hook の制限 (土台 3.0.1 から 30 秒) を、gh の通信で使い切らないようにする
 # (scripts/update-check.sh の harness_update_fetch_async と同じ detach の仕方 — fd を
 # 全部閉じ、hook 本体の exit を待たずに動かす)。
 harness_ghp_refresh_async() (

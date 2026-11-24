@@ -57,6 +57,7 @@ feature branch への `git push` と `gh pr create` は実行してよい。こ�
 ## PR を作る
 
 - 1 PR = 1 task。差分が 500 行を超えるなら task を分けて、下の PR から積む。
+- 本文の型は導入先のものに従う。PR の雛形（`.github/`・`docs/`・直下の `pull_request_template.md` か、`PULL_REQUEST_TEMPLATE/` の種別ごとの file）か本文を見る検査があれば、その型で書く。雛形も検査も無いときだけ、プラグインの 4 種別の型（`templates/pull_request_template.md`。書き方は `docs/rules-reference/git-and-pr.md` §9）で書く。どちらも、雛形を作業用の file に写して埋め、`gh pr create --title <題> --body-file <file>` で出す（CLI は雛形を自動では読まない）。
 - 本文に `Closes #<n>` を 1 行入れる（台帳の形は `task-<id>`）。部分の PR は、残りの完了条件を別 task へ移してから `Closes` にする。
 - 積み上げた PR の下が squash で入ったら `hirai-pr-retarget`（土台の `bin/`。Bash ツールでは PATH に入る）で付け替える。
 - merge を頼む前に `gh pr checks <n>` を見る手順は `rules/code.md` の「PR」にある。

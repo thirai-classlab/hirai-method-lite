@@ -46,7 +46,7 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/notify-attention.sh\"",
-            "timeout": 10
+            "timeout": 30
           }
         ]
       }
@@ -57,7 +57,7 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/notify-attention.sh\"",
-            "timeout": 10
+            "timeout": 30
           }
         ]
       }
@@ -68,7 +68,7 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/notify-attention.sh\"",
-            "timeout": 10
+            "timeout": 30
           }
         ]
       }

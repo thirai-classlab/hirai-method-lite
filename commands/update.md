@@ -135,7 +135,7 @@ if [ -n "$(harness_yml_file_value "$(harness_root "$PWD")/.claude/mode.yml" task
 P="${CLAUDE_PLUGIN_ROOT}"; [ -d "$P" ] || P="$(command -v python3 >/dev/null 2>&1 && python3 -I -c 'import json,re,sys; d=json.load(open(sys.argv[1])); r=[x for k,v in d.get("plugins",{}).items() if k.split("@",1)[0]==sys.argv[2] for x in v if x.get("installPath")]; r.sort(key=lambda x:[int(n) if n.isdigit() else 0 for n in re.split(r"[.]", str(x.get("version","0")).split("-",1)[0])]); print(r[-1]["installPath"] if r else "")' "$HOME/.claude/plugins/installed_plugins.json" hirai-lite 2>/dev/null)"; [ -d "$P" ] || P="$(ls -d "$HOME"/.claude/plugins/cache/hirai-lite/hirai-lite/*/ 2>/dev/null | sort -V | tail -1)"; P="${P%/}"
 bash -c '. "$1/scripts/update-check.sh"; harness_sync_owned_scripts "$1" "$2" force' _ "$P" "$PWD"   # zsh の Bash ツールでも同じに動かすため bash -c で包む
 for D in .claude/rules "$HOME/.claude/rules"; do for f in "$P"/rules/*.md; do b="${f##*/}"; [ -f "$D/$b" ] && ! cmp -s "$f" "$D/$b" && echo "rules 配布版と違う: $D/$b"; done; done
-for f in approval-template.md; do [ -d docs/rules-reference ] && [ ! -e "docs/rules-reference/$f" ] && cp "$P/docs/rules-reference/$f" docs/rules-reference/ && echo "placed docs/rules-reference/$f"; done; V="$(head -n 1 "$P/docs/rules-reference/approval-template.md")"; [ -e docs/rules-reference/approval-template.md ] && ! grep -qxF "$V" docs/rules-reference/approval-template.md && ! grep -q 'approval-template: keep' docs/rules-reference/approval-template.md && echo "outdated docs/rules-reference/approval-template.md"; true
+for f in approval-template.md; do [ -d docs/rules-reference ] && [ ! -e "docs/rules-reference/$f" ] && cp "$P/docs/rules-reference/$f" docs/rules-reference/ && echo "placed docs/rules-reference/$f"; done; V="$(head -n 1 "$P/docs/rules-reference/approval-template.md")"; [ -e docs/rules-reference/approval-template.md ] && ! grep -qxF "$V" docs/rules-reference/approval-template.md && ! grep -q 'approval-template: keep' docs/rules-reference/approval-template.md && echo "outdated docs/rules-reference/approval-template.md"; [ "$(head -n 1 .github/pull_request_template.md 2>/dev/null)" = "<!-- hirai-lite: pull_request_template v1 -->" ] && echo "outdated .github/pull_request_template.md"; true
 for D in .claude "$HOME/.claude"; do
   [ -e "$D/statusline.sh" ] && bash "$D/statusline.sh" </dev/null && echo
 done
@@ -154,8 +154,8 @@ HARNESS_SMOKE_QUICK=1 bash "$P/tests/smoke.sh"
 git status --short
 ```
 
-- `VERSION` が手順 0 で控えた値より新しくなっていること。smoke（`HARNESS_SMOKE_QUICK=1` の短い版。壊した複製の確かめは飛ばし、1〜4 分で終わる。Bash の timeout は 300000〔5 分〕にして打つ）が全 case PASS / exit 0 であること（FAIL が出たら更新を止め、内容を報告する。全部の確かめは開発のときに `bash "$P/tests/smoke.sh"`）。`git status --short` に `CLAUDE.md` `docs/` `.claude/rules/` の変更が出ていないこと。
-  版が変わらない場合は、既に最新か、`claude plugin update` の後に再起動していない。`claude plugin list` で導入済みの版を確認する。
+- `VERSION` が手順 0 で控えた値より新しくなっていること。smoke（`HARNESS_SMOKE_QUICK=1` の短い版。壊した複製の確かめは飛ばし、1〜4 分で終わる。負荷の高い機械では 8 分ほどかかる。Bash の timeout は 600000〔10 分〕にして打つか、背景で回す）が全 case PASS / exit 0 であること（FAIL が出たら更新を止め、内容を報告する。全部の確かめは開発のときに `bash "$P/tests/smoke.sh"`）。`git status --short` に `CLAUDE.md` `docs/` `.claude/rules/` の変更が出ていないこと。
+  版が変わらない場合は、既に最新か、`claude plugin update` の後に再起動していない。`claude plugin list` で導入済みの版を確認する。足すプラグイン `hirai-project-method` も入れたリポの土台は、配る側が tag `hirai-lite--v<版>` を打つまで上がらない（update は成功の表示のまま。待つか、配る側に知らせる）。
 
 ## 手順 6: 利用者へ報告する
 
@@ -184,7 +184,7 @@ bash の出力は作業ログであって報告ではない。**最後に必ず�
 
 - 移行が起きなかった場合（すでに `docs/` を使っている / `.claude/` に書類が無い）は、**書類の置き場の行を丸ごと省く**。移した件数とパスは手順 2 の実測値に差し替える（行数は 2-1 で控えた値）。
 - **移さなかったものがあれば必ず 1 行足す**（消していないこと・どちらを残すか決めてほしいことを伝える）。例: `⚠️ .claude/tasks/list.md は移していません。docs/tasks/list.md が既にあり、上書きすると中身が消えるためです。いまは両方残っています。読まれるのは docs/ 側です。中身を見比べて、残すほうを教えてください。`
-- 手順 3 で `placed .github/pull_request_template.md` と出たときだけ 1 行足す: `✅ PR の本文の雛形を置きました → .github/pull_request_template.md（以後このリポの PR すべてに効きます）`。手順 4 で `placed docs/rules-reference/approval-template.md` と出たときだけ 1 行足す: `✅ 承認をお願いするときの型を置きました → docs/rules-reference/approval-template.md`。型を置き換えたなら `✅ 承認の型を承認カードに替えました（元の写しは approval-template.md.bak）`。`scope-check.sh` が警告を出していたら、報告の末尾にその全文をそのまま貼る。途中で止まったら同じ調子で「何が起きたか」「どうすればよいか」「ここまでにやったこと」を書く。
+- 手順 3 で `placed .github/pull_request_template.md` と出たときだけ 1 行足す: `✅ PR の本文の雛形を置きました → .github/pull_request_template.md（以後このリポの PR の本文の型です。画面で開くときは自動で入り、`gh pr create` では写して `--body-file` で渡します）`。手順 4 で `placed docs/rules-reference/approval-template.md` と出たときだけ 1 行足す: `✅ 承認をお願いするときの型を置きました → docs/rules-reference/approval-template.md`。型を置き換えたなら `✅ 承認の型を承認カードに替えました（元の写しは approval-template.md.bak）`。`outdated .github/pull_request_template.md` と出たときだけ 1 行足す（書き換えない）: `ℹ️ PR の雛形は 3.0.x の 9 節のままです。使い続けてかまいません。4 種別の型に替えるなら、プラグインの templates/pull_request_template.md を写してください`。`scope-check.sh` が警告を出していたら、報告の末尾にその全文をそのまま貼る。途中で止まったら同じ調子で「何が起きたか」「どうすればよいか」「ここまでにやったこと」を書く。
 
 ## 手動でやらずに済ませたいとき（既定は無効）
 
