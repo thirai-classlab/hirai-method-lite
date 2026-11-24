@@ -28,29 +28,32 @@ description: GitHub Project でやること（wave・feature・task の issue �
 
 ## 進みと割り振りの表（進捗を聞かれたとき）
 
-`hirai-task load` が、GitHub Project の issue・PR・CI の実物から表を出す。**出力を言い換えず、数え直さず、そのまま貼る**（数字の出どころを 1 つにする）。
+`hirai-task load` が、GitHub Project の issue・PR・CI の実物から表を出す（読むだけ。`--json` は同じ材料の機械可読）。「どこで何件止まっているか」は `/hirai-project-method:board`（件数と止まり）、`load` は進み（%）と、だれが何をどの順でしているか。
 
-### 出すとき
+- **表はそのまま貼る**: メインエージェントは、`hirai-task load` の出力を言い換えず、数え直さず貼る ／ 例: 「進捗を見せて」に `hirai-task load` の出力だけを返す ／ 失効: なし
+- **表を出すのは 4 つの時機だけ**: メインエージェントは、新しい task を振ったとき・完了したとき・進捗の確認を頼まれたとき・task に進捗があったとき（段が上がった・止まった）に表を出し、返答のたびには出さない ／ 例: 割り振りは `hirai-task assign 40 sess-a 1` の出力の終わりに出る ／ 失効: なし
+- **警告の出た task は振らない**: メインエージェントは、`start`・`assign` が「ほかの人の task」と警告した task を振らず、ユーザーに聞く ／ 例: 「#51 は other-dev の task。開いている PR #160」→ どう進めるかを聞く ／ 失効: なし
 
-| 出すとき | すること |
+| 時機 | 打つもの |
 |---|---|
-| 進捗の確認を頼まれた（「進捗を見せて」など） | `hirai-task load` を打ち、出力をそのまま貼る |
-| 新しい task を振った | `hirai-task assign <n> <作業のセッションの名前> [順]` を打つ。出力の終わりに同じ表が出る |
-| 着手した・完了した | `hirai-task start <n>`・`hirai-task done <n>`・`hirai-task after-merge <PR>` の出力の終わりに同じ表が出る |
-| task に進捗があった（段が上がった・止まった） | 担当からの知らせを受けたあと、`hook` が動いたときだけ表を足す。手で見るときは `hirai-task load --changed`（動いていなければ 1 行も出さず exit 3） |
+| 進捗の確認を頼まれた | `hirai-task load` |
+| 新しい task を振った | `hirai-task assign <n> <作業のセッションの名前> [順]`（外すときは `hirai-task assign <n> --clear`。名前に空白があれば引用符で囲む。`-` で始めない） |
+| 着手した・完了した | `hirai-task start <n>`・`hirai-task done <n>`・`hirai-task after-merge <PR>` |
+| 進捗があった | `hirai-task load --changed`（前回と比べて段・担当・順番・止まりの印が動いたときだけ出し、動いていなければ 1 行も出さず exit 3）。コーディネーターの会話では、`orca orchestration check` で知らせを受けたとき、hook が「打つ」の 1 行を足す |
 
-返答のたびには出さない。担当の会話（linked worktree）と `tasks: github-project` でないリポでは、割り振り・着手・完了のあとの表は出ない。
+**割り振り・着手・完了のあとの表は、コーディネーターの会話だけに出る。** コーディネーターの会話は、次の全部がそろうとき: `HC_NOTIFY=off` で開いた・Orca の端末・linked worktree でない・`.claude/mode.yml` が `tasks: github-project` と `notify: orca`。板の控え（10 分）が無いときは 1 行の断り、10 分より古いときは表の下に「（控え: N 分前）」が出る。`start`・`done` の変更は、板の控えが追いつくまで表に重なる。`--cached` は gh を叩かず、手元の控えだけを読む（板と PR の控えのどちらかが無ければ exit 3・何も出さない）。
 
 ### 表の読み方
 
-- 進捗は申告でなく実物で決まる: 0 着手前／20 進行中（PR なし）／50 draft の PR／60 ready で CI が走っているか赤／70 CI 緑／90 merge 済みで issue が開いている／100 issue が閉じた。控えに無い（新しい）issue は 0%
-- **担当の列**: 自分の作業のセッションの名前は手元の控えから、ほかの人の行は GitHub の Assignees の名前から出す（Project に「担当」の項目は足さない）
-- **進行中・レビュー中なのに担当の居ないもの**: 控えにも Assignees にも名前の無い行。残さない
-- **ほかの開発者の PR**: 割り振りの無い task に付いた、自分でない人の PR
-- 期限の行・本線の印は、`.claude/mode.yml` に設定があるときだけ出る:
+- 進捗は申告でなく実物で決まる: 0 着手前／20 進行中・レビュー中（PR なし）／50 draft の PR／60 ready で CI が走っているか赤・検査なし／70 CI 緑／90 merge 済みで issue が開いている（Status が 完了 の開いた issue も）／100 issue が閉じた。控えに無い（新しい）issue は 0% で、完了に数えない
+- **止まっているもの**: CI が赤・PR が衝突している task。段の数だけでは分からない止まりを別の行に出す
+- **担当の列**: 自分の作業のセッションの名前と順番は手元の控え（git の管理ディレクトリの下の `hirai-task/load-assign.json`）から、ほかの人の行は GitHub の Assignees の名前から出す（Project に「担当」の項目は足さない）。閉じた task は新しいほうの 3 つだけ
+- **進行中・レビュー中なのに担当の居ないもの**: 手元の控えに名前が無く、ほかの人だけの Assignees でもない 進行中・レビュー中の task（Assignees が自分だけの行も入る）。残さない
+- **ほかの開発者の PR**: 割り振りもほかの人の Assignees も無い open の task を閉じる、自分でない人の開いている PR
+- 期限の行・本線の印は、**そのリポの** `.claude/mode.yml`（ホームの `~/.claude/mode.yml` は読まない）に設定があるときだけ出る:
 
 ```yaml
-load_deadline: 2026-12-15        # 本文に「期限: 2026-12-15」の行がある open の issue を数える
+load_deadline: 2026-12-15        # 本文に「期限: 2026-12-15」の行がある open の issue を数える（日付に触れただけの issue は数えない）
 load_deadline_label: ベータ（12/15・エージェントのオンボーディング）
 load_mainline: 営業の登録          # この語を含むセクションに印を付ける
 load_mainline_label: ベータの本線
@@ -58,13 +61,13 @@ load_mainline_label: ベータの本線
 
 ### Assignees（だれの task か）
 
-`start` と `assign` は、Assignees が空なら動かしている GitHub ユーザーを入れる。ほかの人が入っていたら警告を 1 行出す（その人の開いている PR も）。上書き・追加・停止はしない。警告が出た task は振らず、ユーザーに聞く。
+`start` と `assign` は、Assignees が空なら動かしている GitHub ユーザーを入れる。ほかの人（複数人を含む）が入っていたら警告を 1 行出す（その人の開いている PR も）。空でも、ほかの人の開いている PR がその task を閉じるなら、入れずに警告する。上書き・追加・停止はしない。確かめられないときは標準エラーに 1 行で、着手や割り振りの結果は変わらない。
 
 ### 止まったとき
 
-- exit 1: 取得に失敗した、または控えが無い。標準エラーの末尾を伝え、`hirai-task load --refresh` を添える。「0%」「0 件」とは言わない
+- exit 1: 取得に失敗した（gh の失敗・認証・レート制限）。標準エラーの末尾を伝え、`hirai-task load --refresh` を添える。「0%」「0 件」とは言わない
 - exit 2: 呼び方の誤り。標準エラーをそのまま出す
-- exit 3: `--changed` で動いた所が無い（出すものが無い）
+- exit 3: 出すものが無い（`--changed` で動きが無い・`--cached` で控えが無い・`--if-coordinator` の対象外）。標準出力は 1 行も出ない
 
 ## 関連
 

@@ -1271,6 +1271,12 @@ def _load_gh(calls: list, *, rows=None, prs=None, deadline_bodies=None, fail_sea
                 return 1, '', 'HTTP 403: rate limit'
             items = [{'number': 900 + i, 'body': b} for i, b in enumerate(deadline_bodies or [])]
             return 0, json.dumps({'total_count': len(items), 'incomplete_results': False, 'items': items}), ''
+        if 'assignees(first: 10)' in joined and 'pullRequests(states: OPEN' not in joined:
+            repo = {}
+            for i, num in re.findall(r'a(\d+): issue\(number: (\d+)\)', joined):
+                logins = (by_number.get(int(num)) or {}).get('assignees', [])
+                repo[f'a{i}'] = {'number': int(num), 'assignees': {'nodes': [{'login': x} for x in logins]}}
+            return 0, json.dumps({'data': {'repository': repo}}), ''
         if 'pullRequests(states: OPEN' in joined:
             repo = {'open': {'totalCount': len(prs['open']), 'nodes': prs['open']}, 'merged': {'nodes': prs['merged']}}
             for i, num in re.findall(r'a(\d+): issue\(number: (\d+)\)', joined):
@@ -1299,16 +1305,18 @@ def _load_gh(calls: list, *, rows=None, prs=None, deadline_bodies=None, fail_sea
 
 def _load_checks(t, tmp_dir: str) -> None:
     """load・assign・hook の検査一式。控えと割り振りの置き場を一時ディレクトリへ差し替えて走らせる。"""
-    names = ('BOARD_CACHE', 'LOAD_PR_CACHE', 'LOAD_STATE', 'LOAD_ASSIGN')
+    names = ('BOARD_CACHE', 'LOAD_PR_CACHE', 'LOAD_STATE', 'LOAD_ASSIGN', 'LOAD_OVERLAY')
     orig = {n: getattr(gh_task, n) for n in names}
     orig_run, orig_override, orig_mode = gh_task.run_gh, gh_task.PROJECT_NUMBER_OVERRIDE, gh_task._mode_setting
     orig_coord = gh_task.is_coordinator
+    orig_local = gh_task._local_state_dir
     base = tempfile.mkdtemp(dir=tmp_dir)
+    gh_task._local_state_dir = lambda: os.path.join(base, 'local')
     for n in names:
         setattr(gh_task, n, os.path.join(base, 'state', n.lower() + '.json'))
     calls: list[str] = []
     modes: dict[str, str] = {}
-    gh_task._mode_setting = lambda key: modes.get(key, '')
+    gh_task._mode_setting = lambda key, home=True: modes.get(key, '')
     gh_task.is_coordinator = lambda: False
     load = gh_task._load_module()
 
@@ -1321,6 +1329,9 @@ def _load_checks(t, tmp_dir: str) -> None:
             path = getattr(gh_task, n)
             if os.path.exists(path):
                 os.remove(path)
+        local = os.path.join(base, 'local', 'load-last.json')
+        if os.path.exists(local):
+            os.remove(local)
         calls.clear()
         modes.clear()
         gh_task.run_gh = _load_gh(calls, **kw)
@@ -1343,6 +1354,8 @@ def _load_checks(t, tmp_dir: str) -> None:
             assert stages[42][0] == 50 and 'draft' in stages[42][1], stages[42]          # draft だけ
             assert stages[43][0] == 60 and 'CI 赤' in stages[43][1], stages[43]          # CI 赤
             assert stages[44][0] == 70 and '衝突' in stages[44][1], stages[44]           # 衝突（CI は緑）
+            stuck = {t['number']: t['stuck'] for p in model_of()['people'] for t in p['tasks']}
+            assert stuck[43] == 'CI 赤' and stuck[44] == '衝突' and stuck[45] == '', stuck
             assert stages[45] == (70, 'PR #145 ready・CI 緑'), stages[45]
             assert stages[46][0] == 90 and 'merge 済み' in stages[46][1], stages[46]     # merge 済みで issue が開いている
             assert stages[48] == (100, '完了'), stages[48]
@@ -1355,6 +1368,10 @@ def _load_checks(t, tmp_dir: str) -> None:
             assert rows_of.get('other-dev') == [51], f'ほかの人の行: {rows_of}'
             assert list(rows_of)[-1] == 'other-dev', f'ほかの人の行は自分の担当のあと: {rows_of}'
             assert [o['number'] for o in m['others']] == [49] and m['others'][0]['author'] == 'other-dev', m['others']
+            prs = _load_default_prs()
+            prs['open'].append(_load_pr(180, [20, 9999, 48], author='other-dev'))  # feature・載っていない番号・閉じた task
+            m2 = model_of(prs=prs)
+            assert [o['number'] for o in m2['others']] == [49], f'task でない・載っていない・閉じたものを出した: {m2["others"]}'
             out = load.render(m)
             assert '進行中・レビュー中なのに担当の居ないもの: #47, #52' in out, out
             assert 'ほかの開発者の PR: #49（PR #149・other-dev）' in out, out
@@ -1436,6 +1453,19 @@ def _load_checks(t, tmp_dir: str) -> None:
             assert rc == 0 and '#45' in out, f'段が動いたのに出ない: {rc} {out!r}'
             rc, out = _run_main(['load', '--changed'])
             assert rc == gh_task.LOAD_EXIT_UNCHANGED, '2 回目の --changed が 2 重に出た'
+            # 段は同じ 60 のまま、CI が実行中から赤になった（止まった）ら出す
+            def with_checks(state):
+                prs = _load_default_prs()
+                prs['open'] = [p for p in prs['open'] if p['number'] != 143] + [_load_pr(143, [43], checks=state)]
+                return prs
+            fresh(prs=with_checks('PENDING'))
+            _run_main(['load'])
+            gh_task.run_gh = _load_gh(calls, prs=with_checks('FAILURE'))
+            rc, out = _run_main(['load', '--changed'])
+            assert rc == 0 and '止まっているもの: #43（CI 赤）' in out, f'CI が赤になって止まったのに出ない: {rc} {out[-200:]}'
+            gh_task.run_gh = _load_gh(calls, prs=with_checks('FAILURE'))
+            rc, out = _run_main(['load', '--changed'])
+            assert rc == 3, rc
         t('load --changed: 前回と比べて段が動いたときだけ出し、動いていなければ 1 行も出さず exit 3', _changed)
 
         def _changed_owner_and_order() -> None:
@@ -1582,17 +1612,17 @@ def _load_checks(t, tmp_dir: str) -> None:
             os_environ = dict(os.environ)
             orig_git = gh_task._git_dir
             gh_task.is_coordinator = orig_coord
-            gh_task._mode_setting = lambda key: {'tasks': 'github-project', 'notify': 'orca'}.get(key, '')
+            gh_task._mode_setting = lambda key, home=True: {'tasks': 'github-project', 'notify': 'orca'}.get(key, '')
             gh_task._git_dir = lambda flag: '/r/.git'
             def check(env: dict, want: bool, why: str, git=lambda flag: '/r/.git', mode=None) -> None:
                 os.environ.clear(); os.environ.update(env)
                 gh_task._git_dir = git
                 if mode is not None:
-                    gh_task._mode_setting = lambda key: mode.get(key, '')
+                    gh_task._mode_setting = lambda key, home=True: mode.get(key, '')
                 try:
                     got = gh_task.is_coordinator()
                 finally:
-                    gh_task._mode_setting = lambda key: {'tasks': 'github-project', 'notify': 'orca'}.get(key, '')
+                    gh_task._mode_setting = lambda key, home=True: {'tasks': 'github-project', 'notify': 'orca'}.get(key, '')
                 assert got is want, f'{why}: {got}'
             try:
                 full = {'HC_NOTIFY': 'off', 'ORCA_TERMINAL_HANDLE': 'term_1'}
@@ -1608,43 +1638,439 @@ def _load_checks(t, tmp_dir: str) -> None:
                 os.environ.clear(); os.environ.update(os_environ)
                 gh_task._git_dir = orig_git
                 gh_task.is_coordinator = lambda: False
+                gh_task._mode_setting = lambda key, home=True: modes.get(key, '')
         t('is_coordinator: 担当（linked worktree・HC_NOTIFY なし）・Orca の端末でない会話・GitHub Project でないリポでは出さない', _coordinator)
 
         def _after_table() -> None:
+            def as_coordinator(on: bool) -> None:
+                gh_task.is_coordinator = lambda: on
+            try:
+                fresh()
+                as_coordinator(False)
+                calls.clear()
+                silent = io.StringIO()
+                with redirect_stdout(silent):
+                    gh_task.print_load_after()
+                assert (calls, silent.getvalue()) == ([], ''), f'コーディネーターでないのに出した: {silent.getvalue()[:80]!r}'
+                as_coordinator(True)
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    gh_task.print_load_after()
+                assert '控えが無い' in buf.getvalue() and calls == [], buf.getvalue()
+                _run_main(['load'])
+                calls.clear()
+                gh_task._record_overlay(45, '完了', 'CLOSED')
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    gh_task.print_load_after()
+                out = buf.getvalue()
+                assert '3 / 15 完了（20%）' in out and '#45（PR #145）' in out and '100%' in out, out
+                assert sum('items(first:' in c for c in calls) == 0 and sum('pullRequests(states: OPEN' in c for c in calls) == 1, calls
+                # 直後の load・hook が呼ぶ控えだけの load でも同じ数で、「動いた」と誤らない（板の控えが追いつくまで重ねる）
+                rc, out = _run_main(['load', '--cached'])
+                assert rc == 0 and '3 / 15 完了（20%）' in out, out
+                rc, out = _run_main(['load', '--changed', '--cached'])
+                assert (rc, out) == (3, ''), f'done のあとに、動いていない表を出した: {rc} {out[:120]!r}'
+                gh_task._record_overlay(46, '完了', 'CLOSED')
+                rc, out = _run_main(['load', '--cached'])
+                assert '4 / 15 完了' in out, f'2 件目の done で 1 件目が戻った: {out.splitlines()[0]}'
+                # 板の控えが新しくなれば、重ねた変更は使わない
+                with open(gh_task.BOARD_CACHE, encoding='utf-8') as f:
+                    snap = json.load(f)
+                snap['fetched_epoch'] += 3600 * 24 * 2
+                with open(gh_task.BOARD_CACHE, 'w', encoding='utf-8') as f:
+                    json.dump(snap, f)
+                rc, out = _run_main(['load', '--cached'])
+                assert '2 / 15 完了' in out, f'新しい板に古い変更を重ねた: {out.splitlines()[0]}'
+                gh_task.run_gh = lambda args, input_text=None: (1, '', 'boom')
+                gh_task.print_load_after()  # 取れなくても例外を出さない
+            finally:
+                as_coordinator(False)
+        t('print_load_after: コーディネーターだけ・PR は 1 回・start と done の変更は板の控えが追いつくまで load にも hook にも重なる', _after_table)
+
+        def _overlay_start_and_stale() -> None:
+            try:
+                fresh()
+                gh_task.is_coordinator = lambda: True
+                _run_main(['load'])
+                with open(gh_task.BOARD_CACHE, encoding='utf-8') as f:
+                    snap = json.load(f)
+                snap['fetched_epoch'] -= 3 * 24 * 3600
+                with open(gh_task.BOARD_CACHE, 'w', encoding='utf-8') as f:
+                    json.dump(snap, f)
+                gh_task._record_overlay(40, '進行中')
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    gh_task.print_load_after()
+                out = buf.getvalue()
+                assert '（控え: 4320 分前）' in out, f'古い控えの断りが無い: {out[-120:]}'
+                assert '0% → 20%' in out or '| 甲 | 営業の登録 | #40 → #41' in out and '20% → 20%' in out, out
+                items = [gh_task.parse_item({'id': r['id'], 'fieldValues': {'nodes': [
+                    {'__typename': 'ProjectV2ItemFieldSingleSelectValue', 'name': v, 'field': {'name': f}}
+                    for f, v in (('Status', r['status']), (gh_task.KIND_FIELD, r['kind'])) if v]}, 'content': {
+                    '__typename': 'Issue', 'number': r['number'], 'title': r['title'], 'state': 'CLOSED' if r['number'] == 45 else r['state'],
+                    'url': r['url'], 'parent': {'number': r['parent_number']} if r['parent_number'] else None}})
+                    for r in _load_rows()]
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    gh_task.print_load_after(items=items)
+                out = buf.getvalue()
+                assert '（控え:' not in out and '3 / 15 完了' in out, f'取り直した items を使っていない: {out.splitlines()[:2]} {out[-80:]}'
+                os.remove(gh_task.BOARD_CACHE)
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    gh_task.print_load_after(items=items)
+                assert '3 / 15 完了' in buf.getvalue(), f'控えが無いと after-merge の表が出ない: {buf.getvalue()[:100]}'
+            finally:
+                gh_task.is_coordinator = lambda: False
+        t('print_load_after: 古い控えには何分前かを出し、after-merge は取り直した items を使う（控えが無くても出る）', _overlay_start_and_stale)
+
+        def _wiring() -> None:
+            seen: list = []
+            saved = {n: getattr(gh_task, n) for n in (
+                'cmd_done', 'cmd_start', 'print_load_after', 'ensure_assignee', 'fetch_closing_issue_numbers', 'discover_project_number',
+                'fetch_all_items', 'fetch_bodies', 'align_write_allowed', 'fetch_sub_issue_lists', 'close_parents_plan', 'cmd_unblocked',
+                '_record_overlay', '_write_assignments', '_require_item', '_reject_wave_feature')}
+            gh_task.print_load_after = lambda items=None: seen.append(('table', items is not None))
+            gh_task._record_overlay = lambda number, status, state=None: seen.append(('overlay', number, status, state))
+            gh_task.ensure_assignee = lambda number: seen.append(('ensure', number)) or False
+            try:
+                gh_task.cmd_done = lambda number, reason: 0
+                rc, _ = _run_main(['done', '45'])
+                assert (rc, seen) == (0, [('overlay', 45, '完了', 'CLOSED'), ('table', False)]), seen
+                seen.clear()
+                gh_task.cmd_done = lambda number, reason: 1
+                rc, _ = _run_main(['done', '45'])
+                assert (rc, seen) == (1, []), f'失敗した done のあとに表: {seen}'
+                gh_task.cmd_start = lambda number, approved, reread=False: 0
+                rc, _ = _run_main(['start', '40'])
+                assert (rc, seen) == (0, [('overlay', 40, '進行中', None), ('ensure', 40), ('table', False)]), seen
+                seen.clear()
+                gh_task.fetch_closing_issue_numbers = lambda n: [45]
+                gh_task.discover_project_number = lambda: 7
+                gh_task.fetch_all_items = lambda n: [{'number': 45, 'kind': 'task', 'parent_number': None, 'status': 'レビュー中', 'state': 'OPEN', 'type': 'Issue'}]
+                gh_task.fetch_bodies = lambda n: {}
+                gh_task.align_write_allowed = lambda items: False
+                gh_task.fetch_sub_issue_lists = lambda n: {}
+                gh_task.close_parents_plan = lambda items, bodies, children: {}
+                gh_task.cmd_unblocked = lambda *, items=None: 0
+                rc, _ = _run_main(['after-merge', '145'])
+                assert rc == 0 and ('table', True) in seen, f'after-merge の終わりに表が出ない: {seen}'
+                seen.clear()
+                gh_task.fetch_closing_issue_numbers = lambda n: []
+                rc, _ = _run_main(['after-merge', '146'])
+                assert rc == 0 and seen == [], f'閉じる issue の無い PR で表: {seen}'
+                gh_task._require_item = lambda pn, n: {'number': n, 'found': True, 'state': 'OPEN', 'fields': {}}
+                gh_task._reject_wave_feature = lambda item, number, verb: None
+                rc, _ = _run_main(['assign', '40', '甲'])
+                assert rc == 0 and seen[:1] == [('ensure', 40)] and seen[-1] == ('table', False), f'assign の順が違う: {seen}'
+            finally:
+                for n, v in saved.items():
+                    setattr(gh_task, n, v)
+        t('配線: start・done・after-merge・assign の終わりに表が呼ばれる（失敗した done・閉じる issue の無い PR では呼ばない）', _wiring)
+
+        def _if_coordinator_and_state() -> None:
+            try:
+                fresh()
+                rc, out = _run_main(['load', '--if-coordinator'])
+                assert (rc, out, calls) == (3, '', []), f'コーディネーターでないのに動いた: {rc} {out!r} {calls}'
+                rc, _ = _run_main(['is-coordinator'])
+                assert rc == 1, rc
+                gh_task.is_coordinator = lambda: True
+                rc, _ = _run_main(['is-coordinator'])
+                assert rc == 0, rc
+                rc, _ = _run_main(['is-coordinator', 'x'])
+                assert rc == 2, rc
+                rc, out = _run_main(['load'])
+                assert rc == 0
+                before = open(gh_task.LOAD_STATE, encoding='utf-8').read()
+                prs = _load_default_prs()
+                prs['open'] = [p for p in prs['open'] if p['number'] != 142] + [_load_pr(142, [42])]
+                gh_task.run_gh = _load_gh(calls, prs=prs)
+                rc, _ = _run_main(['load', '--json'])
+                assert open(gh_task.LOAD_STATE, encoding='utf-8').read() == before, '--json が前回の控えを書き換えた'
+                prs = _load_default_prs()
+                prs['open'] = [p for p in prs['open'] if p['number'] != 145] + [_load_pr(145, [45], draft=True)]
+                gh_task.run_gh = _load_gh(calls, prs=prs)
+                gh_task.is_coordinator = lambda: False          # 担当の会話
+                _run_main(['load']); _run_main(['load', '--json'])
+                assert open(gh_task.LOAD_STATE, encoding='utf-8').read() == before, 'ほかの会話の load が、コーディネーターの前回の控えを書き換えた'
+                gh_task.is_coordinator = lambda: True
+                rc, out = _run_main(['load', '--changed'])
+                assert rc == 0 and '#45' in out, f'担当の load が食って、動いたのに出ない: {rc}'
+                rc, out = _run_main(['load', '--changed'])
+                assert (rc, out) == (3, ''), (rc, out)
+            finally:
+                gh_task.is_coordinator = lambda: False
+        t('load --if-coordinator・is-coordinator と、前回の控え: ほかの会話の load（--json も）は食わない', _if_coordinator_and_state)
+
+        def _stage_boundaries() -> None:
+            rows = [dict(r, owner='甲', order=float(i), status='レビュー中', state='OPEN') if r['number'] in (40, 41, 42, 43, 44, 45, 46, 47) else r
+                    for i, r in enumerate(_load_rows())]
+            prs = {'open': [_load_pr(1, [40], checks=''), _load_pr(2, [41], checks='PENDING'), _load_pr(3, [42], checks='ERROR'),
+                            _load_pr(4, [43], draft=True), _load_pr(5, [43], checks='SUCCESS'), _load_pr(6, [44], mergeable='UNKNOWN'),
+                            _load_pr(7, [46])],
+                   'merged': [_load_pr(8, [46]), _load_pr(9, [47])]}
+            stages = {t['number']: (t['pct'], t['note'], t['stuck']) for p in model_of(rows=rows, prs=prs)['people'] for t in p['tasks']}
+            assert stages[40][:1] == (60,) and '検査なし' in stages[40][1], stages[40]
+            assert stages[41][0] == 60 and '実行中' in stages[41][1] and stages[41][2] == '', stages[41]
+            assert stages[42][0] == 60 and 'CI 赤' in stages[42][1] and stages[42][2] == 'CI 赤', stages[42]
+            assert stages[43] == (70, 'PR #5 ready・CI 緑', ''), f'draft より ready を選ぶ: {stages[43]}'
+            assert stages[44][2] == '', f'衝突と言えない（UNKNOWN）のに衝突にした: {stages[44]}'
+            assert stages[46][0] == 70, f'開いている PR より merge 済みを先にした: {stages[46]}'
+            assert stages[45] == (20, 'レビュー中・PR なし', ''), stages[45]
+            assert stages[47][0] == 90, stages[47]
+            rows = [dict(r, status='完了', state='OPEN', owner='甲', order=1.0) if r['number'] == 45 else r for r in _load_rows()]
+            stages = {t['number']: t['pct'] for p in model_of(rows=rows, prs={'open': [], 'merged': []})['people'] for t in p['tasks']}
+            assert stages[45] == 90, f'Status 完了で開いている issue: {stages[45]}'
+        t('load: 段の境目（検査なし・PENDING・ERROR・複数 PR・merge 済みより開いている PR・UNKNOWN・PR なしのレビュー中・Status 完了の open）', _stage_boundaries)
+
+        def _other_repo_and_escape() -> None:
+            prs = _load_default_prs()
+            other = _load_pr(170, [40])
+            other['closingIssuesReferences']['nodes'][0]['repository']['nameWithOwner'] = 'someone/else'
+            prs['open'].append(other)
+            stages = {t['number']: t['pct'] for p in model_of(prs=prs)['people'] for t in p['tasks']}
+            assert stages[40] == 0, f'別 repo の Closes を数えた: {stages[40]}'
+            rows = [dict(r, owner='a|b<i>`x`\n[y](z)\x1b[31m') if r['number'] == 40 else r for r in _load_rows()]
+            rows = [dict(r, title='2. 営業|の`登録`<b>') if r['number'] == 2 else r for r in rows]
+            out = load.render(model_of(rows=rows))
+            for line in out.splitlines():
+                if line.startswith('|') and not line.startswith('|---'):
+                    assert line.count('|') == 5 or line.startswith('| セクション | 進み'), f'列が崩れた: {line!r}'
+            assert '\x1b' not in out and '<b>' not in out and '<i>' not in out and '](' not in out, out
+        t('load: 別 repo の Closes は数えない・縦棒・HTML・改行・制御文字・リンクを表に通さない', _other_repo_and_escape)
+
+        def _section_names() -> None:
+            rows = [dict(r, title='2.5 設計の現在形（層 0〜4）') if r['number'] == 1 else dict(r, title='3. 営業の登録') if r['number'] == 2 else r for r in _load_rows()]
+            out = load.render(model_of(rows=rows))
+            assert '| 2.5 設計の現在形（層 0〜4） |' in out and '| 営業の登録 |' in out and '3. 営業' not in out, out
+        t('load: セクションの番号は「N. 」だけ落とす（2.5 などを壊さない）', _section_names)
+
+        def _cache_checks() -> None:
             fresh()
-            gh_task.is_coordinator = lambda: False
-            calls.clear()
-            gh_task.print_load_after(gh_task._patch_status('進行中', 40))
-            assert calls == [], 'コーディネーターでないのに取りに行った'
             _run_main(['load'])
-            calls.clear()
-            silent = io.StringIO()
-            with redirect_stdout(silent):
-                gh_task.print_load_after(gh_task._patch_status('進行中', 40))
-            assert (silent.getvalue(), calls) == ('', []), f'コーディネーターでない会話に出した: {silent.getvalue()[:80]!r} {calls[:2]}'
-            os.remove(gh_task.BOARD_CACHE)
-            gh_task.is_coordinator = lambda: True
-            buf = io.StringIO()
-            with redirect_stdout(buf):
-                gh_task.print_load_after()
-            assert '控えが無い' in buf.getvalue() and 'pullRequests' not in ' '.join(calls), buf.getvalue()
-            _run_main(['load'])
-            calls.clear()
-            buf = io.StringIO()
-            with redirect_stdout(buf):
-                gh_task.print_load_after(gh_task._patch_closed(45))
-            assert '#45（PR #145）' in buf.getvalue() and '| 乙 | 営業の登録 | ' in buf.getvalue(), buf.getvalue()
-            assert '100%' in buf.getvalue(), '閉じた task が 100% にならない'
-            assert sum('items(first:' in c for c in calls) == 0 and sum('pullRequests(states: OPEN' in c for c in calls) == 1, calls
-            gh_task.run_gh = lambda args, input_text=None: (1, '', 'boom')
-            gh_task.print_load_after()  # 取れなくても例外を出さない
-            gh_task.is_coordinator = lambda: False
-        t('print_load_after: コーディネーターだけに出し、板は控え・PR は 1 回・失敗しても書いた操作を変えない', _after_table)
+            good = json.load(open(gh_task.LOAD_PR_CACHE, encoding='utf-8'))
+            for label, change in (('鍵が違う', {'key': 'x#auto'}), ('リポが違う', {'repo': 'a/b'}), ('行の形が違う', {'open': [{'number': 1}]}),
+                                  ('null の行', {'merged': [None]}), ('時刻が無い', {'fetched_epoch': None})):
+                json.dump({**good, **change}, open(gh_task.LOAD_PR_CACHE, 'w', encoding='utf-8'))
+                rc, out = _run_main(['load', '--cached'])
+                assert (rc, out) == (3, ''), f'{label}: {rc} {out[:60]!r}'
+            json.dump(good, open(gh_task.LOAD_PR_CACHE, 'w', encoding='utf-8'))
+            for minutes, want in ((9, False), (10, True)):
+                json.dump({**good, 'fetched_epoch': good['fetched_epoch'] - minutes * 60 - 1}, open(gh_task.LOAD_PR_CACHE, 'w', encoding='utf-8'))
+                rc, out = _run_main(['load', '--cached'])
+                assert rc == 0 and (('（控え:' in out) is want), f'PR の控えが {minutes} 分前: {out[-60:]!r}'
+            os.remove(gh_task.LOAD_PR_CACHE)
+            open(gh_task.BOARD_CACHE, 'w').write('{not json')
+            rc, out = _run_main(['load', '--cached'])
+            assert (rc, out) == (3, ''), (rc, out)
+            json.dump([], open(gh_task.LOAD_ASSIGN, 'w', encoding='utf-8'))
+            fresh()
+            _run_main(['load'])  # 割り振りの控えが壊れていても出る
+        t('load --cached: 鍵・リポ・行の形・時刻の違う控えは使わない。PR の控えの古さ（10 分）でも何分前かを出す', _cache_checks)
+
+        def _deadline_edges() -> None:
+            real_rest, asked = gh_task.rest, []
+            pages = {'total': 150, 'bodies': ['期限: 2026-12-15'] * 150, 'fail_page': 0, 'incomplete': False, 'pr': False}
+            def fake_rest(method, path, body=None, *, ok_fail=False):
+                if method == 'GET' and path.startswith('search/issues'):
+                    page = int(re.search(r'page=(\d+)$', path).group(1))
+                    asked.append(page)
+                    part = pages['bodies'][(page - 1) * 100:page * 100]
+                    items = [{'number': i, 'body': b, **({'pull_request': {}} if pages['pr'] else {})} for i, b in enumerate(part)]
+                    return {'total_count': pages['total'], 'incomplete_results': pages['incomplete'], 'items': items}
+                return real_rest(method, path, body, ok_fail=ok_fail)
+            gh_task.rest = fake_rest
+            try:
+                assert gh_task.fetch_deadline_open('2026-12-15') == 150 and asked == [1, 2], asked
+                pages['incomplete'] = True
+                assert gh_task.fetch_deadline_open('2026-12-15') is None
+                pages['incomplete'] = False
+                pages['pr'] = True
+                assert gh_task.fetch_deadline_open('2026-12-15') == 0
+                pages['pr'] = False
+                pages.update(total=5, bodies=['期限: 2026-12-151', '期限:\n2026-12-15 のベータ', '**期限**: 2026-12-15', '> - 期限：2026-12-15', '期限: 2026-12-16'])
+                assert gh_task.fetch_deadline_open('2026-12-15') == 2
+                pages.update(total=5000)
+                assert gh_task.fetch_deadline_open('2026-12-15') is None, '検索の上限で打ち切られたのに数を出した'
+            finally:
+                gh_task.rest = real_rest
+            seen_home = []
+            orig = gh_task._mode_setting
+            gh_task._mode_setting = lambda key, home=True: seen_home.append((key, home)) or ''
+            try:
+                gh_task._load_settings(None, network=False)
+            finally:
+                gh_task._mode_setting = orig
+            assert seen_home and all(home is False for key, home in seen_home if key.startswith('load_')), seen_home
+            def broken(key, home=True):
+                raise RuntimeError('mode.yml を読めない')
+            gh_task._mode_setting = broken
+            try:
+                settings = gh_task._load_settings(None, network=True)
+            finally:
+                gh_task._mode_setting = orig
+            assert settings['deadline_date'] == '' and settings['mainline'] == '', settings
+        t('load: 期限の数え方（頁・打ち切り・PR・日付の続き・全角コロン・行またぎ）と、設定はプロジェクトの mode.yml だけ・読めなければ出さない', _deadline_edges)
+
+        def _assign_edges() -> None:
+            saved = {n: getattr(gh_task, n) for n in ('_require_item', '_reject_wave_feature', '_reject_closed', 'discover_project_number', 'ensure_assignee')}
+            orig_rej = gh_task._reject_wave_feature
+            gh_task._require_item = lambda pn, n: {'number': n, 'found': True, 'state': 'OPEN', 'fields': {gh_task.KIND_FIELD: 'task'}}
+            gh_task.discover_project_number = lambda: 7
+            gh_task.ensure_assignee = lambda number: False
+            try:
+                fresh()
+                for bad in (['assign', '40', '-x'], ['assign', '40', 'a' * 41], ['assign', '40', 'a\x07b'], ['assign', '40', 'a', 'inf'],
+                            ['assign', '40', '甲', '-inf'], ['assign', '--clear']):
+                    rc, _ = _run_main(bad)
+                    assert rc == 2, f'{bad} が exit {rc}'
+                rc, _ = _run_main(['assign', '40', 'a' * 40])
+                assert rc == 0 and gh_task._load_shared_json(gh_task.LOAD_ASSIGN)['assign']['40']['owner'] == 'a' * 40, '40 字ちょうどを断った'
+                gh_task._reject_closed = saved['_reject_closed']
+                gh_task._require_item = lambda pn, n: {'number': n, 'found': True, 'state': 'CLOSED', 'fields': {gh_task.KIND_FIELD: 'task'}}
+                rc, _ = _run_main(['assign', '40', '甲'])
+                assert rc == 2, f'閉じた task に割り振れた: {rc}'
+                def not_found(pn, n):
+                    gh_task.die(f'#{n} は Projects に載っていない', 1)
+                gh_task._require_item = not_found
+                rc, _ = _run_main(['assign', '40', '甲'])
+                assert rc == 1, rc
+                gh_task._require_item = lambda pn, n: {'number': n, 'found': True, 'state': 'OPEN', 'fields': {gh_task.KIND_FIELD: 'feature'}}
+                gh_task._reject_wave_feature = orig_rej
+                rc, _ = _run_main(['assign', '40', '甲'])
+                assert rc == 2, f'feature に割り振れた: {rc}'
+                gh_task._save_shared_json(gh_task.LOAD_ASSIGN, {'assign': {'40': {'owner': '甲', 'order': 1}, '41': {'owner': '乙', 'order': None}}})
+                rc, out = _run_main(['assign', '40', '--clear'])
+                assert rc == 0 and list(gh_task._load_shared_json(gh_task.LOAD_ASSIGN)['assign']) == ['41'], out
+                gh_task._save_shared_json(gh_task.LOAD_ASSIGN, {'assign': {'1': {'owner': 'x', 'order': True}, '2': {'owner': 'y', 'order': 1e999}, 'z': {'owner': 'q'}, '3': {'owner': ' '}}})
+                got = gh_task._load_assignments()
+                assert got == {1: {'owner': 'x', 'order': None}, 2: {'owner': 'y', 'order': None}}, got
+            finally:
+                for n, v in saved.items():
+                    setattr(gh_task, n, v)
+        t('assign: 長さ・制御文字・- 始まり・無限大・閉じた・feature・載っていない を断り、--clear はほかの行を残して外す', _assign_edges)
+
+        def _ensure_edges() -> None:
+            def run(assignees, *, user='me', prs=None, post_add=None, prs_fail=False, fail_user=False):
+                state = {'a': [{'login': x} for x in assignees]}
+                base_fake = _load_gh(calls, prs=prs)
+                posted = []
+                def fake(args, input_text=None):
+                    if args[:3] == ['api', '-X', 'GET'] and args[3] == 'user':
+                        return (1, '', 'boom') if fail_user else (0, json.dumps({'login': user}), '')
+                    if args[:3] == ['api', '-X', 'GET'] and args[3].endswith('/issues/40'):
+                        return 0, json.dumps({'number': 40, 'assignees': state['a']}), ''
+                    if args[:3] == ['api', '-X', 'POST'] and args[3].endswith('/issues/40/assignees'):
+                        posted.append(1)
+                        got = [{'login': x} for x in json.loads(input_text)['assignees'] + (post_add or [])]
+                        return 0, json.dumps({'assignees': got}), ''
+                    if prs_fail and 'pullRequests(states: OPEN' in ' '.join(args):
+                        return 1, '', 'HTTP 403'
+                    return base_fake(args, input_text)
+                gh_task.run_gh = fake
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    others = gh_task.ensure_assignee(40)
+                return buf.getvalue(), others, posted
+            prs = _load_default_prs()
+            prs['open'].append(_load_pr(160, [40], author='other-dev'))
+            out, others, posted = run([], prs=prs)                      # 空でも、ほかの人の開いている PR があれば入れない
+            assert '入れない' in out and '#160（other-dev）' in out and others and not posted, (out, others, posted)
+            own = _load_default_prs()
+            own['open'].append(_load_pr(160, [40], author='ME'))
+            out, others, posted = run([], prs=own)                      # 自分の PR（大小の違い）なら入れる
+            assert posted and not others, (out, others)
+            third = _load_default_prs()
+            third['open'].append(_load_pr(161, [40], author='third-dev'))
+            out, others, posted = run(['other-dev'], prs=third)         # 別の人の PR は、その人の PR として書かない
+            assert '#161' not in out and '開いている PR なし' in out, out
+            out, others, posted = run(['other-dev'], prs_fail=True)     # PR が引けなくても、だれの task かは出す
+            assert 'other-dev の task' in out and '確かめられなかった' in out and others and not posted, out
+            out, others, posted = run(['other-dev'], fail_user=True)    # 動かしている人が分からなくても、入っている名前は出す
+            assert 'other-dev の task' in out and others, out
+            out, others, posted = run([], fail_user=True)               # 分からなければ入れない
+            assert not posted and not others, out
+            out, others, posted = run(['Me'])                           # 大小の違いは自分
+            assert out == '' and not others and not posted, out
+            out, others, posted = run([], post_add=['other-dev'])       # 書く間に別の人が入った
+            assert '警告' in out and 'other-dev も入っている' in out and others and posted, out
+        t('ensure_assignee: 空 + ほかの人の PR は入れない・PR や動かしている人が引けなくても警告を消さない・大小・書く間に入った人', _ensure_edges)
+
+        def _many_candidates() -> None:
+            rows = [r for r in _load_rows()] + [dict(_load_rows()[6], number=600 + i, id=f'I_{600+i}', status='進行中', owner='', order=None,
+                                                     assignees=['other-dev']) for i in range(60)]
+            fresh(rows=rows)
+            write_assign(_load_rows())
+            rc, out = _run_main(['load'])
+            assert rc == 0, out
+            for n in (600, 649, 650, 659):
+                assert f'#{n}' not in out.split('担当の居ないもの')[-1].split('\n')[0] or '担当の居ないもの' not in out, f'#{n} を担当なしと断言した: {out[-300:]}'
+            assert 'other-dev' in out and sum('a0: issue' in c for c in calls) == 2, f'60 件を 2 回に分けて引いていない: {sum("a0: issue" in c for c in calls)}'
+        t('load: 進行中が 50 件を超えても、Assignees を 50 件ずつ全部引く（担当なしと断言しない）', _many_candidates)
+
+        def _partial_not_found() -> None:
+            data = {'viewer': {'login': 'me'}, 'repository': {'a0': None, 'open': {'totalCount': 0, 'nodes': []}, 'merged': {'nodes': []}}}
+            errors_nf = [{'type': 'NOT_FOUND', 'path': ['repository', 'a0'], 'message': 'x'}]
+            gh_task.run_gh = lambda args, input_text=None: (1, json.dumps({'data': data, 'errors': errors_nf}), 'GraphQL: Could not resolve')
+            got = gh_task.fetch_load_prs([41])
+            assert got['open'] == [] and got['assignees'] == {'41': []}, got
+            for errors in ([{'type': 'FORBIDDEN', 'message': 'x'}], errors_nf + [{'type': 'RATE_LIMITED', 'message': 'x'}]):
+                gh_task.run_gh = lambda args, input_text=None, e=errors: (1, json.dumps({'data': data, 'errors': e}), '')
+                try:
+                    gh_task.fetch_load_prs([41])
+                except gh_task.GhError:
+                    continue
+                raise AssertionError(f'NOT_FOUND 以外のエラーを飲んだ: {errors}')
+            gh_task.run_gh = lambda args, input_text=None: (0, json.dumps({'data': {'viewer': None, 'repository': {
+                'open': {'totalCount': 3, 'nodes': [None, {'number': 5, 'closingIssuesReferences': {'nodes': [None]}, 'commits': {'nodes': [None]}}]}, 'merged': None}}}), '')
+            got = gh_task.fetch_load_prs()
+            assert got['open'][0]['number'] == 5 and got['open_total'] == 3 and got['merged'] == [], got
+        t('load: 消えた issue（NOT_FOUND）と null の行で表の全部を落とさない。ほかのエラーは飲まない', _partial_not_found)
+
+        def _open_truncated_line() -> None:
+            prs = _load_default_prs()
+            fresh(prs=prs)
+            gh_task.run_gh = _load_gh(calls, prs=prs)
+            real = gh_task.run_gh
+            def more(args, input_text=None):
+                rc, out, err = real(args, input_text)
+                if 'pullRequests(states: OPEN' in ' '.join(args):
+                    d = json.loads(out)
+                    d['data']['repository']['open']['totalCount'] = 120
+                    out = json.dumps(d)
+                return rc, out, err
+            gh_task.run_gh = more
+            rc, out = _run_main(['load'])
+            assert rc == 0 and '開いている PR が 120 本あり、新しいほうだけで数えています。' in out, out[-300:]
+            rc, out = _run_main(['load', '--cached'])
+            assert '開いている PR が 120 本あり' in out, '控えの表に断りが出ない'
+        t('load: 開いている PR が 50 本を超えたら、表に断りの行を出す（控えの表にも）', _open_truncated_line)
+
+        def _closed_folded() -> None:
+            rows = [dict(r, state='CLOSED', status='完了', owner='甲', order=float(i)) if r['number'] in (40, 41, 42, 43) else r
+                    for i, r in enumerate(_load_rows())] + []
+            rows = [dict(r, owner='甲', order=99.0) if r['number'] == 50 else r for r in rows]
+            out = load.render(model_of(rows=rows))
+            line = next(x for x in out.splitlines() if x.startswith('| 甲 |'))
+            assert '#40' not in line and '#41' in line and '#43' in line, f'閉じた行を畳んでいない: {line}'
+            all_closed = [dict(r, state='CLOSED', status='完了') if r['owner'] == '乙' else r for r in _load_rows()]
+            assert '| 乙 |' not in load.render(model_of(rows=all_closed)), '全部閉じた担当の行が残った'
+        t('load: 閉じた task は新しい 3 つだけ出し、全部閉じた担当は出さない', _closed_folded)
+
+        def _post_step_timeout() -> None:
+            seen = []
+            gh_task._state['gh_timeout'] = None
+            with gh_task._PostStep():
+                seen.append(gh_task._state['gh_timeout'])
+            assert seen == [gh_task.LOAD_POST_STEP_SECONDS] and gh_task._state['gh_timeout'] is None, (seen, gh_task._state)
+        t('書いたあとの確かめだけ gh の待ちに上限を付け、終わったら元に戻す', _post_step_timeout)
     finally:
         for n, v in orig.items():
             setattr(gh_task, n, v)
         gh_task.run_gh, gh_task.PROJECT_NUMBER_OVERRIDE, gh_task._mode_setting = orig_run, orig_override, orig_mode
-        gh_task.is_coordinator = orig_coord
+        gh_task.is_coordinator, gh_task._local_state_dir = orig_coord, orig_local
 
 
 def _card_field_defs(*, with_card_fields: bool = True) -> list[dict]:

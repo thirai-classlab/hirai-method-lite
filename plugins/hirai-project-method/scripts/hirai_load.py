@@ -27,6 +27,7 @@ import hirai_board
 STAGE_SENTENCE = '進捗は申告でなく、PR と CI の実物から出しています（20 着手、50 draft、60 ready、70 CI 緑、90 merge 済み）。'
 NO_OWNER_STATUSES = ('進行中', 'レビュー中')
 HELD_STATUS = '保留'
+CLOSED_SHOWN = 3  # 担当の行に出す、閉じた task の数（古いものから畳む）
 DONE_STATUS = '完了'
 CI_GREEN = ('SUCCESS',)
 CI_RED = ('FAILURE', 'ERROR')
@@ -37,8 +38,9 @@ def one_line(text) -> str:
 
 
 def cell(text) -> str:
-    """表のセルに入れる字（改行を 1 行に・縦棒を全角に。崩れと埋め込みを防ぐ）。"""
-    return one_line(text).replace('|', '｜').replace('<', '&lt;').replace('`', "'")
+    """表のセルに入れる字（改行・制御文字を空白に、縦棒・角かっこ・バッククォートを全角に。崩れと埋め込みを防ぐ）。"""
+    plain = ''.join(c if c.isprintable() else ' ' for c in str(text or ''))
+    return one_line(plain).replace('|', '｜').replace('<', '&lt;').replace('`', "'").replace('[', '［').replace(']', '］')
 
 
 def ci_state(pr: dict) -> str:
@@ -51,28 +53,34 @@ def ci_state(pr: dict) -> str:
     return '実行中' if checks else '検査なし'
 
 
-def stage_of(number: int, ctx: dict) -> tuple[int, str]:
-    """(率, 注)。控えに無い（Project に載っていない・新しい）issue は 0% で、完了に数えない。"""
+def stage_of(number: int, ctx: dict) -> tuple[int, str, str]:
+    """(率, 注, 止まりの印)。控えに無い（Project に載っていない・新しい）issue は 0% で、完了に数えない。
+    止まりの印は、止まっている理由（CI 赤・衝突）。無ければ空。"""
     task = ctx['tasks'].get(number)
     if task is None:
-        return 0, '控えに無い（新しい）'
+        return 0, '控えに無い（新しい）', ''
     if task.get('state') == 'CLOSED':
-        return 100, '完了'
+        return 100, '完了', ''
     prs = ctx['prs_of'].get(number, [])
     if prs:
         best = max(prs, key=lambda p: (not p['draft'], p['number']))
-        tail = '・衝突' if best.get('conflict') else ''
+        stuck = '衝突' if best.get('conflict') else ''
+        tail = f'・{stuck}' if stuck else ''
         if best['draft']:
-            return 50, f"PR #{best['number']} draft{tail}"
+            return 50, f"PR #{best['number']} draft{tail}", stuck
         ci = ci_state(best)
-        return (70 if ci == '緑' else 60), f"PR #{best['number']} ready・CI {ci}{tail}"
+        if ci == '赤':
+            stuck = 'CI 赤' + ('・衝突' if stuck else '')
+        return (70 if ci == '緑' else 60), f"PR #{best['number']} ready・CI {ci}{tail}", stuck
     if number in ctx['merged_of']:
         nums = '・'.join(f'#{n}' for n in ctx['merged_of'][number])
-        return 90, f'PR {nums} merge 済み（issue が開いている）'
+        return 90, f'PR {nums} merge 済み（issue が開いている）', ''
     status = task.get('status') or ''
+    if status == DONE_STATUS:
+        return 90, 'Status 完了（issue が開いている）', ''
     if status in NO_OWNER_STATUSES:
-        return 20, f'{status}・PR なし'
-    return 0, status or 'Status 未設定'
+        return 20, f'{status}・PR なし', ''
+    return 0, status or 'Status 未設定', ''
 
 
 def _pr_index(prs: list, repo: str) -> dict:
@@ -86,7 +94,7 @@ def _pr_index(prs: list, repo: str) -> dict:
 def section_name(model: dict, number: int) -> str:
     wave, _feat = hirai_board.locate(model, number)
     title = (model['by_number'].get(wave) or {}).get('title') if wave else ''
-    return re.sub(r'^\d+(?:[.．、]\s*|\s+)', '', one_line(title)) or '—'
+    return re.sub(r'^\d+\.\s+', '', one_line(title)) or '—'
 
 
 def build(view: dict, prs: dict, assign: dict, settings: dict) -> dict:
@@ -100,7 +108,7 @@ def build(view: dict, prs: dict, assign: dict, settings: dict) -> dict:
         rows = hirai_board.wave_tasks(model, wave['number'])
         if not rows:
             continue
-        done = sum(1 for t in rows if not hirai_board.is_open(t) or t.get('status') == DONE_STATUS)
+        done = sum(1 for t in rows if not hirai_board.is_open(t))
         held = sum(1 for t in rows if hirai_board.is_open(t) and t.get('status') == HELD_STATUS)
         sections.append({'name': section_name(model, wave['number']), 'total': len(rows), 'done': done, 'held': held})
     total, done, held = (sum(s[k] for s in sections) for k in ('total', 'done', 'held'))
@@ -124,12 +132,15 @@ def build(view: dict, prs: dict, assign: dict, settings: dict) -> dict:
                                                    for n in owners[o]), o)):
         entries = []
         for n in owners[owner]:
-            pct, note = stage_of(n, ctx)
+            pct, note, stuck = stage_of(n, ctx)
             mine = ctx['prs_of'].get(n, [])
             pr = max(mine, key=lambda p: (not p['draft'], p['number']))['number'] if mine else None
-            entries.append({'number': n, 'pct': pct, 'note': note, 'pr': pr, 'section': section_name(model, n)})
+            entries.append({'number': n, 'pct': pct, 'note': note, 'pr': pr, 'stuck': stuck, 'section': section_name(model, n)})
         if all(x['pct'] == 100 for x in entries):
             continue  # 全部閉じた担当は、古い割り振りの控えが残っているだけ。出さない
+        closed = [x for x in entries if x['pct'] == 100]
+        folded = closed[:-CLOSED_SHOWN] if len(closed) > CLOSED_SHOWN else []
+        entries = [x for x in entries if x not in folded]  # 閉じた行は新しいほうだけ（古いものは畳む）
         people.append({'owner': owner, 'tasks': entries})
     stray = [t['number'] for t in tasks.values()
              if hirai_board.is_open(t) and t.get('status') in NO_OWNER_STATUSES and t['number'] not in named]
@@ -138,11 +149,15 @@ def build(view: dict, prs: dict, assign: dict, settings: dict) -> dict:
         author = pr.get('author') or ''
         if me and author and author != me:
             for n in pr.get('closes') or []:
-                if int(n) not in named:
+                if int(n) not in named and int(n) in tasks and hirai_board.is_open(tasks[int(n)]):
                     others.append({'number': int(n), 'pr': pr['number'], 'author': author})
     others.sort(key=lambda o: (o['pr'], o['number']))
+    stuck_tasks = [{'number': t['number'], 'stuck': t['stuck']} for p in people for t in p['tasks'] if t['stuck']]
+    open_total = prs.get('open_total')
     return {'total': total, 'done': done, 'held': held, 'sections': sections, 'people': people,
-            'stray': sorted(stray), 'others': others, 'settings': settings,
+            'stray': sorted(stray), 'others': others, 'stuck': stuck_tasks, 'settings': settings,
+            'truncated': open_total if isinstance(open_total, int) and open_total > len(prs['open']) else 0,
+            'unknown_assignees': prs.get('unknown_assignees') or 0,
             'signature': signature(people), 'fetched_at': view.get('fetched_at', ''), 'how': view.get('how', '')}
 
 
@@ -151,7 +166,7 @@ def signature(people: list) -> dict:
     out = {}
     for person in people:
         for i, t in enumerate(person['tasks']):
-            out[str(t['number'])] = [t['pct'], person['owner'], i]
+            out[str(t['number'])] = [t['pct'], person['owner'], i, t['stuck']]
     return out
 
 
@@ -200,7 +215,8 @@ def render(model: dict) -> str:
     cells = [(x['name'] + (f"（{one_line(s.get('mainline_label') or '本線')}）" if mainline and mainline in x['name'] else ''),
               f"{pct_of(x['done'], x['total'])}%")
              for x in model['sections'] if x['done'] < x['total']]
-    out += ['| セクション | 進み | セクション | 進み |', '|---|---|---|---|']
+    if cells:
+        out += ['| セクション | 進み | セクション | 進み |', '|---|---|---|---|']
     half = (len(cells) + 1) // 2
     for i in range(half):
         right = cells[half + i] if half + i < len(cells) else ('', '')
@@ -214,10 +230,16 @@ def render(model: dict) -> str:
             out.append(f"| {cell(person['owner']) if i == 0 else ''} | {cell(run[0]['section'])} | {chain} | {pcts} |")
     if not model['people']:
         out.append('| — | — | 割り振りがありません | — |')
+    if model['stuck']:
+        out += ['', '止まっているもの: ' + ', '.join(f"#{t['number']}（{t['stuck']}）" for t in model['stuck'])]
     if model['stray']:
         out += ['', '進行中・レビュー中なのに担当の居ないもの: ' + ', '.join(f'#{n}' for n in model['stray'])]
     if model['others']:
         out += ['', 'ほかの開発者の PR: ' + ', '.join(f"#{o['number']}（PR #{o['pr']}・{cell(o['author'])}）" for o in model['others'])]
+    if model['truncated']:
+        out += ['', f"開いている PR が {model['truncated']} 本あり、新しいほうだけで数えています。"]
+    if model['unknown_assignees']:
+        out += ['', f"Assignees を見ていない 進行中・レビュー中 の task が {model['unknown_assignees']} 件あります。"]
     return '\n'.join(out) + '\n'
 
 

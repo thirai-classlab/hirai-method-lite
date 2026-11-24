@@ -3,19 +3,19 @@
 版の付け方は [semver](https://semver.org/lang/ja/)。`VERSION` と `.claude-plugin/plugin.json` の `version` は常に同じ値を持ち、`tests/smoke.sh` が一致を検証する。tag は `hirai-project-method--v<版>`。
 
 ## v1.2.0
-全体の進みと、振っているタスクの順番・進捗率の表（GitHub Project と PR・CI の実物から）を、道具の側で出す形にした（heyapro-app の #1978）。土台には手を入れていない（土台は 3.1.0 のまま）。
+全体の進みと、振っているタスクの順番・進捗率の表（GitHub Project と PR・CI の実物から）を、道具の側で出す形にした（heyapro-app の #1978）。土台の動きは変えていない（土台は 3.1.0 のまま。直したのはリポ直下の README とカタログの説明文だけ）。
 
-- **`hirai-task load`**（新）: 4 部の表（1 行目の完了の率・セクションの表・進行中のタスクの表・実物と合っていない行）を出す。進捗は申告でなく実物で決める: 0 着手前／20 進行中（PR なし）／50 draft／60 ready で CI が走っているか赤／70 CI 緑／90 merge 済みで issue が開いている／100 閉じた。**控えに無い（新しい）issue は 0% で、完了に数えない**。板は `board` の控え（10 分）を使い、PR・CI・進行中の task の Assignees は 1 回の GraphQL で引く（CI は `statusCheckRollup` の集約）。`--json`・`--changed`（前回から段・担当・順番が動いたときだけ出し、動いていなければ 1 行も出さず exit 3）・`--cached`（gh を叩かず手元の控えだけ読む）・`--refresh`・`--if-coordinator`
-- **`hirai-task assign <n> <作業のセッションの名前> [順]`**（新）: 手元の控え（git の管理ディレクトリの下の `hirai-task/load-assign.json`）に書く。Project に「担当」の項目は足さない・書かない
-- **Assignees**: `start` と `assign` は、Assignees が空なら動かしている GitHub ユーザーを入れる。ほかの人（複数人を含む）が入っていたら警告を 1 行出す（その人の開いている PR も）。上書き・追加・停止はしない。確かめられないときは標準エラーに 1 行で、着手や割り振りの結果を変えない
-- **表が出るとき**: `start`・`done`・`after-merge`・`assign` の終わり（コーディネーターの会話だけ）。コーディネーターの会話 = `HC_NOTIFY=off`（土台の知らせと同じ印）・`notify: orca` と `tasks: github-project` のリポ・Orca の端末・linked worktree でない、の全部
-- **`hooks/coordinator-load.sh`**（新・PostToolUse の Bash）: コーディネーターの会話が `orca orchestration check`・`hirai-notify` を打った直後に `load --changed --cached --if-coordinator` を回し、動いたときだけ表を会話に足す。**止めない**（操作の可否を変えない・常に exit 0・失敗と対象外では何も出さない）・GitHub を叩かない（控えだけ）・41 行
+- **`hirai-task load`**（新）: 4 部の表（1 行目の完了の率・セクションの表・進行中のタスクの表・実物と合っていない行）を出す。進捗は申告でなく実物で決める: 0 着手前／20 進行中・レビュー中（PR なし）／50 draft／60 ready で CI が走っているか赤・検査なし／70 CI 緑／90 merge 済みで issue が開いている（Status が 完了 の開いた issue も）／100 閉じた。**控えに無い（新しい）issue は 0% で、完了に数えない**。CI が赤・衝突した task は「止まっているもの」の行に出す。板は `board` の控え（10 分）を使い、PR・CI・進行中の task の Assignees は 1 回の GraphQL で引く（CI は `statusCheckRollup` の集約。Assignees は 50 件ごと・500 件まで）。`--json`・`--changed`（前回から段・担当・順番・止まりの印が動いたときだけ出し、動いていなければ 1 行も出さず exit 3）・`--cached`（gh を叩かず手元の控えだけ読む）・`--refresh`・`--if-coordinator`（コーディネーターの会話でなければ exit 3）
+- **`hirai-task assign <n> <作業のセッションの名前> [順]`・`assign <n> --clear`**（新）: 手元の控え（git の管理ディレクトリの下の `hirai-task/load-assign.json`。同時に書いても失わない）に書く。Project に「担当」の項目は足さない・書かない
+- **Assignees**: `start` と `assign` は、Assignees が空なら動かしている GitHub ユーザーを入れる。ほかの人（複数人を含む）が入っていたら警告を 1 行出す（その人の開いている PR も）。空でも、ほかの人の開いている PR がその task を閉じるなら、入れずに警告する。上書き・追加・停止はしない。確かめられないときは標準エラーに 1 行で、着手や割り振りの結果（exit code）は変えない
+- **表が出るとき**: `start`・`done`・`after-merge`・`assign` の終わり（コーディネーターの会話だけ）。コーディネーターの会話 = `HC_NOTIFY=off`（土台の知らせと同じ印）・`notify: orca` と `tasks: github-project` のリポ・Orca の端末・linked worktree でない、の全部。`start`・`done` の変更は板の控えが追いつくまで表に重ね、10 分より古い控えで描くときは「（控え: N 分前）」を出す
+- **`hooks/coordinator-load.sh`**（新・PostToolUse の Bash・42 行）: コーディネーターの会話が `orca orchestration check` で担当の知らせ（message）を受けたとき、「`hirai-task load --changed` を打つ」の 1 行を会話に足す。**止めない**（操作の可否を変えない・常に exit 0・失敗と対象外では何も出さない）・GitHub を叩かない・控えも読まない（古い控えの表を「動いた」と見せないため）
 - **skill `github-project`** に「進みと割り振りの表」の節と、「進捗を見せて」などの呼び出し口を足した（`board` は「どこで何件止まっているか」、`load` は進捗と割り振り）
-- **設定（任意・`.claude/mode.yml`）**: `load_deadline: YYYY-MM-DD`（本文に「期限: <日付>」の行がある open の issue を REST の検索で数える。日付に触れただけの issue は数えない）・`load_deadline_label`・`load_mainline`・`load_mainline_label`。無い設定の行・印は出さない
-- **費用**（2026-11-25 に本物の Project〔1,471 行〕で読みだけ実測。書き込みなし）: 控えが無いとき 51 秒・GraphQL 約 20 点（`board` の取得と同じ）、10 分以内の控えがあるとき 4 秒・2 点前後（PR と Assignees の 1 回）、`--cached` は 0 点・1 秒未満
-- **限界**: PR は開いているもの・直近に merge したものを各 50 本まで（超えたら標準エラーに 1 行）。Assignees は進行中・レビュー中の task の先頭 50 件まで。hook は控えだけを読むので、控えが古い間は出ない（`hirai-task load` で取り直す）
-- **検査**: `hirai_task_selftest.py` の load・assign・Assignees・コーディネーターの判定（17 件）と、`tests/smoke.sh` case 7（hook）
-- **導入先で要る操作**: `/plugin marketplace update hirai-lite` → 端末で `claude plugin update hirai-project-method@hirai-lite --scope <入れた範囲>` → 会話の開き直し（足すプラグインは tag を待たずに `main` から届く。v1.1.0 の項と同じ）
+- **設定（任意・そのリポの `.claude/mode.yml` だけ）**: `load_deadline: YYYY-MM-DD`（本文に「期限: <日付>」の行がある open の issue を REST の検索で数える。日付に触れただけの issue は数えない）・`load_deadline_label`・`load_mainline`・`load_mainline_label`。無い設定の行・印は出さない
+- **費用**（2026-11-25 に本物の Project〔1,804 行〕で読みだけ実測。書き込みなし）: 控えが無いとき 56 秒・GraphQL 約 23 点（`board` の取得と同じ）、10 分以内の控えがあるとき 3〜4 秒・1 点（PR と Assignees の 1 回）、`--cached` は 0 点・1 秒未満。期限の設定があると REST の検索が 1 回（100 件ごと）足される。`start`・`assign` は REST 2〜3 回（`user`・issue・Assignees）と、Assignees が空かほかの人のときだけ PR の GraphQL 1 回が増える（表が出る会話では、書いたあとの表でもう 1 回。待ちは最大 25 秒で打ち切る）
+- **限界**: PR は開いているものが 50 本まで（超えたら表に 1 行）・merge 済みは更新の新しい 50 本だけを見る（外れた merge 済みの task は 20% になる）。hook は知らせを受けたときだけ出て、担当の知らせが無い変化（画面での merge など）は `hirai-task load --changed` を打つと出る。表の「止まっているもの」は CI の赤と衝突だけ
+- **検査**: `hirai_task_selftest.py` の load・assign・Assignees・コーディネーターの判定・配線と、`tests/smoke.sh` case 7（hook）。`load` を 64 通り・hook を 8 通り壊して、どれも落ちることを確かめた
+- **導入先で要る操作**: `/plugin marketplace update hirai-lite` → 端末で `claude plugin update hirai-project-method@hirai-lite --scope <入れた範囲>` → 会話の開き直し（足すプラグインは tag を待たずに `main` から届く。v1.1.0 の項と同じ）。コーディネーターの会話は `HC_NOTIFY=off claude` で開く（付けないと、表も hook の 1 行も出ない）
 
 ## v1.1.0
 見回り（`hirai-task today`）の直し 3 つと、`bug` の定義 1 行（土台 3.1.0 の `/hirai-lite:new-task`）。**見回りが書くものが 1 種増える**（align・close-parents に、閉じたのに完了でない task への Status=完了 が加わる）。
