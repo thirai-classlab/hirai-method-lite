@@ -465,6 +465,57 @@ case "$o" in *deny*) echo "ok   git-dir-env" ;; *) echo "FAIL guard-git-dir-env 
 # ~/.claude が git のリポの中への symlink でも、記憶の置き場は止めない
 mkdir -p "$T/hs/dotfiles/claude/projects"; git init -q "$T/hs/dotfiles"; ln -s "$T/hs/dotfiles/claude" "$T/hs/.claude"
 ed "$T/hs/.claude/projects/m.md" | chk ALLOW home-claude-symlink HC_WORKTREE=block HOME="$T/hs"
+# 早い exit: 環境変数・ホーム・対象の mode.yml のどこにも block が無ければ、git も走査 (awk) も呼ばずに抜ける
+Q="$T/Q"; git init -q "$Q"; mkdir -p "$Q/sub" "$T/spy" "$T/h0" "$T/hb/.claude"; echo x > "$Q/sub/f.txt"; printf 'worktree: block\n' > "$T/hb/.claude/mode.yml"
+for c in git awk; do printf '#!/bin/sh\necho %s >> "%s/spy.log"\nexec "%s" "$@"\n' "$c" "$T" "$(command -v "$c")" > "$T/spy/$c"; chmod +x "$T/spy/$c"; done
+# spy <名前> <呼んでよい道具 (無ければ -)> [VAR=値 ...]: 無出力で通り、git・awk のうち呼んだものが <呼んでよい道具> と同じ
+spy() {
+  local name="$1" want="$2" got; shift 2
+  : > "$T/spy.log"
+  got="$(cat | env PATH="$T/spy:$PATH" HOME="$T/h0" "$@" bash "$G" 2>&1)"
+  [ -z "$got" ] || { echo "FAIL guard-$name 通すのに出力がある: $got"; fail=1; return; }
+  got="$(sort -u "$T/spy.log" | tr '\n' ' ')"; got="${got% }"; got="${got:--}"
+  if [ "$got" = "$want" ]; then echo "ok   $name ($got)"; else echo "FAIL guard-$name 呼んだ道具 (want $want got $got)"; fail=1; fi
+}
+bs "$T/P" 'git commit -m x' | env PATH="$T/spy:$PATH" HOME="$T/h0" bash "$G" >/dev/null 2>&1
+[ "$(sort -u "$T/spy.log" 2>/dev/null | tr '\n' ' ')" = "awk git " ] || { echo "FAIL guard-early-spy-control block のリポの commit で git と awk を呼んだ記録が無い (見る仕組みが空振り)"; fail=1; }
+for m in '' 'mode: normal\n' 'worktree: off   # off / warn / block\n' '# worktree: block にすると止まる\nworktree: warn\n'; do
+  rm -f "$Q/.claude/mode.yml"; [ -z "$m" ] || { mkdir -p "$Q/.claude"; printf "$m" > "$Q/.claude/mode.yml"; }
+  ed "$Q/sub/f.txt" | spy early-edit - X=1
+  ed "$Q/new/dir/n.txt" | spy early-edit-new - X=1
+  bs "$Q/sub" 'git add -A && git commit -m "Co-Authored-By: x"' | spy early-commit - CLAUDE_PROJECT_DIR="$Q"
+  bs "$Q" "git -C $Q/sub commit -m x" | spy early-dash-C-off awk CLAUDE_PROJECT_DIR="$Q"
+done
+for m in off warn; do
+  ed "$T/P/sub/f.txt" | spy early-env-off - HC_WORKTREE=$m
+  bs "$T/P" "git -C $T/P commit -m x" | spy early-env-off - HC_WORKTREE=$m
+done
+# 早い exit で block を漏らさない: 環境変数・ホーム・祖先・CLAUDE_PROJECT_DIR・-C などの先・symlink の先・mode.yml の書き方
+off() { chk "$@" HOME="$T/h0" CLAUDE_PROJECT_DIR="$Q"; }
+rm -f "$Q/.claude/mode.yml"
+ed "$Q/sub/f.txt" | chk DENY early-home-block HOME="$T/hb"
+bs "$Q" 'git commit -m x' | chk DENY early-home-block-commit HOME="$T/hb" CLAUDE_PROJECT_DIR="$Q"
+ed "$Q/sub/f.txt" | off DENY early-env-block HC_WORKTREE=block
+bs "$Q" 'git commit -m x' | off DENY early-env-block-commit HC_WORKTREE=block
+ed "$T/P/sub/f.txt" | off DENY early-env-empty HC_WORKTREE=
+ed "$T/P/sub/new/dir/n.txt" | off DENY early-ancestor X=1
+bs "$T/P/sub" 'git commit -m x' | off DENY early-ancestor-commit X=1
+bs "$T/plain" 'git commit -m x' | chk DENY early-project-dir HOME="$T/h0" CLAUDE_PROJECT_DIR="$T/P/sub"
+bs "$Q" "git -C $T/P commit -m x" | off DENY early-other-repo X=1
+bs "$Q" "bash -c 'git -C $T/P commit -m x'" | off DENY early-other-repo-sub X=1
+bs "$Q" "git --git-dir=$T/P/.git commit -m x" | off DENY early-git-dir X=1
+bs "$Q" "git --work-tree $T/P commit -m x" | off DENY early-work-tree X=1
+for c in "git -\"C\" $T/P commit -m x" "git -\\C $T/P commit -m x" "git -\\
+C $T/P commit -m x" "git --git-\"dir\"=$T/P/.git commit -m x"; do bs "$Q" "$c" | off DENY early-quoted-flag X=1; done
+ln -s "$T/P/sub" "$T/lnksub"
+bs "$T/lnksub" 'git commit -m x' | chk DENY early-symlink-commit HOME="$T/h0" CLAUDE_PROJECT_DIR="$T/lnksub"
+ed "$T/lnksub/f.txt" | off DENY early-symlink-edit X=1
+bs "$Q" "git -C $T/lnksub/.. commit -m x" | off DENY early-symlink-dotdot X=1
+mkdir -p "$Q/.claude"
+for m in 'worktree:block' 'mode: loop\r\nworktree: "block"\r\n' "# c\n  worktree: 'block' # c"; do
+  printf "$m" > "$Q/.claude/mode.yml"
+  ed "$Q/sub/f.txt" | off DENY early-mode-forms X=1
+done
 exit $fail
 R6GUARD
   cat > "$s/ctx-test.sh" <<'R6CTX'
@@ -930,7 +981,7 @@ guard-dash-C-base|hooks/worktree-guard.sh|s/\[ -n "\$cdl" \] \&\& \[ "\$dirset" 
 guard-arith-paren-subshell|hooks/worktree-guard.sh|/function skip_arith/,/^  }/s/^        else break$/        else { p++; return 1 }/
 guard-for-arith|hooks/worktree-guard.sh|s/|until|for|then|do/|until|then|do/
 guard-many-subst-slow|hooks/worktree-guard.sh|s/case "\$a" in \*commit\*) ;; \*) continue ;; esac//
-guard-outer-gitignored|hooks/worktree-guard.sh|s/^  return 1$/  git -C "$otop" check-ignore -q -- "$rel" 2>\/dev\/null/
+guard-outer-gitignored|hooks/worktree-guard.sh|/^outer_ignored()/,/^}/s/^    cur="\$otop"$/    git -C "$otop" check-ignore -q -- "$rel" 2>\/dev\/null \&\& return 0; cur="$otop"/
 guard-tmp-clone-commit|hooks/worktree-guard.sh|s/outer_ignored "\$top" \&\& return 0/:/
 guard-tmp-clone-edit|hooks/worktree-guard.sh|s/outer_ignored "\$top" "\$rel" \&\& exit 0/:/
 ctx-subdir-shows-block|scripts/orca-context.sh|s/rev-parse --show-toplevel/rev-parse --show-cdup/
@@ -942,6 +993,22 @@ guard-home-claude-git-edit|hooks/worktree-guard.sh|s/under_home_claude "\$abs" \
 guard-home-claude-git-commit|hooks/worktree-guard.sh|s/under_home_claude "\$(phys "\$dir")" \&\& return 0/:/
 guard-home-git-edit|hooks/worktree-guard.sh|s/home_scope "\$top" \&\& exit 0/:/
 guard-tmp-clone-worktree-edit|hooks/worktree-guard.sh|s/^    cur="\$otop"$/    return 1/
+guard-early-edit|hooks/worktree-guard.sh|s/^    could_block "\$fdir" || exit 0$/    :/
+guard-early-commit|hooks/worktree-guard.sh|s/ \*-C\*|\*git-dir\*|\*work-tree\*) ;; \*) exit 0 ;; esac/ *) ;; esac/
+guard-early-dash-C-off|hooks/worktree-guard.sh|s/^  could_block "\$(phys "\$dir")" || return 0$/  :/
+guard-early-env-off|hooks/worktree-guard.sh|/^case "\${HC_WORKTREE:-}" in .*block) ;; /d
+guard-early-edit|hooks/worktree-guard.sh|s/case "\${l%%#\*}" in/case "$l" in/
+guard-early-home-block|hooks/worktree-guard.sh|/^  may_block "\${HOME:-/d
+guard-early-env-block|hooks/worktree-guard.sh|/^  \[ "\${HC_WORKTREE:-}" = block \] \&\& return 0$/d
+guard-early-ancestor|hooks/worktree-guard.sh|s/case "\$d" in \*\/\*) d="\${d%\/\*}" ;; \*) break ;; esac/break/
+guard-early-project-dir|hooks/worktree-guard.sh|s/if could_block "\$(phys "\$cwd")" .*; then$/if could_block "$(phys "$cwd")"; then/
+guard-early-other-repo|hooks/worktree-guard.sh|s/ \*-C\*|\*git-dir\*|\*work-tree\*) ;;/ *git-dir*|*work-tree*) ;;/
+guard-early-git-dir|hooks/worktree-guard.sh|s/ \*-C\*|\*git-dir\*|\*work-tree\*) ;;/ *-C*|*work-tree*) ;;/
+guard-early-work-tree|hooks/worktree-guard.sh|s/ \*-C\*|\*git-dir\*|\*work-tree\*) ;;/ *-C*|*git-dir*) ;;/
+guard-early-quoted-flag|hooks/worktree-guard.sh|s/case "\$(printf .%s. "\$cmd" | tr -d .*)" in \*-C/case "$cmd" in *-C/
+guard-early-symlink-commit|hooks/worktree-guard.sh|s/if could_block "\$(phys "\$cwd")" "\$(phys "\(.*\)")"; then$/if could_block "$cwd" "\1"; then/
+guard-early-symlink-dotdot|hooks/worktree-guard.sh|s/builtin cd -P -- "\$d"/builtin cd -- "$d"/
+guard-early-mode-forms|hooks/worktree-guard.sh|s/ || \[ -n "\$l" \]; do/; do/
 X
       ;;
     notify)
@@ -1747,7 +1814,7 @@ print(" ".join(str(x.get("timeout")) for e in h.get(sys.argv[2],[]) for x in e.g
   local r6g; r6g="$(r6_suite guard)"; [ -z "$r6g" ] || bad="$bad [6 巡目の guard・orca-context] $r6g"
   if [ -n "$bad" ]; then fail 2 "止める手段と fail-open" "$bad"; return; fi
 
-  pass 2 "context-budget.sh は既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% ちょうどで発火 / loop-reminder.sh は置き場 6 通りで loop のときだけ ${lines} 行を出し normal では 1 バイトも出さない (要点 4 つ入り・全行 [harness] 始まり) / HC_LOOP_REMINDER=off・大文字 LOOP・壊れた/読めない mode.yml・共通ライブラリ不在でも exit 0 無出力 / worktree-guard.sh は worktree: block のとき、Orca の worktree でない会話からの git に入るファイルの Edit・Write と git commit を止めて worktree の作り方を出し (6 場合)、.tmp・リポの外・git switch・git checkout -b・読み取り・Orca の worktree の編集と commit・off・warn は通し (9 場合)、壊れた入力は fail-open、mode.yml の項目で働き、hooks.json の PreToolUse に結ばれている / 守るリポは cwd ではなく操作の対象 (git -C・Edit の file_path) で決め (別リポ・cwd が非リポ 7 場合)、git commit の形 12 と引用符つき -C・バックスラッシュ改行を止め、heredoc の本文・--dry-run・--help・.tmp/・.claude/state/ は止めず、/bin/bash 3.2 でも止め、jq 無しは python3 で読み、どちらも無ければ止めずに orca-context が「止まりません」と言う"
+  pass 2 "context-budget.sh は既定の閾値 50% (v1.15.0) を境に 49% 無出力・50% ちょうどで発火 / loop-reminder.sh は置き場 6 通りで loop のときだけ ${lines} 行を出し normal では 1 バイトも出さない (要点 4 つ入り・全行 [harness] 始まり) / HC_LOOP_REMINDER=off・大文字 LOOP・壊れた/読めない mode.yml・共通ライブラリ不在でも exit 0 無出力 / worktree-guard.sh は worktree: block のとき、Orca の worktree でない会話からの git に入るファイルの Edit・Write と git commit を止めて worktree の作り方を出し (6 場合)、.tmp・リポの外・git switch・git checkout -b・読み取り・Orca の worktree の編集と commit・off・warn は通し (9 場合)、壊れた入力は fail-open、mode.yml の項目で働き、hooks.json の PreToolUse に結ばれている / 守るリポは cwd ではなく操作の対象 (git -C・Edit の file_path) で決め (別リポ・cwd が非リポ 7 場合)、git commit の形 12 と引用符つき -C・バックスラッシュ改行を止め、heredoc の本文・--dry-run・--help・.tmp/・.claude/state/ は止めず、/bin/bash 3.2 でも止め、jq 無しは python3 で読み、どちらも無ければ止めずに orca-context が「止まりません」と言う / block が環境変数・ホーム・対象とその祖先の mode.yml のどこにも無ければ git も awk も呼ばずに抜け、あれば漏らさず止める"
 }
 
 # ---------- case 3: 閾値超過で 1 度だけ発火 ----------

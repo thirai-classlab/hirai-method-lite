@@ -11,6 +11,9 @@
 # 止めないもの: 読み取り・リポの外（~/.claude の記憶の置き場など）・git に入らない場所（.gitignore 済み・
 #   .tmp/・.claude/state/。外側のリポの下にあるときは外側の .tmp/・.claude/state/ の下だけ）・git switch / git checkout・git commit --dry-run / --help。
 #   `worktree: off`（既定）と `warn` では何もしない。
+# 早い exit: 環境変数 HC_WORKTREE・ホームの mode.yml・対象の dir とその祖先の mode.yml のどこにも block が無ければ、git も走査（awk）も
+#   呼ばずに抜ける（git の toplevel は対象の dir かその祖先なので、git に聞かずに分かる。core.worktree でよそを指すリポは、その先の mode.yml を見ない）。
+#   git -C・--git-dir・--work-tree のあるコマンドだけは、対象を知るために走査してから、同じ見方で git の前に抜ける。
 # Orca の worktree の判定: 環境変数 ORCA_WORKTREE_ID があり、決めたリポの --git-dir と --git-common-dir が違い
 #   （= リンクされた worktree）、ORCA_WORKTREE_ID が path を含むなら、その path の --git-common-dir が決めたリポと同じで、
 #   決めたリポの toplevel が path そのもの（-ef = 同じ inode。macOS で大文字小文字だけ違う path も同じ）か
@@ -26,6 +29,9 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_PREFIX 2>/dev/null
 input=""
 [ -t 0 ] || input="$(cat 2>/dev/null)" || input=""
 [ -n "$input" ] || exit 0
+
+# 環境変数が block 以外なら、どのリポでも止めない（値の決め方は環境変数が先）
+case "${HC_WORKTREE:-}" in ''|block) ;; *) exit 0 ;; esac
 
 HAVE_JQ=0; HAVE_PY=0
 command -v jq >/dev/null 2>&1 && HAVE_JQ=1
@@ -73,6 +79,30 @@ repo_mode() {
   [ -n "$v" ] || v="$(yml_val "$1/.claude/mode.yml" worktree)"
   [ -n "$v" ] || v="$(yml_val "${HOME:-/nonexistent}/.claude/mode.yml" worktree)"
   printf '%s' "$v"
+}
+
+# may_block <mode.yml> -> rc 0 なら、worktree の値が block でありうる（外部コマンドを起こさない。値を決めるのは yml_val）
+may_block() {
+  local l
+  [ -f "$1" ] && [ -r "$1" ] || return 1
+  while IFS= read -r l || [ -n "$l" ]; do
+    case "${l%%#*}" in *worktree:*block*) return 0 ;; esac
+  done < "$1"
+  return 1
+}
+
+# could_block <dir> ... -> rc 1 なら、環境変数・ホーム・<dir>（物理 path）とその祖先の mode.yml のどこにも block が無い
+could_block() {
+  local d
+  [ "${HC_WORKTREE:-}" = block ] && return 0
+  may_block "${HOME:-/nonexistent}/.claude/mode.yml" && return 0
+  for d in "$@"; do
+    while :; do
+      may_block "$d/.claude/mode.yml" && return 0
+      case "$d" in */*) d="${d%/*}" ;; *) break ;; esac
+    done
+  done
+  return 1
 }
 
 # in_orca_wt <top> -> rc 0 なら Orca の worktree の会話（scripts/orca-context.sh に同じ判定の写しがある。直すときは両方）
@@ -348,7 +378,7 @@ outer_ignored() {
 # phys <dir> -> 物理 path（解けなければ <dir> のまま）
 phys() {
   local d="$1" p
-  p="$(CDPATH= builtin cd -- "$d" >/dev/null 2>&1 && builtin pwd -P)" || p="$d"
+  p="$(CDPATH= builtin cd -P -- "$d" >/dev/null 2>&1 && builtin pwd -P)" || p="$d"   # -P: git -C と同じく、symlink の先の .. を先の親と読む
   printf '%s' "$p"
 }
 
@@ -399,6 +429,7 @@ check_commit() {
     IFS="$oldifs"
   fi
   [ -d "$dir" ] || return 0
+  could_block "$(phys "$dir")" || return 0
   under_home_claude "$(phys "$dir")" && return 0
   top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || return 0
   [ -n "$top" ] || return 0
@@ -410,10 +441,8 @@ check_commit() {
 }
 
 check_command() {
-  local text="$1" depth="$2" kind a b c d line base dflt seen=""
+  local text="$1" depth="$2" kind a b c d line base seen=""
   base="$cwd"
-  dflt="$cwd"
-  git -C "$cwd" rev-parse --show-toplevel >/dev/null 2>&1 || dflt="${CLAUDE_PROJECT_DIR:-$cwd}"
   while IFS=$'\037' read -r kind a b c d; do
     case "$kind" in
       COMMIT) check_commit "$a" "$b" "$c" "$base" "$dflt" ;;
@@ -440,6 +469,7 @@ case "$tool" in
     abs="$(resolve_path "$abs")"
     fdir="$abs"
     while [ ! -d "$fdir" ]; do fdir="$(dirname "$fdir")"; done
+    could_block "$fdir" || exit 0
     top="$(git -C "$fdir" rev-parse --show-toplevel 2>/dev/null)" || exit 0
     [ -n "$top" ] || exit 0
     top="$(CDPATH= builtin cd -- "$top" >/dev/null 2>&1 && builtin pwd -P)" || exit 0
@@ -468,6 +498,14 @@ case "$tool" in
     [ -n "$cmd" ] || exit 0
     # commit の字がコマンドに無ければ git commit ではない（mode.yml も走査も引かずに抜ける。off のリポの Bash に遅れを足さない）
     case "$cmd" in *commit*) ;; *) exit 0 ;; esac
+    # 既定の dir（-C・--git-dir・--work-tree の無い commit の対象）は cwd。リポでなければ CLAUDE_PROJECT_DIR
+    dflt="$cwd"
+    if could_block "$(phys "$cwd")" "$(phys "${CLAUDE_PROJECT_DIR:-$cwd}")"; then
+      git -C "$cwd" rev-parse --show-toplevel >/dev/null 2>&1 || dflt="${CLAUDE_PROJECT_DIR:-$cwd}"
+    else
+      # 対象をほかの dir へ向ける字が無ければ走査もしない（引用符・バックスラッシュ・改行で割った形も拾う）
+      case "$(printf '%s' "$cmd" | tr -d '"\047\\\n')" in *-C*|*git-dir*|*work-tree*) ;; *) exit 0 ;; esac
+    fi
     check_command "$cmd" 0
     exit 0
     ;;
