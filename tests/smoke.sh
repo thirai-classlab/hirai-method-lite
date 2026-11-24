@@ -3321,9 +3321,11 @@ JSONEOF
   nrun done ../../.tmp-q.md 要約H --to run:R1
   { [ "$nrc" -eq 0 ] && [ ! -s "$nlog" ]; } || nb="$nb [notify: off] exit=${nrc} 送った: $(cat "$nlog")"
   # (g-4) hirai-pr-asset: 使い捨ての bare リポへ。branch pr-assets を作る・積み増す・作業ツリーと HEAD を動かさない・
-  # remote を読めない / 無いと exit 1・/bin/bash 3.2。
-  local pw pa_rc pa_bad="" pa_head pa_st pa_out
-  pw="$(mkt)"; mkdir -p "$pw/img" "$pw/work" "$pw/bare.git"
+  # remote を読めない / 無い / GitHub でないと exit 1・URL の中の認証情報を出さない・/bin/bash 3.2。
+  # remote の URL は PATH の頭の git が PA_URL を答え、実際の読み書きは bare リポへ行く。
+  local pw pa_rc pa_bad="" pa_head pa_st pa_out pa_url pa_n
+  pw="$(mkt)"; mkdir -p "$pw/img" "$pw/work" "$pw/bare.git" "$pw/gitbin"
+  printf '#!/bin/sh\nif [ "$1 $2" = "remote get-url" ] && [ -n "${PA_URL:-}" ]; then printf "%%s\\n" "$PA_URL"; exit 0; fi\nexec /usr/bin/git "$@"\n' > "$pw/gitbin/git"; chmod +x "$pw/gitbin/git"
   git init -q --bare "$pw/bare.git" 2>/dev/null
   printf 'x' > "$pw/img/a.png"; printf 'y' > "$pw/img/b.png"
   ( cd "$pw/work" && git init -q 2>/dev/null && printf 'f\n' > f.txt && git add f.txt \
@@ -3333,13 +3335,14 @@ JSONEOF
   # pa_run <dir> <引数...> -> exit は pa_rc、標準出力は pa_out
   pa_run() {
     local d="$1"; shift
-    pa_out="$( cd "$d" && env -i HOME="$pw" PATH="/usr/bin:/bin" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@e GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@e \
+    pa_out="$( cd "$d" && env -i HOME="$pw" PATH="$pw/gitbin:/usr/bin:/bin" PA_URL="$pa_url" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@e GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@e \
       /bin/bash "$ROOT/bin/hirai-pr-asset" "$@" 2>"$pw/pa.err" )"
     pa_rc=$?
   }
+  pa_url=https://github.com/o/r.git
   pa_run "$pw/work" 5 "$pw/img/a.png"
   { [ "$pa_rc" -eq 0 ] && git -C "$pw/bare.git" rev-parse -q --verify refs/heads/pr-assets >/dev/null 2>&1 \
-      && git -C "$pw/bare.git" ls-tree -r --name-only pr-assets 2>/dev/null | grep -qx '5/a.png' && printf '%s' "$pa_out" | grep -qF '![a]('; } \
+      && git -C "$pw/bare.git" ls-tree -r --name-only pr-assets 2>/dev/null | grep -qx '5/a.png' && [ "$pa_out" = '![a](https://github.com/o/r/blob/pr-assets/5/a.png?raw=true)' ]; } \
     || pa_bad="$pa_bad [1 回目: branch を作り 5/a.png を置き貼る行を出す] exit=${pa_rc} $(cat "$pw/pa.err")"
   pa_run "$pw/work" 5 "$pw/img/b.png"
   { [ "$pa_rc" -eq 0 ] && [ "$(git -C "$pw/bare.git" rev-list --count pr-assets 2>/dev/null)" = 2 ] \
@@ -3349,10 +3352,24 @@ JSONEOF
   { [ "$(git -C "$pw/work" rev-parse HEAD 2>&1)" = "$pa_head" ] && [ "$(git -C "$pw/work" status --porcelain 2>&1)$(git -C "$pw/work" symbolic-ref HEAD 2>&1)" = "$pa_st" ] \
       && [ -z "$(git -C "$pw/work" branch --list pr-assets)" ]; } \
     || pa_bad="$pa_bad [作業ツリー・HEAD・branch が動いた]"
+  # token の入った remote でも、貼る 1 行・stderr のどちらにも token を出さない。URL の形が違っても同じ slug
+  for pa_url in 'https://x-access-token:SECRETTOKEN@github.com/o/r.git' 'https://a@SECRETTOKEN@github.com/o/r' 'git@github.com:o/r.git' 'ssh://git@github.com/o/r.git'; do
+    pa_run "$pw/work" 5 "$pw/img/a.png"
+    { [ "$pa_rc" -eq 0 ] && [ "$pa_out" = '![a](https://github.com/o/r/blob/pr-assets/5/a.png?raw=true)' ] && ! grep -q SECRETTOKEN "$pw/pa.err"; } \
+      || pa_bad="$pa_bad [remote の URL の形] exit=${pa_rc} out=${pa_out%%SECRET*}"
+  done
+  # owner/repo を読めない remote（GitHub でない）は、押さず・URL を出さずに exit 1
+  pa_n="$(git -C "$pw/bare.git" rev-list --count pr-assets 2>/dev/null)"
+  for pa_url in 'https://t:SECRETTOKEN@example.com/o/r.git' 'https://t:SECRETTOKEN@github.com/o' "$pw/bare.git" 'https://github.com/o/r/x.git'; do
+    pa_run "$pw/work" 5 "$pw/img/a.png"
+    { [ "$pa_rc" -eq 1 ] && [ -z "$pa_out" ] && ! grep -q SECRETTOKEN "$pw/pa.err" && [ "$(git -C "$pw/bare.git" rev-list --count pr-assets 2>/dev/null)" = "$pa_n" ]; } \
+      || pa_bad="$pa_bad [GitHub でない remote] exit=${pa_rc} out=${pa_out%%SECRET*}"
+  done
+  pa_url=https://github.com/o/r.git
   git -C "$pw/work" remote set-url origin "$pw/missing.git" 2>/dev/null
   pa_run "$pw/work" 5 "$pw/img/a.png"
   [ "$pa_rc" -eq 1 ] || pa_bad="$pa_bad [remote を読めない] exit=${pa_rc} (期待 1)"
-  git -C "$pw/work" remote remove origin 2>/dev/null
+  git -C "$pw/work" remote remove origin 2>/dev/null; pa_url=""
   pa_run "$pw/work" 5 "$pw/img/a.png"
   [ "$pa_rc" -eq 1 ] || pa_bad="$pa_bad [remote が無い] exit=${pa_rc} (期待 1)"
   pa_run "$pw/work" abc "$pw/img/a.png"

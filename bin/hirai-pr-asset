@@ -11,7 +11,8 @@
 #
 # 作業ツリーの branch と index は動かさない（使い捨ての index で commit を作って push だけする）。
 # 同じ名前の画像を同じ PR 番号で置くと上書きする（前の版は pr-assets の履歴に残る）。
-# 押し先の slug は git の remote の URL から引く。remote を読めないときは exit 1。
+# 押し先の slug は git の remote の URL から引く。remote を読めない・GitHub の owner/repo を読めないときは、押さずに exit 1。
+# URL の中の認証情報（https://<token>@…）は、貼る 1 行にも表示にも出さない。
 set -euo pipefail
 
 remote=origin
@@ -26,17 +27,18 @@ for f in "$@"; do
 done
 
 branch="pr-assets"
-url="$(git remote get-url "$remote" 2>&1)" || { echo "remote を読めない（${remote}）: ${url}" >&2; exit 1; }
-slug="$(printf '%s\n' "$url" | sed -E 's#^(git@github\.com:|ssh://git@github\.com/|https://github\.com/)##; s#\.git$##; s#/$##')"
-case "$slug" in */*/*|/*|"") echo "警告: ${remote} は GitHub の remote でない（${url}）。出す URL は使えない" >&2 ;; esac
+mask() { sed -E 's#(https?://)[^/]*@#\1#g'; }
+url="$(git remote get-url "$remote" 2>&1)" || { echo "remote を読めない（${remote}）: $(printf '%s' "$url" | mask)" >&2; exit 1; }
+slug="$(printf '%s\n' "$url" | mask | sed -E 's#^(git@github\.com:|ssh://git@github\.com/|https://github\.com/)##; s#/$##; s#\.git$##')"
+[[ "$slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "${remote} の URL から GitHub の owner/repo を読めない（URL は出さない）。--remote で GitHub の remote を指す" >&2; exit 1; }
 
 parent=""
 rc=0; out="$(git ls-remote --exit-code --heads "$remote" "refs/heads/$branch" 2>&1)" || rc=$?
 case "$rc" in
-  0) out="$(git fetch -q "$remote" "refs/heads/$branch" 2>&1)" || { echo "pr-assets を取れない: ${out}" >&2; exit 1; }
+  0) out="$(git fetch -q "$remote" "refs/heads/$branch" 2>&1)" || { echo "pr-assets を取れない: $(printf '%s' "$out" | mask)" >&2; exit 1; }
      parent="$(git rev-parse FETCH_HEAD)" ;;
   2) ;;  # まだ無い → 最初の commit を作る
-  *) echo "remote を読めない（${remote}・exit ${rc}）: ${out}" >&2; exit 1 ;;
+  *) echo "remote を読めない（${remote}・exit ${rc}）: $(printf '%s' "$out" | mask)" >&2; exit 1 ;;
 esac
 
 idx="$(mktemp -u "${TMPDIR:-/tmp}/pr-asset-index.XXXXXX")"
