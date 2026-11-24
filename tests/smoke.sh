@@ -1108,18 +1108,27 @@ X
   esac
 }
 
+# r6_skip_reason <壊し方の名前> -> この機械では確かめようがない理由 (無ければ空)
+# 数で見る: `locale -a | grep -q` は、pipefail の下で locale -a が SIGPIPE (141) で落ち、locale が在っても「無い」になる
+r6_skip_reason() {
+  case "$1" in
+    # jq の道の壊し方は、jq の無い機械では確かめようがない (python3 の道だけが動く)
+    notify-task-jq) command -v jq >/dev/null 2>&1 || echo "jq が無い" ;;
+    # locale の壊し方は、その locale の無い機械では確かめようがない
+    guard-early-locale) [ "$(locale -a 2>/dev/null | grep -cxE 'ja_JP\.eucJP|zh_CN\.GB18030')" -gt 0 ] || echo "ja_JP.eucJP・zh_CN.GB18030 が無い" ;;
+  esac
+}
+
 # r6_suite <update|guard|notify|worktrees> -> 直した形で外れが 0 件、壊した複製で必ず FAIL が出ることを確かめ、問題を 1 行ずつ返す (無ければ空)
 r6_suite() {
-  local fn="r6_$1_checks" out tag rel ex
+  local fn="r6_$1_checks" out tag rel ex why
   out="$($fn 2>&1)"; [ -z "$out" ] || printf '%s\n' "$out"
   # HARNESS_SMOKE_QUICK=1 は壊した複製の確かめを飛ばす（直した形の確かめは回す）。飛ばした本数は最後に 1 行出す
   if [ "${HARNESS_SMOKE_QUICK:-}" = 1 ]; then r6_mutants "$1" | grep -c . >> "$R6_SKIP_FILE"; return 0; fi
   while IFS='|' read -r tag rel ex; do
     [ -n "$tag" ] || continue
-    # jq の道の壊し方は、jq の無い機械では確かめようがない（python3 の道だけが動く）
-    case "$tag" in notify-task-jq) command -v jq >/dev/null 2>&1 || continue ;; esac
-    # locale の壊し方は、その locale の無い機械では確かめようがない
-    case "$tag" in guard-early-locale) locale -a 2>/dev/null | grep -qxE 'ja_JP\.eucJP|zh_CN\.GB18030' || continue ;; esac
+    why="$(r6_skip_reason "$tag")"
+    if [ -n "$why" ]; then echo "SKIP 壊した複製 ${tag}（${why}）" >&2; continue; fi
     out="$($fn "$rel" "$ex" 2>&1)"
     r6_must_fail "$tag" "$out" || printf 'NOFAIL 壊した複製 (%s) で %s が FAIL しない (確かめが空振り): %s\n' "$rel" "$tag" "$(printf '%s' "$out" | head -1)"
   done < <(r6_mutants "$1")
