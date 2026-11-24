@@ -164,6 +164,8 @@ h=d["hookSpecificOutput"]; assert h["hookEventName"]=="PostToolUse" and "load --
   run7 off term_1 0 Bash "echo orca orchestration checkout msg_ab12" "$msg"; [ -z "$out" ] && [ "$rc" = 0 ] || bad="$bad 関係ないコマンドで出た;"
   run7 off term_1 0 Read "orca orchestration check" "$msg"; [ -z "$out" ] && [ "$rc" = 0 ] || bad="$bad Bash 以外で出た;"
   run7 off term_1 0 Bash "cd x && orca orchestration check --wait" "$msg"; [ -n "$out" ] || bad="$bad && のあとの check で出ない;"
+  run7 off term_1 0 Bash "orca orchestration check --ack d1 | head -3" "ok"; [ -n "$out" ] && [ "$rc" = 0 ] || bad="$bad 受領（--ack）で出ない;"
+  run7 off term_1 0 Bash "orca worktree list --ack" "ok"; [ -z "$out" ] || bad="$bad check でないコマンドの --ack で出た;"
   out="$(printf 'not json' | env -i PATH="$s/fake:$PATH" HOME="$s" HC_NOTIFY=off ORCA_TERMINAL_HANDLE=t CLAUDE_PLUGIN_ROOT="$s" bash "$s/hooks/coordinator-load.sh" 2>&1)"; rc=$?
   { [ "$rc" = 0 ] && [ -z "$out" ]; } || bad="$bad 壊れた入力で落ちたか出た;"
   run7 off term_1 0 Bash "orca orchestration check" "$msg"; [ ! -s "$s/err" ] || bad="$bad 標準エラーに出した($(cat "$s/err"));"

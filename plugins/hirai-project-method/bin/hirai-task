@@ -6,7 +6,7 @@ hirai-task — リポに紐づいた GitHub Project のタスクを読み書き�
   読む側: ready / pending / blocked / show <issue> / memos / unblocked / coverage / impact <draft>
   書く側: new / add / set / start / review / done / reopen（approve は廃止）/ design-merge <draft>（file だけ書く）
   会話の最初と merge の直後: comments / close-parents / align / today / after-merge
-  進みと割り振り: load（全体の %・担当ごとの順番と進捗率の表。--json・--changed・--cached）／ assign <issue> <作業のセッション> [順]（手元の控え）。start・assign は Assignees が空なら自分を入れる
+  進みと割り振り: load（全体の %・担当ごとの順番と進捗率の表。--json・--changed・--cached・--refresh・--if-coordinator）／ is-coordinator ／ assign <issue> <作業のセッション> [順]・--clear（手元の控え）。start・assign は Assignees が空なら自分を入れる
   全体像: board（HTML・--text の木・--summary の要約。--publish <issue> で要約を issue の目印の間に書く）
   立ち上げ: setup（GitHub Project の作成・紐づけ・項目・ビュー。既定は計画だけで、--apply で書く。scripts/hirai_project_setup.py）
   カード: card <issue> [--sync]（承認・判断・人の作業のカードを読んで形を確かめ、承認カードを項目「ひとこと」「推奨」に写す）／ card --lint（読むだけ）
@@ -5141,6 +5141,9 @@ def cmd_after_merge(pr_number: int) -> int:
         for c in all_candidates:
             print(f"  #{c['number']:<4}（{c['kind']}・子 {c['children_total']} 件）")
     cmd_unblocked(items=items)
+    for i in items:
+        if i.get('number') in closing_numbers and i.get('state') == 'CLOSED':
+            _record_overlay(i['number'], DONE_STATUS, 'CLOSED')  # 直後の load（板の控えが 10 分古い）で完了が戻らないように残す
     print_load_after(items=items)
     return 0
 
@@ -5475,7 +5478,8 @@ LOAD_OWNER_MAX = 40
 LOAD_ASSIGNEE_CHUNK = 50  # 1 回の問い合わせで Assignees を引く task の数（超えた分は次の問い合わせ）
 LOAD_ASSIGNEE_LIMIT = 500  # Assignees を引く task の上限（超えた分は表に 1 行で断る）
 LOAD_OVERLAY_SECONDS = 24 * 3600
-LOAD_POST_STEP_SECONDS = 25  # 書いたあとの表・Assignees の確かめで、gh を待つ上限
+LOAD_FETCH_SECONDS = 120  # 板の時刻は取得の終わり。取得中（1 分前後）の変更も重ねるための余裕
+LOAD_POST_STEP_SECONDS = 25  # 書いたあとの表・Assignees の確かめで、gh 1 回を待つ上限（何度か呼ぶので、合計はこれより長くなりうる）
 LOAD_EXIT_UNCHANGED = 3  # --changed で動いた所が無い（表を 1 行も出さない）
 _LOAD_USAGE = '使い方: hirai-task load [--json] [--changed] [--cached | --refresh] [--if-coordinator]'
 _ASSIGN_USAGE = '使い方: hirai-task assign <issue> <担当> [順] | hirai-task assign <issue> --clear'
@@ -5552,13 +5556,16 @@ def _load_graphql(query: str, variables: dict) -> dict:
     die(f'gh api graphql が失敗した（exit {rc}）: {(err or out).strip()}', 1, detail=(err or out).strip())
 
 
-def _load_pr_row(node: dict) -> dict:
+def _load_pr_row(node: dict, known: dict | None = None) -> dict:
     commits = [c for c in ((node.get('commits') or {}).get('nodes') or []) if c]
     rollup = ((commits[0].get('commit') or {}).get('statusCheckRollup') or {}) if commits else {}
     closes = [c['number'] for c in ((node.get('closingIssuesReferences') or {}).get('nodes') or [])
               if c and c.get('number') is not None
               and ((c.get('repository') or {}).get('nameWithOwner') or REPO).lower() == REPO.lower()]
-    return {'number': node.get('number'), 'draft': bool(node.get('isDraft')), 'conflict': node.get('mergeable') == 'CONFLICTING',
+    mergeable = node.get('mergeable')
+    # GitHub は計算中に UNKNOWN を返す。その間は前の控えの値を使う（衝突の印が消えたり付いたりしない）
+    conflict = mergeable == 'CONFLICTING' if mergeable != 'UNKNOWN' else bool((known or {}).get(node.get('number')))
+    return {'number': node.get('number'), 'draft': bool(node.get('isDraft')), 'conflict': conflict,
             'author': (node.get('author') or {}).get('login') or '', 'closes': closes, 'checks': rollup.get('state') or ''}
 
 
@@ -5582,20 +5589,22 @@ def fetch_load_prs(numbers: list[int] | tuple = ()) -> dict:
                              + _assignee_aliases(chunk) + '\n  }\n}', {'owner': OWNER, 'name': REPO_NAME})
         node = more.get('repository') or {}
         assignees.update({str(n): _assignee_logins(node.get(f'a{i}')) for i, n in enumerate(chunk)})
+    before = _cached_load_prs() or {}
+    known = {r['number']: r['conflict'] for r in before.get('open', [])}
     opened, merged = repo.get('open') or {}, repo.get('merged') or {}
     nodes = [n for n in (opened.get('nodes') or []) if n]
     total = opened.get('totalCount')
     return {'key': _board_key(), 'repo': REPO, 'fetched_epoch': time.time(),
             'me': ((data.get('viewer') or {}).get('login')) or '', 'assignees': assignees,
             'open_total': total if isinstance(total, int) else len(nodes),
-            'open': [_load_pr_row(n) for n in nodes], 'unknown_assignees': max(0, len(numbers) - len(wanted)),
+            'open': [_load_pr_row(n, known) for n in nodes], 'unknown_assignees': max(0, len(numbers) - len(wanted)),
             'merged': [_load_pr_row(n) for n in (merged.get('nodes') or []) if n]}
 
 
 def _valid_pr_row(row) -> bool:
     return isinstance(row, dict) and isinstance(row.get('number'), int) and isinstance(row.get('draft'), bool) \
         and isinstance(row.get('closes'), list) and all(isinstance(n, int) for n in row['closes']) \
-        and isinstance(row.get('checks'), str) and isinstance(row.get('author'), str)
+        and isinstance(row.get('checks'), str) and isinstance(row.get('author'), str) and isinstance(row.get('conflict'), bool)
 
 
 def _cached_load_prs() -> dict | None:
@@ -5682,21 +5691,26 @@ def _any_board_cache() -> dict | None:
     return snap if snap is not None and snap['key'] == _board_key() and snap['repo'] == REPO else None
 
 
+def _overlay_entries() -> list[dict]:
+    """残した変更のうち、形の正しい行（壊れた file・行は空として扱う）。"""
+    raw = _load_shared_json(LOAD_OVERLAY).get('entries')
+    return [e for e in (raw if isinstance(raw, list) else [])
+            if isinstance(e, dict) and isinstance(e.get('number'), int) and isinstance(e.get('at'), (int, float))]
+
+
 def _record_overlay(number: int, status: str, state: str | None = None) -> None:
     """start・done が書いた変更を残す（板の控えがこの時刻より新しくなるまで、表に重ねる）。"""
     now = time.time()
-    entries = [e for e in (_load_shared_json(LOAD_OVERLAY).get('entries') or [])
-               if isinstance(e, dict) and isinstance(e.get('at'), (int, float)) and now - e['at'] < LOAD_OVERLAY_SECONDS
-               and e.get('number') != number]
+    entries = [e for e in _overlay_entries()
+               if now - e['at'] < LOAD_OVERLAY_SECONDS and not (e.get('number') == number and e.get('key') == _board_key())]
     entries.append({'number': number, 'status': status, 'state': state, 'at': now, 'key': _board_key()})
     _safe_write(LOAD_OVERLAY, json.dumps({'entries': entries}, ensure_ascii=False))
 
 
 def _apply_overlay(view: dict, fetched_epoch: float) -> None:
     """板の控えより新しい start・done の変更を、view の issue に重ねる。"""
-    table = {e['number']: e for e in (_load_shared_json(LOAD_OVERLAY).get('entries') or [])
-             if isinstance(e, dict) and e.get('key') == _board_key() and isinstance(e.get('number'), int)
-             and isinstance(e.get('at'), (int, float)) and e['at'] > fetched_epoch}
+    table = {e['number']: e for e in _overlay_entries()
+             if e.get('key') == _board_key() and e['at'] > fetched_epoch - LOAD_FETCH_SECONDS}
     for i in view['issues']:
         e = table.get(i.get('number'))
         if e:
@@ -5705,12 +5719,12 @@ def _apply_overlay(view: dict, fetched_epoch: float) -> None:
                 i['state'] = e['state']
 
 
-def _model_of(load, snap: dict, how: str, *, prs: dict | None, network: bool, with_prs: bool = True):
+def _model_of(load, snap: dict, how: str, *, prs: dict | None, network: bool):
     """板（snap）から表の材料を組む。start・done の変更を重ね、PR と Assignees を引く（network のとき）。"""
     view = board_view(snap, how)
     _apply_overlay(view, snap['fetched_epoch'])
     assign = _load_assignments()
-    if network and with_prs:
+    if network:
         prs = fetch_load_prs(_assignee_candidates(view['issues'], assign))
         settings = _load_settings(prs, network=True)
         prs['deadline_date'], prs['deadline_open'] = settings['deadline_date'], settings['deadline_open']
@@ -5737,9 +5751,9 @@ def load_model(opts: dict) -> dict:
 
 
 def _load_state_path() -> str:
-    """前回の控えの置き場。コーディネーターは共有の 1 本、ほかの会話はこの checkout だけの 1 本
+    """前回の控えの置き場。コーディネーターは共有の 1 本、ほかの会話（本体の checkout の担当でない会話も）は別の名前の 1 本
     （ほかの会話の load が、コーディネーターの「前回」を食わないように分ける）。"""
-    return LOAD_STATE if is_coordinator() else os.path.join(_local_state_dir(), 'load-last.json')
+    return LOAD_STATE if is_coordinator() else os.path.join(_local_state_dir(), 'load-last-other.json')
 
 
 def _save_load_state(model: dict) -> None:
@@ -5885,7 +5899,7 @@ def ensure_assignee(number: int) -> bool:
                 me = ''
             others = [x for x in logins if x.casefold() != me.casefold()] if me else logins
             mine = me and any(x.casefold() == me.casefold() for x in logins)
-            pr_note = ''
+            pr_note, pr_known = '', True
             if not logins or others:
                 try:
                     prs = [p for p in _open_prs_for(number) if not me or p['author'].casefold() != me.casefold()]
@@ -5893,20 +5907,22 @@ def ensure_assignee(number: int) -> bool:
                         prs = [p for p in prs if p['author'].casefold() in {x.casefold() for x in others}]
                     pr_note = '・開いている PR ' + '・'.join(f"#{p['number']}" for p in prs) if prs else '・開いている PR なし'
                 except Exception:  # noqa: BLE001 - PR が引けなくても、だれの task かの警告は出す
-                    prs, pr_note = [], '・開いている PR は確かめられなかった'
+                    prs, pr_note, pr_known = [], '・開いている PR は確かめられなかった', False
             else:
                 prs = []
             if others:
-                also = 'あなたも入っている。' if mine else ''
+                also = 'あなたも入っている。' if mine else '' if me else '動かしている GitHub ユーザーが分からないので、自分の task かは確かめられない。'
                 print(f'警告: #{number} は {"・".join(others)} の task（{also}Assignees {"・".join(logins)}{pr_note}）。上書きしない')
                 return True
             if not logins and prs:
                 print(f'警告: #{number} の Assignees は空だが、ほかの人の開いている PR '
                       + '・'.join(f"#{p['number']}（{p['author']}）" for p in prs) + ' がこの task を閉じる。Assignees は入れない')
                 return True
-            if logins or not me:
+            if logins or not me or not pr_known:
                 if not me:
                     print(f'（#{number} の Assignees を確かめられなかった: 動かしている GitHub ユーザーが分からない）', file=sys.stderr)
+                elif not logins:
+                    print(f'（#{number} の Assignees は入れていない: この task を閉じる開いている PR を確かめられなかった）', file=sys.stderr)
                 return False
             result = rest('POST', f'repos/{REPO}/issues/{number}/assignees', {'assignees': [me]})
             got = [a.get('login') for a in (result.get('assignees') or []) if isinstance(a, dict)]
@@ -5942,8 +5958,9 @@ def cmd_assign(argv: list[str]) -> int:
     ほかの人なら警告する（Project の項目は足さない・書かない）。--clear は割り振りを外す（Assignees は触らない）。"""
     if len(argv) == 2 and argv[1] == '--clear':
         number = _parse_issue_number(argv[0])
+        was = str(number) in (_load_shared_json(LOAD_ASSIGN).get('assign') or {})
         _write_assignments(lambda t: {k: v for k, v in t.items() if k != str(number)})
-        print(f'#{number} の割り振りを手元の控えから外した')
+        print(f'#{number} の割り振りを手元の控えから外した' if was else f'#{number} の割り振りは手元の控えに無い')
         print_load_after()
         return 0
     if len(argv) not in (2, 3):
@@ -6312,7 +6329,11 @@ def main(argv: list[str]) -> int:
     if sub == 'set':
         if len(tail) != 3:
             die('使い方: hirai-task set <issue> <field> <value>', 2)
-        return cmd_set(_parse_issue_number(tail[0]), tail[1], tail[2])
+        number = _parse_issue_number(tail[0])
+        rc = cmd_set(number, tail[1], tail[2])
+        if rc == 0 and tail[1] == 'Status':
+            _record_overlay(number, tail[2])
+        return rc
     if sub == 'start':
         usage_start = '使い方: hirai-task start <issue> [--reread] [--approved <出どころ>]'
         if not tail:
@@ -6335,7 +6356,11 @@ def main(argv: list[str]) -> int:
     if sub == 'review':
         if len(tail) != 1:
             die('使い方: hirai-task review <issue 番号>', 2)
-        return cmd_review(_parse_issue_number(tail[0]))
+        number = _parse_issue_number(tail[0])
+        rc = cmd_review(number)
+        if rc == 0:
+            _record_overlay(number, REVIEW_STATUS)
+        return rc
     if sub == 'done':
         if len(tail) not in (1, 3) or (len(tail) == 3 and tail[1] != '--not-planned'):
             die('使い方: hirai-task done <issue> [--not-planned <理由>]', 2)
@@ -6351,7 +6376,11 @@ def main(argv: list[str]) -> int:
     if sub == 'reopen':
         if len(tail) != 2:
             die('使い方: hirai-task reopen <issue> <status>', 2)
-        return cmd_reopen(_parse_issue_number(tail[0]), tail[1])
+        number = _parse_issue_number(tail[0])
+        rc = cmd_reopen(number, tail[1])
+        if rc == 0:
+            _record_overlay(number, tail[1], 'OPEN')
+        return rc
     if sub == 'sync':
         project_number = discover_project_number()
         fields = sync_fields(project_number)

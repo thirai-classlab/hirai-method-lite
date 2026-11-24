@@ -27,7 +27,7 @@ import hirai_board
 STAGE_SENTENCE = '進捗は申告でなく、PR と CI の実物から出しています（20 着手、50 draft、60 ready、70 CI 緑、90 merge 済み）。'
 NO_OWNER_STATUSES = ('進行中', 'レビュー中')
 HELD_STATUS = '保留'
-CLOSED_SHOWN = 3  # 担当の行に出す、閉じた task の数（古いものから畳む）
+CLOSED_SHOWN = 3  # 担当の行に出す、閉じた task の数（割り振りの順番の前のものから畳む）
 DONE_STATUS = '完了'
 CI_GREEN = ('SUCCESS',)
 CI_RED = ('FAILURE', 'ERROR')
@@ -38,7 +38,7 @@ def one_line(text) -> str:
 
 
 def cell(text) -> str:
-    """表のセルに入れる字（改行・制御文字を空白に、縦棒・角かっこ・バッククォートを全角に。崩れと埋め込みを防ぐ）。"""
+    """表のセルに入れる字（改行・制御文字を空白に、縦棒と角かっこを全角に、バッククォートを ' に。崩れと埋め込みを防ぐ）。"""
     plain = ''.join(c if c.isprintable() else ' ' for c in str(text or ''))
     return one_line(plain).replace('|', '｜').replace('<', '&lt;').replace('`', "'").replace('[', '［').replace(']', '］')
 
@@ -152,7 +152,11 @@ def build(view: dict, prs: dict, assign: dict, settings: dict) -> dict:
                 if int(n) not in named and int(n) in tasks and hirai_board.is_open(tasks[int(n)]):
                     others.append({'number': int(n), 'pr': pr['number'], 'author': author})
     others.sort(key=lambda o: (o['pr'], o['number']))
+    other_numbers = {o['number'] for o in others}
+    stray = [n for n in stray if n not in other_numbers]  # ほかの開発者の PR がある行は、担当の居ない行に出さない
     stuck_tasks = [{'number': t['number'], 'stuck': t['stuck']} for p in people for t in p['tasks'] if t['stuck']]
+    stray_rows = [(n, stage_of(n, ctx)[2]) for n in sorted(stray)]  # 担当の無い行の CI 赤・衝突も止まりに出す
+    stuck_tasks += [{'number': n, 'stuck': mark} for n, mark in stray_rows if mark]
     open_total = prs.get('open_total')
     return {'total': total, 'done': done, 'held': held, 'sections': sections, 'people': people,
             'stray': sorted(stray), 'others': others, 'stuck': stuck_tasks, 'settings': settings,

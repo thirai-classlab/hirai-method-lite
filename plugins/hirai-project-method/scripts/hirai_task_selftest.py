@@ -1203,7 +1203,7 @@ _LOAD_EPOCH = 1_800_000_000.0
 
 
 def _load_rows() -> list[dict]:
-    """wave 2・feature 2・task 12 の偽の板。40 番台が #1978 の完了条件の場面（段ごとに 1 件）。"""
+    """wave 2・feature 2・task 15 の偽の板。40 番台が #1978 の完了条件の場面（段ごとに 1 件）。"""
     def row(number, kind, status='', parent=None, title=None, state='OPEN', owner='', order=None, assignees=()):
         return {'id': f'I_{number}', 'number': number, 'kind': kind, 'status': status, 'parent_number': parent,
                 'title': title or f'row {number}', 'state': state, 'type': 'Issue',
@@ -1220,7 +1220,7 @@ def _load_rows() -> list[dict]:
         row(41, 'task', '進行中', 20, owner='甲', order=2.0),        # 進行中・PR なし → 20
         row(42, 'task', 'レビュー中', 20, owner='甲', order=3.0),    # draft → 50
         row(43, 'task', 'レビュー中', 20, owner='乙', order=1.0),    # ready・CI 赤 → 60
-        row(44, 'task', 'レビュー中', 20, owner='乙', order=2.0),    # 衝突 → 60 と「衝突」
+        row(44, 'task', 'レビュー中', 20, owner='乙', order=2.0),    # 衝突（CI は緑）→ 70 と「衝突」
         row(45, 'task', 'レビュー中', 20, owner='乙', order=3.0),    # ready・CI 緑 → 70
         row(46, 'task', 'レビュー中', 20, owner='乙', order=4.0),    # merge 済みで issue が開いている → 90
         row(47, 'task', '進行中', 20),                                 # 担当の居ない 進行中
@@ -1304,11 +1304,13 @@ def _load_gh(calls: list, *, rows=None, prs=None, deadline_bodies=None, fail_sea
 
 
 def _load_checks(t, tmp_dir: str) -> None:
-    """load・assign・hook の検査一式。控えと割り振りの置き場を一時ディレクトリへ差し替えて走らせる。"""
+    """load・assign・Assignees・コーディネーターの検査一式（hook は tests/smoke.sh case 7）。控えと割り振りの置き場を一時ディレクトリへ差し替えて走らせる。"""
     names = ('BOARD_CACHE', 'LOAD_PR_CACHE', 'LOAD_STATE', 'LOAD_ASSIGN', 'LOAD_OVERLAY')
     orig = {n: getattr(gh_task, n) for n in names}
     orig_run, orig_override, orig_mode = gh_task.run_gh, gh_task.PROJECT_NUMBER_OVERRIDE, gh_task._mode_setting
-    orig_coord = gh_task.is_coordinator
+    entry_coord, entry_ensure = gh_task.is_coordinator, gh_task.ensure_assignee
+    orig_coord = getattr(gh_task, '_real_is_coordinator', gh_task.is_coordinator)
+    gh_task.ensure_assignee = getattr(gh_task, '_real_ensure_assignee', gh_task.ensure_assignee)
     orig_local = gh_task._local_state_dir
     base = tempfile.mkdtemp(dir=tmp_dir)
     gh_task._local_state_dir = lambda: os.path.join(base, 'local')
@@ -1800,6 +1802,15 @@ def _load_checks(t, tmp_dir: str) -> None:
                 assert rc == 0 and '#45' in out, f'担当の load が食って、動いたのに出ない: {rc}'
                 rc, out = _run_main(['load', '--changed'])
                 assert (rc, out) == (3, ''), (rc, out)
+                # 本体の checkout の、コーディネーターでない会話（置き場が共有と同じでも）は、別の名前の file を使う
+                gh_task.is_coordinator = lambda: False
+                shared = os.path.dirname(gh_task.LOAD_STATE)
+                orig_dir = gh_task._local_state_dir
+                gh_task._local_state_dir = lambda: shared
+                try:
+                    assert os.path.basename(gh_task._load_state_path()) == 'load-last-other.json', '本体のほかの会話が、コーディネーターと同じ名前の file を書く'
+                finally:
+                    gh_task._local_state_dir = orig_dir
             finally:
                 gh_task.is_coordinator = lambda: False
         t('load --if-coordinator・is-coordinator と、前回の控え: ほかの会話の load（--json も）は食わない', _if_coordinator_and_state)
@@ -2066,11 +2077,212 @@ def _load_checks(t, tmp_dir: str) -> None:
                 seen.append(gh_task._state['gh_timeout'])
             assert seen == [gh_task.LOAD_POST_STEP_SECONDS] and gh_task._state['gh_timeout'] is None, (seen, gh_task._state)
         t('書いたあとの確かめだけ gh の待ちに上限を付け、終わったら元に戻す', _post_step_timeout)
+        def _after_merge_overlay() -> None:
+            saved = {n: getattr(gh_task, n) for n in ('fetch_closing_issue_numbers', 'discover_project_number', 'fetch_all_items', 'fetch_bodies',
+                                                      'align_write_allowed', 'fetch_sub_issue_lists', 'close_parents_plan', 'cmd_unblocked', 'print_load_after')}
+            try:
+                fresh()
+                gh_task.is_coordinator = lambda: True
+                rc, out = _run_main(['load'])
+                gh_task.fetch_closing_issue_numbers = lambda n: [45, 46]
+                gh_task.discover_project_number = lambda: 7
+                gh_task.fetch_all_items = lambda n: [{'number': 45, 'kind': 'task', 'parent_number': None, 'status': 'レビュー中', 'state': 'CLOSED', 'type': 'Issue'},
+                                                     {'number': 46, 'kind': 'task', 'parent_number': None, 'status': 'レビュー中', 'state': 'OPEN', 'type': 'Issue'}]
+                gh_task.fetch_bodies = lambda n: {}
+                gh_task.align_write_allowed = lambda items: False
+                gh_task.fetch_sub_issue_lists = lambda n: {}
+                gh_task.close_parents_plan = lambda items, bodies, children: {}
+                gh_task.cmd_unblocked = lambda *, items=None: 0
+                gh_task.print_load_after = lambda items=None: None
+                rc, _ = _run_main(['after-merge', '145'])
+                assert rc == 0
+                table = {e['number']: e for e in gh_task._overlay_entries()}
+                assert set(table) == {45} and table[45]['state'] == 'CLOSED', f'閉じた issue だけを残す: {table}'
+                rc, out = _run_main(['load', '--changed', '--cached'])
+                assert rc == 0 and '3 / 15 完了' in out, f'段が動いたのに出ない・完了が戻った: {rc} {out[:80]!r}'
+                rc, out = _run_main(['load', '--cached'])
+                assert '3 / 15 完了' in out, f'after-merge のあと、板の控えで完了が戻った: {out.splitlines()[0]}'
+            finally:
+                for n, v in saved.items():
+                    setattr(gh_task, n, v)
+                gh_task.is_coordinator = lambda: False
+        t('after-merge: 閉じた issue だけを変更として残し、直後の load で完了が戻らない', _after_merge_overlay)
+
+        def _overlay_writers() -> None:
+            seen: list = []
+            saved = {n: getattr(gh_task, n) for n in ('cmd_review', 'cmd_reopen', 'cmd_set', '_record_overlay')}
+            gh_task._record_overlay = lambda number, status, state=None: seen.append((number, status, state))
+            try:
+                for argv, cmd, want in ((['review', '45'], 'cmd_review', (45, 'レビュー中', None)),
+                                        (['reopen', '45', '着手可'], 'cmd_reopen', (45, '着手可', 'OPEN')),
+                                        (['set', '45', 'Status', '保留'], 'cmd_set', (45, '保留', None))):
+                    for rc_of, expect in ((0, [want]), (1, [])):
+                        seen.clear()
+                        setattr(gh_task, cmd, lambda *a, r=rc_of, **k: r)
+                        rc, _ = _run_main(argv)
+                        assert (rc, seen) == (rc_of, expect), f'{argv}: {rc} {seen}'
+                seen.clear()
+                gh_task.cmd_set = lambda *a, **k: 0
+                _run_main(['set', '45', '種別', 'task'])
+                assert seen == [], f'Status でない set で変更を残した: {seen}'
+            finally:
+                for n, v in saved.items():
+                    setattr(gh_task, n, v)
+        t('review・reopen・set Status も変更として残す（失敗・ほかの項目では残さない）', _overlay_writers)
+
+        def _overlay_shape_and_time() -> None:
+            fresh()
+            _run_main(['load'])
+            snap = json.load(open(gh_task.BOARD_CACHE, encoding='utf-8'))
+            base = snap['fetched_epoch']
+            for raw in ({'entries': 5}, {'entries': [None, 3, {'number': 'x', 'at': 1}, {'number': 45}]}, [], {'entries': None}):
+                gh_task._write_atomic(gh_task.LOAD_OVERLAY, json.dumps(raw))
+                rc, out = _run_main(['load', '--cached'])
+                assert rc == 0 and '2 / 15 完了' in out, f'壊れた overlay で落ちたか数えた: {raw} {rc} {out[:60]!r}'
+                gh_task._record_overlay(45, '完了', 'CLOSED')
+                assert [e['number'] for e in gh_task._overlay_entries()] == [45], raw
+            def entries(*rows):
+                gh_task._write_atomic(gh_task.LOAD_OVERLAY, json.dumps({'entries': [{'number': n, 'status': '完了', 'state': 'CLOSED', 'at': at, 'key': key} for n, at, key in rows]}))
+                rc, out = _run_main(['load', '--cached'])
+                return out.splitlines()[0]
+            key = gh_task._board_key()
+            assert '3 / 15' in entries((45, base + 1, key)), '板より新しい変更を重ねない'
+            assert '3 / 15' in entries((45, base - 60, key)), '取得中の変更（時刻が取得の終わりより前）を重ねない'
+            assert '2 / 15' in entries((45, base - 500, key)), '板より古い変更を重ねた'
+            assert '2 / 15' in entries((45, base + 1, 'other/repo#auto')), '別リポの変更を重ねた'
+            gh_task._record_overlay(45, '完了', 'CLOSED')
+            assert any(e['number'] == 45 and e['key'] == 'other/repo#auto' for e in gh_task._overlay_entries()), '別リポの行を番号だけで消した'
+            gh_task._write_atomic(gh_task.LOAD_OVERLAY, json.dumps({'entries': [{'number': 45, 'status': '完了', 'state': 'CLOSED', 'at': 1.0, 'key': key}]}))
+            gh_task._record_overlay(45, '進行中')
+            assert [(e['number'], e['status']) for e in gh_task._overlay_entries()] == [(45, '進行中')], '古い行が残った'
+        t('load: 変更の控えの壊れた形・別リポの行・取得中の変更・古い変更の扱い', _overlay_shape_and_time)
+
+        def _unknown_mergeable() -> None:
+            def with_mergeable(value):
+                prs = _load_default_prs()
+                prs['open'] = [p for p in prs['open'] if p['number'] != 144] + [_load_pr(144, [44], checks='SUCCESS', mergeable=value)]
+                return prs
+            fresh(prs=with_mergeable('CONFLICTING'))
+            rc, out = _run_main(['load'])
+            assert '止まっているもの: #43（CI 赤）, #44（衝突）' in out, out[-200:]
+            for value in ('UNKNOWN', 'CONFLICTING', 'UNKNOWN'):
+                gh_task.run_gh = _load_gh(calls, prs=with_mergeable(value))
+                rc, out = _run_main(['load', '--changed'])
+                assert (rc, out) == (3, ''), f'{value}: 衝突の印が行き来した {rc} {out[-120:]!r}'
+            gh_task.run_gh = _load_gh(calls, prs=with_mergeable('MERGEABLE'))
+            rc, out = _run_main(['load', '--changed'])
+            assert rc == 0 and '#44（衝突）' not in out, out[-200:]
+            gh_task.run_gh = _load_gh(calls, prs=with_mergeable('UNKNOWN'))
+            rc, out = _run_main(['load', '--changed'])
+            assert rc == 3, '衝突の消えた PR に、前の前の値を付けた'
+        t('load: mergeable が UNKNOWN の間は前の控えの値を使い、衝突の印が行き来しない', _unknown_mergeable)
+
+        def _stray_stuck_and_dedup() -> None:
+            prs = _load_default_prs()
+            prs['open'].append(_load_pr(190, [47], checks='FAILURE'))
+            prs['open'].append(_load_pr(191, [52], author='other-dev'))
+            out = load.render(model_of(prs=prs))
+            assert '止まっているもの: #43（CI 赤）, #44（衝突）, #47（CI 赤）' in out, out[-300:]
+            line = next((x for x in out.splitlines() if x.startswith('進行中・レビュー中なのに')), '')
+            assert '#52' not in line and '#47' in line, f'ほかの開発者の PR がある行を担当の居ないものにも出した: {line}'
+            assert '#52（PR #191・other-dev）' in out, out[-300:]
+        t('load: 担当の居ない行の CI 赤も「止まっているもの」に出し、ほかの開発者の PR がある行は担当の居ないものから外す', _stray_stuck_and_dedup)
+
+        def _state_and_errors_after() -> None:
+            try:
+                fresh()
+                gh_task.is_coordinator = lambda: True
+                _run_main(['load'])
+                gh_task._record_overlay(45, '完了', 'CLOSED')
+                with redirect_stdout(io.StringIO()):
+                    gh_task.print_load_after()
+                rc, out = _run_main(['load', '--changed', '--cached'])
+                assert (rc, out) == (3, ''), '終わりの表のあと前回の控えが残っていない（hook が 2 重に出す）'
+                real = gh_task._model_of
+                for exc in (ValueError('x'), KeyError('y'), OSError('z'), RuntimeError('w'), ZeroDivisionError()):
+                    def boom(*a, e=exc, **k):
+                        raise e
+                    gh_task._model_of = boom
+                    try:
+                        with redirect_stdout(io.StringIO()):
+                            gh_task.print_load_after()       # どの例外でも、書いた操作の結果を変えない
+                    finally:
+                        gh_task._model_of = real
+                def bad_rest(*a, **k):
+                    raise ValueError('x')
+                orig_rest = gh_task.rest
+                gh_task.rest = bad_rest
+                try:
+                    assert gh_task.ensure_assignee(40) is False
+                finally:
+                    gh_task.rest = orig_rest
+                # mode.yml が読めないときは、コーディネーターでないとみなす（落ちない）
+                gh_task.is_coordinator = orig_coord
+                env = dict(os.environ)
+                os.environ.update({'HC_NOTIFY': 'off', 'ORCA_TERMINAL_HANDLE': 't'})
+                orig_mode_setting = gh_task._mode_setting
+                def unreadable(key, home=True):
+                    raise RuntimeError('読めない')
+                gh_task._mode_setting = unreadable
+                try:
+                    assert gh_task.is_coordinator() is False
+                finally:
+                    gh_task._mode_setting = orig_mode_setting
+                    os.environ.clear(); os.environ.update(env)
+            finally:
+                gh_task.is_coordinator = lambda: False
+        t('終わりの表: 前回の控えを残し、どの例外でも書いた操作の結果を変えない・mode.yml が読めなければ出さない', _state_and_errors_after)
+
+        def _run_gh_timeout() -> None:
+            real_run, real_fake = gh_task.subprocess.run, gh_task.run_gh
+            seen = {}
+            class _P:
+                returncode, stdout, stderr = 0, 'ok', ''
+            def fake_run(cmd, **kw):
+                seen['timeout'] = kw.get('timeout')
+                if seen.get('slow'):
+                    raise gh_task.subprocess.TimeoutExpired(cmd, 1)
+                return _P()
+            gh_task.run_gh = getattr(gh_task, '_real_run_gh', orig_run)
+            gh_task.subprocess.run = fake_run
+            try:
+                gh_task._state['gh_timeout'] = None
+                assert gh_task.run_gh(['x'])[0] == 0 and seen['timeout'] is None, seen
+                with gh_task._PostStep():
+                    gh_task.run_gh(['x'])
+                    assert seen['timeout'] == gh_task.LOAD_POST_STEP_SECONDS, seen
+                    seen['slow'] = True
+                    rc, _out, err = gh_task.run_gh(['x'])
+                    assert rc != 0 and '終わらなかった' in err, (rc, err)
+            finally:
+                gh_task.subprocess.run, gh_task.run_gh = real_run, real_fake
+        t('run_gh: 書いたあとの確かめのときだけ時間切れを付け、切れたら失敗として返す（例外を投げない）', _run_gh_timeout)
+
+        def _ensure_pr_unknown() -> None:
+            def fake(args, input_text=None):
+                if args[:3] == ['api', '-X', 'GET'] and args[3] == 'user':
+                    return 0, json.dumps({'login': 'me'}), ''
+                if args[:3] == ['api', '-X', 'GET'] and args[3].endswith('/issues/40'):
+                    return 0, json.dumps({'number': 40, 'assignees': []}), ''
+                if 'pullRequests(states: OPEN' in ' '.join(args):
+                    return 1, '', 'HTTP 403'
+                raise AssertionError(f'書いた: {args}')
+            gh_task.run_gh = fake
+            err = io.StringIO()
+            saved_err = sys.stderr
+            sys.stderr = err
+            try:
+                with redirect_stdout(io.StringIO()) as out:
+                    got = gh_task.ensure_assignee(40)
+            finally:
+                sys.stderr = saved_err
+            assert got is False and out.getvalue() == '' and '入れていない' in err.getvalue(), (got, out.getvalue(), err.getvalue())
+        t('ensure_assignee: 空で、閉じる PR を確かめられないときは入れず、標準エラーに 1 行', _ensure_pr_unknown)
     finally:
         for n, v in orig.items():
             setattr(gh_task, n, v)
         gh_task.run_gh, gh_task.PROJECT_NUMBER_OVERRIDE, gh_task._mode_setting = orig_run, orig_override, orig_mode
-        gh_task.is_coordinator, gh_task._local_state_dir = orig_coord, orig_local
+        gh_task.is_coordinator, gh_task.ensure_assignee, gh_task._local_state_dir = entry_coord, entry_ensure, orig_local
 
 
 def _card_field_defs(*, with_card_fields: bool = True) -> list[dict]:
@@ -2425,6 +2637,14 @@ def main() -> int:
     orig_comments_since_cache = gh_task.COMMENTS_SINCE_CACHE
     orig_merged_designs_since_cache = gh_task.MERGED_DESIGNS_SINCE_CACHE
     orig_closed_done_cursor_cache = gh_task.CLOSED_DONE_CURSOR_CACHE
+    orig_load_paths = {path_name: getattr(gh_task, path_name) for path_name in ('LOAD_PR_CACHE', 'LOAD_STATE', 'LOAD_ASSIGN', 'LOAD_OVERLAY')}
+    for path_name in orig_load_paths:
+        setattr(gh_task, path_name, f'{cache_tmp_dir}/{path_name.lower()}.json')
+    orig_is_coordinator, orig_ensure_assignee = gh_task.is_coordinator, gh_task.ensure_assignee
+    gh_task._real_is_coordinator, gh_task._real_ensure_assignee = orig_is_coordinator, orig_ensure_assignee
+    gh_task._real_run_gh = orig_run_gh
+    gh_task.is_coordinator = lambda: False
+    gh_task.ensure_assignee = lambda number: False
     gh_task.JOURNAL_PATH = f'{cache_tmp_dir}/gh-task-journal.jsonl'
     gh_task.COMMENTS_SINCE_CACHE = f'{cache_tmp_dir}/gh-comments-since.json'
     gh_task.MERGED_DESIGNS_SINCE_CACHE = f'{cache_tmp_dir}/gh-merged-designs-since.json'
@@ -10059,6 +10279,9 @@ def main() -> int:
         gh_task.COMMENTS_SINCE_CACHE = orig_comments_since_cache
         gh_task.MERGED_DESIGNS_SINCE_CACHE = orig_merged_designs_since_cache
         gh_task.CLOSED_DONE_CURSOR_CACHE = orig_closed_done_cursor_cache
+        for path_name, path_value in orig_load_paths.items():
+            setattr(gh_task, path_name, path_value)
+        gh_task.is_coordinator, gh_task.ensure_assignee = orig_is_coordinator, orig_ensure_assignee
 
     for line in results:
         print(line)
