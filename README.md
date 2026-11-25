@@ -198,7 +198,7 @@ PR の本文の型は、導入先に PR の雛形か本文を見る検査があ�
 
 ### 全体像と、どこで何件止まっているか（`/hirai-project-method:board`、v2.7.0）
 
-`/hirai-project-method:board` と入力するか、「進捗を見せて」と頼むと、GitHub Project から次をまとめて出します（読むだけで、GitHub には書き込みません）。
+`/hirai-project-method:board` と入力するか、「どこで何件止まっている?」と頼むと、GitHub Project から次をまとめて出します（「進捗を見せて」は全体の %・担当ごとの順番と進捗率の表で、`hirai-task load` が出します）（読むだけで、GitHub には書き込みません）。
 
 - **止まっているものの件数**: 承認待ち・判断待ち（裁定）・依存待ち・保留・レビュー中・着手可なのに着手できない（理由ごと）・人の作業（`[User]`）
 - **あなたの番**: 人が動かすもの（承認待ちの feature・判断待ち・`[User]`・レビュー中の PR）
@@ -223,13 +223,13 @@ feature を起こすと（`hirai-task new --kind feature`・`new --from-table`�
 
 | やりたいこと | やり方 | 前提 |
 |---|---|---|
-| 進捗を聞く・指示する | Claude アプリの **Code** から、手元で動いているセッションを開き、「進捗を見せて」と送る。スマホの幅で読める短い表で返ります。そのまま「#123 に着手して」と指示できます | 手元の PC で Claude Code が動いていること（[Remote Control](https://code.claude.com/docs/en/remote-control)）。`/config` の **Enable Remote Control for all sessions** をオンにすると毎回自動でつながります。アプリは Claude Code で `/mobile` と打つと QR が出ます |
+| 進捗を聞く・指示する | Claude アプリの **Code** から、手元で動いているセッションを開き、「進捗を見せて」と送る（`hirai-task load` の表が返る）。止まっている所の短い表は「どこで何件止まっている?」。そのまま「#123 に着手して」と指示できます | 手元の PC で Claude Code が動いていること（[Remote Control](https://code.claude.com/docs/en/remote-control)）。`/config` の **Enable Remote Control for all sessions** をオンにすると毎回自動でつながります。アプリは Claude Code で `/mobile` と打つと QR が出ます |
 | 確認や質問にスマホで答える | 許可の確認・質問が来たら通知が届くので、アプリで答える | `/config` の **Push when actions required** をオン |
 | PC を閉じていても進捗を見る | 進捗用の issue を 1 本作ってピン留めし、`hirai-task board --publish <その issue の番号>` で本文に要約を書いておく。GitHub アプリでいつでも読めます。Project のビュー（承認・裁定・止まっているもの）も GitHub アプリで開けます | `--publish` だけは GitHub に書き込みます（目印の間だけを置き換え、ほかの本文は変えません） |
 | 着手を承認する・裁定する | GitHub アプリで feature の Status を「着手可」に動かす。判断待ちの issue にはコメントで答える | コメントは次の会話の最初に `hirai-task comments` が拾います |
 
 - Remote Control は claude.ai のログインが要ります（API キーや Bedrock・Vertex では使えません）。実行とファイルは手元の PC のままです
-- アプリから打ったスラッシュコマンドが通るかは確かめていません。「進捗を見せて」のように文で頼めば、Claude が `/hirai-project-method:board` を呼びます
+- アプリから打ったスラッシュコマンドが通るかは確かめていません。「どこで何件止まっている?」のように文で頼めば、Claude が `/hirai-project-method:board` を呼びます（「進捗を見せて」は `hirai-task load`）
 
 ## 1.x・2.x から 3.0.0 へ移る
 
@@ -595,7 +595,7 @@ claude plugins install mattpocock-skills
 |---|---|
 | `.claude-plugin/plugin.json` | プラグインのマニフェスト（`VERSION` と同じ版を書く） |
 | `.claude-plugin/marketplace.json` | マーケットプレイス定義。3 行: `hirai-lite`（土台・`source: "./"`）・`hirai-project-method`（足すプラグイン・`./plugins/hirai-project-method`）・退役した 2.x（`ref: v2`） |
-| `plugins/hirai-project-method/` | 足すプラグイン（`hirai-task`・`/board`・`/project-setup`・skill `github-project`・自分の `plugin.json`・`tests/smoke.sh`）。土台に依存する（`hirai-lite >=3.0.0`） |
+| `plugins/hirai-project-method/` | 足すプラグイン（`hirai-task`・`/board`・`/project-setup`・skill `github-project`・PostToolUse の hook 1 本〔コーディネーターの会話だけに 1 行を足す。止めない〕・自分の `plugin.json`・`tests/smoke.sh`）。土台に依存する（`hirai-lite >=3.0.0`） |
 | `bin/` | `hirai-notify`（Orca のコーディネーターへの知らせ）・`hirai-watch`（止まった会話の見回り）・`hirai-worktrees`（worktree の片付けの一覧。消さない）・`hirai-pr-retarget`（積んだ PR の付け替え）・`hirai-pr-asset`（PR の本文に載せる画面のキャプチャを branch `pr-assets` に置く）。足すプラグインの `hirai-task` は `plugins/hirai-project-method/bin/` |
 | `.mcp.json` | 同梱する MCP サーバー 2 つの定義（キーは環境変数参照のみ） |
 | `agents/` | サブエージェント 1 個（`tdd-guide`。MIT、出典は `NOTICE.md`） |

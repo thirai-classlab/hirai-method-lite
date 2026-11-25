@@ -29,8 +29,8 @@
     {
       "name": "hirai-project-method",
       "source": "./plugins/hirai-project-method",
-      "description": "hirai-lite に足す、GitHub Project でタスクを回すための道具（hirai-task・/board・/project-setup・skill github-project）。mode.yml の tasks: github-project のリポだけが入れる。",
-      "version": "1.1.0",
+      "description": "hirai-lite に足す、GitHub Project でタスクを回すための道具（hirai-task・/board・/project-setup・skill github-project・コーディネーターの会話だけの PostToolUse の hook 1 本）。mode.yml の tasks: github-project のリポだけが入れる。",
+      "version": "1.2.0",
       "author": {
         "name": "thirai-classlab"
       },

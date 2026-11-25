@@ -1,6 +1,6 @@
 ---
 name: github-project
-description: GitHub Project でやること（wave・feature・task の issue と Status）を読む・書くとき、hirai-task や gh issue を使う前に読む。正本・3 段・Status 8 値・着手可は人だけ・完了条件・書き込みはメイン専任と、承認カードを承認ビューで受ける決まり。
+description: GitHub Project でやること（wave・feature・task の issue と Status）を読む・書くとき、hirai-task や gh issue を使う前に読む。「進捗を見せて」「進捗は?」「タスクの状況」「だれが何をしている?」と聞かれたとき（スマートフォンからも）と、task の割り振り・着手・完了のときにも読む。正本・3 段・Status 8 値・着手可は人だけ・完了条件・書き込みはメイン専任・承認カード・進みと割り振りの表（hirai-task load）の決まり。
 ---
 
 # GitHub Project でのやること管理
@@ -25,6 +25,49 @@ description: GitHub Project でやること（wave・feature・task の issue �
 - **箱をカードに合わせる**: メインエージェントは、判断待ちには判断カードのある問いだけを置き、人が行う作業は `[User]`（人の作業カード）、人の権限で AI が行う操作は `[操作]`（承認カード）にする ／ 例: 外部の申込を待つ issue は `[User]` にする ／ 失効: なし
 - **答えが出た判断はその日に閉じる**: メインエージェントは、判断待ちの問いに答えが出たら、出どころ（会議・PR・ADR）を本文に書いてその日のうちに閉じる ／ 例: 「PR #46 で決着。案 A を採用」と書いて閉じる ／ 失効: なし
 - **カードは今日の分から書く**: メインエージェントは、会話の最初に `hirai-task card --lint` の件数を伝え、カードを書くのは今日着手するものと期限の近い判断に絞る ／ 例: 「カードの抜け: 承認 12・判断 16。今日は #12 と #40 を書く」 ／ 失効: なし
+
+## 進みと割り振りの表（進捗を聞かれたとき）
+
+`hirai-task load` が、GitHub Project の issue・PR・CI の実物から表を出す（読むだけ。`--json` は同じ材料の機械可読）。「どこで何件止まっているか」は `/hirai-project-method:board`（件数と止まり）、`load` は進み（%）と、だれが何をどの順でしているか。
+
+- **表はそのまま貼る**: メインエージェントは、`hirai-task load` の出力を言い換えず、数え直さず貼る ／ 例: 「進捗を見せて」に `hirai-task load` の出力だけを返す ／ 失効: なし
+- **表を出すのは 4 つの時機だけ**: メインエージェントは、新しい task を振ったとき（着手を含む）・完了したとき・進捗の確認を頼まれたとき・task に進捗があったとき（段が上がった・止まった）に表を出し、返答のたびには出さない ／ 例: 割り振りは `hirai-task assign 40 sess-a 1` の出力の終わりに出る ／ 失効: なし
+- **警告の出た task は振らない**: メインエージェントは、`start`・`assign` が「ほかの人の task」と警告した task の割り振りを `hirai-task assign <n> --clear` で外し（`assign` は警告しても控えに書く）、ユーザーに聞く ／ 例: 「#51 は other-dev の task。開いている PR #160」→ `--clear` してから、どう進めるかを聞く ／ 失効: なし
+
+| 時機 | 打つもの |
+|---|---|
+| 進捗の確認を頼まれた | `hirai-task load` |
+| 新しい task を振った | `hirai-task assign <n> <作業のセッションの名前> [順]`（外すときは `hirai-task assign <n> --clear`。名前に空白があれば引用符で囲む。`-` で始めない） |
+| 着手した・完了した | `hirai-task start <n>`・`hirai-task done <n>`・`hirai-task after-merge <PR>` |
+| 進捗があった | `hirai-task load --changed`（前回と比べて段・担当・順番・止まりの印が動いたときだけ出し、動いていなければ 1 行も出さず exit 3）。コーディネーターの会話では、前景の `orca orchestration check` で知らせを受けたとき（出力に message の id があるか `--ack` を付けたとき）、hook が「打つ」の 1 行を足す。背景で待って受けたときは出ないので、自分で打つ |
+
+**割り振り・着手・完了のあとの表は、コーディネーターの会話だけに出る。** コーディネーターの会話は、次の全部がそろうとき: `HC_NOTIFY=off` で開いた・Orca の端末・linked worktree でない・`.claude/mode.yml` が `tasks: github-project` と `notify: orca`。板の控えが 1 本も無いときは 1 行の断り、10 分より古い控えで描くときは表の下に「（控え: N 分前）」が出る。`start`・`done`・`reopen`・`review`・`set Status`・`after-merge` で閉じた issue の変更は、板の控えが追いつくまで表に重なる。`--cached` は gh を叩かず、手元の控えだけを読む（板と PR の控えのどちらかが無ければ exit 3・何も出さない）。
+
+### 表の読み方
+
+- 進捗は申告でなく実物で決まる: 0 着手前／20 進行中・レビュー中（PR なし）／50 draft の PR／60 ready で CI が走っているか赤・検査なし／70 CI 緑／90 merge 済みで issue が開いている（Status が 完了 の開いた issue も）／100 issue が閉じた。控えに無い（新しい）issue は 0% で、完了に数えない
+- **止まっているもの**: CI が赤・PR が衝突している task（draft の CI 赤は出さない。担当の無い行も入る）。段の数だけでは分からない止まりを別の行に出す
+- **担当の列**: 自分の作業のセッションの名前と順番は手元の控え（git の管理ディレクトリの下の `hirai-task/load-assign.json`）から、ほかの人の行は GitHub の Assignees の名前から出す（Project に「担当」の項目は足さない）。閉じた task は割り振りの順番の後ろの 3 つだけ
+- **進行中・レビュー中なのに担当の居ないもの**: 手元の控えに名前が無く、ほかの人だけの Assignees でもない 進行中・レビュー中の task（Assignees が自分だけの行も入る。ほかの開発者の開いている PR がある行は「ほかの開発者の PR」に出す）。残さない
+- **ほかの開発者の PR**: 割り振りもほかの人の Assignees も無い open の task を閉じる、自分でない人の開いている PR
+- 期限の行・本線の印は、**そのリポの** `.claude/mode.yml`（ホームの `~/.claude/mode.yml` は読まない）に設定があるときだけ出る:
+
+```yaml
+load_deadline: 2026-12-15        # 本文に「期限: 2026-12-15」の行がある open の issue を数える（日付に触れただけの issue は数えない）
+load_deadline_label: ベータ（12/15・エージェントのオンボーディング）
+load_mainline: 営業の登録          # この語を含むセクションに印を付ける
+load_mainline_label: ベータの本線
+```
+
+### Assignees（だれの task か）
+
+`start` と `assign` は、Assignees が空なら動かしている GitHub ユーザーを入れる。ほかの人（複数人を含む）が入っていたら警告を 1 行出す（その人の開いている PR も）。空でも、ほかの人の開いている PR がその task を閉じるなら、入れずに警告する。PR を確かめられないときも入れない。上書き・追加・停止はしない。確かめられないときは標準エラーに 1 行で、着手や割り振りの結果は変わらない。
+
+### 止まったとき
+
+- exit 1: 取得に失敗した（gh の失敗・認証・レート制限）。標準エラーの末尾を伝え、`hirai-task load --refresh` を添える。「0%」「0 件」とは言わない
+- exit 2: 呼び方の誤り。標準エラーをそのまま出す
+- exit 3: 出すものが無い（`--changed` で動きが無い・`--cached` で控えが無い・`--if-coordinator` の対象外）。標準出力は 1 行も出ない
 
 ## 関連
 

@@ -16,6 +16,8 @@ tasks: github-project
 
 `tasks: github-project` で `hirai-task` が見つからないとき（`installed_plugins.json` の足すプラグインの行から引いた絶対 path に無いとき）、土台は上の入れ方を示して止まる。
 
+全体の進みに期限の行や本線の印を出すときは、`.claude/mode.yml` に `load_deadline`・`load_deadline_label`・`load_mainline`・`load_mainline_label`（どれも任意。書き方は `skills/github-project/SKILL.md`）を足す。
+
 夜間に回す CI の赤を見逃さないときは、同じ `.claude/mode.yml` に `nightly_ci: ci.yml`（workflow のファイル名）を足す。`hirai-task today` の先頭に、その workflow の直近の schedule の run の結果を 1 行出す（成功・失敗と url・実行中・run が無い・取れない。36 時間より古ければ注記）。空か無ければ何も出さず gh も呼ばない。
 
 ## 入っているもの
@@ -25,6 +27,8 @@ tasks: github-project
 | `bin/hirai-task` | リポに紐づいた GitHub Project のタスクを読み書きする 1 本の道具（ready・start・new・board・card・setup・line ほか）。Claude Code がプラグインの `bin/` を PATH に入れる |
 | `commands/board.md` | `/hirai-project-method:board` 全体像と、どこで何件止まっているか |
 | `commands/project-setup.md` | `/hirai-project-method:project-setup` Project の作成・紐づけ・項目・ビューの立ち上げ（既定は計画だけ。`--apply` で書く） |
+| `bin/hirai-task load`・`assign` | 全体の %・担当ごとの順番と進捗率の表と、割り振り・Assignees の決まり（「進捗を見せて」などで出る。決まりは `skills/github-project/` の「進みと割り振りの表」） |
+| `hooks/coordinator-load.sh` | コーディネーターの会話だけの PostToolUse（止めない・gh も控えも読まない・知らせを受けたとき（前景の `orca orchestration check` の出力に message の id があるか `--ack` を付けたとき）「`hirai-task load --changed` を打つ」の 1 行を足す。`.claude/mode.yml` の `notify: orca` と `tasks: github-project`・`HC_NOTIFY=off`・Orca の端末・linked worktree でない、が全部そろうとき） |
 | `skills/github-project/` | GitHub Project の形の規範（正本は Project・3 段・Status 8 値・書き込みはメイン専任・承認カード） |
 | `docs/rules-reference/project-setup.md`・`glossary.md` | 立ち上げの手順と、wave・feature・8 状態の用語 |
 | `hirai-task today` の見回りの書き込み | align・close-parents に加え、**閉じたのに Status が 完了 でない task へ Status=完了 だけを書く**（書き込みが 1 種増える。書くのは今の Status が 進行中・レビュー中・空 で、[操作]・[User] でない task（この repo の行だけ。閉じた理由が not planned・duplicate でも同じ）。[操作]・[User] と、承認待ち・判断待ち・依存待ち・着手可・保留 のまま閉じた行は、今までどおり stuck に番号と題を出すだけ（誤って閉じた・実行していないものがありうる）。書く直前に state・種別・Status・題を読み直し、書く相手でなくなっていれば飛ばす。1 件書くたびに `完了にした: #n（前の Status → 完了）題` を出し、書けない 1 件は理由を出してほかを続け、rate limit・権限の 403 なら残りを打ち切る（rate limit の回は align も一覧だけ）。1 回 5 件・45 秒まで（45 秒を超える前に次を始めないだけで、始めた 1 件は最後まで行う）。次の today は試した所の続きから。align と同じ許可（`- today は書かない: はい`）に従う。today に `--json`・`--dry-run` は無く、付けると exit 2）。**「この repo の行だけ」は完了の書き込みだけの決まり**（align・close-parents は、複数のリポを載せた Project で別 repo の行を絞らない。1.0.0 と同じ）。種別なしの行には直すコマンドを 1 行出し、`set`・`start` は相手の種別が空なら stderr に警告 1 行（止めない。種別の項目が無い Project では、どちらも出さない）。直近 7 日に `no-issue` ラベルで merge した既定の branch 向けの PR を番号で出す（closed の PR 100 件の読みを使い、API を増やさない。100 件で見切れて 0 件のときも「0 件」と出す） |
