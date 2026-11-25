@@ -32,6 +32,7 @@ paths:
 - **現在形を変える依頼は分かれ道を通す**: メインエージェントは、現在形の文書（仕様・設計・規範）を変える依頼を、`core.md` の「設計の起点」の分かれ道（A 提案なし／B 決定だけ ADR／C 提案を起こす）で判定する。draft に起こすのは C のとき ／ 例: 「ログイン失敗の上限を 5 回にする」は受入が変わるので C → `docs/draft/login-limit.md` ／ 失効: なし
 - **承認してから台帳に載せる**: メインエージェントは、user 承認を得た draft だけを list.md の行にする ／ 例: draft の先頭に `approved_at: 2026-08-22` を書いてから `/hirai-lite:new-task` で追記する ／ 失効: なし
 - **未承認は draft に留める**: 承認前の設計は draft dir に置いたままにし、list.md からリンクしない ／ 例: 検討中の案は draft のまま user レビューに出す ／ 失効: なし
+- **既存のタスクと突き合わせる**: 設計を書くメインエージェントは、起こす task 全部を、開いている・閉じたタスク（台帳なら list.md と parking-lot.md、GitHub Project なら open と閉じた issue）に突き合わせた表（同じ・一部・依存・重ならない、と根拠の番号）を draft に入れ、判定を別の subagent に事実で確かめさせてから承認に出す ／ 例: draft の task の節に既存のタスクとの表を置く ／ 失効: なし
 - **task から draft へリンクする**: メインエージェントは、task の詳細欄に元 draft への相対リンクを書く ／ 例: `詳細: [draft/login-rate-limit.md](../draft/login-rate-limit.md)` ／ 失効: draft を廃止したとき
 
 ## 保留

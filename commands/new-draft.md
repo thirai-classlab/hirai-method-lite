@@ -42,10 +42,11 @@ echo "$DRAFT"
 4. `$DRAFT/<slug>.md` を `$P/templates/draft.md` から新規作成する。`id_prefix:` を決め（英大文字 2〜10 字。既存の提案と重ならないこと）、`<…>` をすべて埋めるか消す。`status: 起案`・`approved_at:` は空のまま。節の見出しは変えない（導入先に `scripts/check-drafts.sh` があれば、それが見る）。
    §1〜§11 を埋める（§10 完了条件と §11 task は `/hirai-lite:new-task` が読む節。完了条件は task の完了条件へ、§11 は task の一覧へ写される）。§10 は `npm test` の exit 0 のような判定できる形にする。埋められない項目は `未定:` を付けて残し、user に質問する。
    禁止語彙を検査する。`grep -nE '適切に|必要に応じて|可能な限り|十分に|慎重に' "$DRAFT/<slug>.md"` が 1 件でもヒットしたら、その行を判定できる条件へ書き換えて再検査する。
-5. draft の §6 採用と §10 完了条件を要約してチャットに提示し、承認を求める。
+5. 承認を求める前に、§11 の task 全部を開いている・閉じたタスク（台帳なら list.md と parking-lot.md、GitHub Project なら open と閉じた issue）に突き合わせた表（同じ・一部・依存・重ならない、と根拠の番号）を draft に入れ、判定を別の subagent に事実で確かめさせる。
+   draft の §6 採用と §10 完了条件を要約してチャットに提示し、承認を求める。
    **承認を求めるときは承認カード**（決めること・推奨 / 目的 / 位置 / 承認すると / しないと / 注意 / 詳しく）**を本文に示してから** `AskUserQuestion`（`承認する` / `承認しない` / `修正して提案し直す`）**を出す。型と記入例**: `docs/rules-reference/approval-template.md`（プロジェクトに無ければプラグイン同梱の同名ファイル。`AskUserQuestion` が使えないときの平文の出し方も同じファイル）。 「決めること」は採る案を 1 文で（§6 採用の要旨）、「目的」は §1 の利用者と事業への効果、「承認すると」は §10 完了条件と作業の数を入れる。
 6. user がチャットで承認したら frontmatter の `approved_at:` に `YYYY-MM-DD（チャット）` を入れ、§12 に `- YYYY-MM-DD 承認（チャット）` を追記する。承認が無い間 `approved_at:` は空のままにする。
-7. チャットではなく PR で承認を得る運用のときは、この draft には対応する issue を作らず、`no-issue` の PR (種別は 設計・決定の文書。依頼元の issue があれば `Refs #n` を本文に書く) で出す。その PR の merge を承認とみなす。**PR を出すときに** `approved_at:` へ `PR #<n> の merge で承認` と書き、§12 にも `- PR #<n> の merge で承認` を足してから merge を頼む（merge の後に埋める人がいないため）。merge したあとの追記は要らない。未裁定の論点が残る間は merge しない。
+7. チャットではなく PR で承認を得る運用のときは、この draft には対応する issue を作らず、`no-issue` の PR (種別は 設計・決定の文書。依頼元の issue があれば `Refs #n` を本文に書く) で出す。その PR の merge を承認とみなす。**PR を出すときに** `approved_at:` へ `<merge を頼む日>（PR #<n> の merge で承認）` と日付を先頭に書き（`hirai-task new --from-draft` は先頭の日付だけを読む）、§12 にも `- PR #<n> の merge で承認` を足してから merge を頼む（merge の後に埋める人がいないため）。merge したあとの追記は要らない。未裁定の論点が残る間は merge しない。提案の決定（ADR）が承認済みで未裁定の論点が 0 件になったら、merge を待たずに task にしてよい（`approved_at:` は PR を出すときに埋まっている）。
 
 ## 判定できる終了条件
 
@@ -57,4 +58,4 @@ echo "$DRAFT"
 
 ## この後
 
-承認済 draft は `/hirai-lite:new-task <id> <slug>` でタスク化する。`approved_at:` が空の draft をタスク化しない。
+承認済 draft は `/hirai-lite:new-task <id> <slug>` でタスク化する。`approved_at:` が空の draft をタスク化しない（PR で承認する運用は、`approved_at:` に `<日付>（PR #<n> の merge で承認）` が入っていれば merge の前でも、手順 7 の条件でタスク化してよい）。

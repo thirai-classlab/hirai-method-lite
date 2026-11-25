@@ -4,6 +4,19 @@
 
 更新のしかたは [README の「更新する」](README.md#更新する既定では自動で新しくなりません)。**既定では自動更新しない**（v1.13.0 から opt-in で自動にできる）。
 
+## v3.2.0
+仕事の進め方の決まりを 2 つ、雛形（`rules/`）に足した（heyapro-app の issue #2020。テックリードが 2026-11-25 に「承認します。」と承認した決まりを、導入先一般の言い方に直して写した。意味は変えない）。
+
+- **設計の決定が承認済みなら、設計 PR の merge を待たずに task にする**: PR で承認する運用のとき、提案の決定（ADR）が承認済みで未裁定の論点が 0 件になったら、メインエージェントは merge を待たずに task にし、依存の無い task から着手する。`rules/core.md` の「設計の起点」に 1 句、`commands/new-draft.md` の手順 7 と「この後」に 1 文を足した（`approved_at:` は PR を出すときに埋まっているので、「承認してから台帳に載せる」とも「`approved_at:` が空の draft をタスク化しない」とも食い違わない）。チャットで承認する運用は変わらない。GitHub Project の形で merge の前に起こす task は、`--from-table` が status 承認 の提案しか起票しないので `hirai-task new` で起こし、本文の末尾に `<!-- rmp-task: id=<表の id> src=<slug>@PR<n> -->` を置く（無いと merge のあと `--from-table` が同じ task を起こし直す。`commands/new-task.md` の「設計と issue の突き合わせ」）
+- **既存のタスクと突き合わせる**: 設計を書くメインエージェントは、起こす task 全部を開いている・閉じたタスクに突き合わせた表（同じ・一部・依存・重ならない、と根拠の番号）を draft に入れ、判定を別の subagent に事実で確かめさせてから承認に出す。`rules/tasks.md` の「設計 draft」の節に 1 行、`commands/new-draft.md` の手順 5 に 1 文。heyapro-app の文は「PR を出す」前だが、雛形では承認に出す前（チャットで承認する運用にも当てる）にした
+- **`rules/` は導入先へ自動では写らない**: 導入先の `.claude/rules/core.md`・`tasks.md` は手で合わせる（heyapro-app は同じ日に自分の `.claude/rules/core.md`・`tasks.md` を書き換えた）。`commands/new-draft.md` はプラグインから読まれるので、更新で届く。T0 の合計は 5,695 → 5,766 tokens（`tests/smoke.sh` case 4・警告線 6,000 の内）。`rules/tasks.md` は 5,010 → 5,542 B（約 1,847 tokens・T1 の枠 2,000 の内）
+- **`approved_at:` の PR の書き方を雛形にそろえた**: `commands/new-draft.md` の手順 7 は `PR #<n> の merge で承認` と日付なしで書かせていたが、雛形 `templates/draft.md` と `hirai-task new --from-draft` は先頭の日付を読む（日付が無いと「未承認」で exit 2）。手順 7 と「この後」を `<merge を頼む日>（PR #<n> の merge で承認）` にした（前からの食い違い。今回の文で通る場面が増えるため直した）
+- 足すプラグイン `hirai-project-method` は触らない（1.2.0 のまま）
+- **導入先で要る操作**: `/plugin marketplace update hirai-lite` → 端末で `claude plugin update hirai-lite@hirai-lite --scope <入れた範囲>` → 会話の開き直し。届いたかは `claude plugin list` の版（`3.2.0` か `3.2.0-<12 桁>`）で見る。導入先の `rules/core.md`・`tasks.md` に上の 2 つを手で足す
+- **取り込んだあとにすること（配る側）**: `main` の merge commit に tag を打って push する（足すプラグインを入れたリポの土台に届けるため）:
+  - `git tag -a hirai-lite--v3.2.0 <merge commit> -m "hirai-lite 3.2.0" && git push origin hirai-lite--v3.2.0`
+  - 打てたかは `git ls-remote --tags origin` に tag と `^{}` の行が出ることで見る
+
 ## v3.1.0
 - **PR の本文を 4 種別の型にした**（2026-11-23 のユーザーの指示）: 種別は 見える変更 / 見えない変更 / 設計・決定の文書 / release の 4 つ。頭の 4 行の直後に「何のため・どう解決するか」（困っていること・目的・どう解決するか・採らなかった案。前 → 後の mermaid の図 1 枚）、そのあとに「何が変わるか」「基本設計の全体像のどこが変わるか」（図とリンクだけ）を置く。画面が変わる設計は、これからの見た目の絵を載せる。`rules/code.md` の PR の条（画面の絵は別の条）・`rules/ops.md` の plan の置き場・`/hirai-lite:commit` の「PR を作る」・`docs/rules-reference/git-and-pr.md` §9・雛形 `templates/pull_request_template.md`（v2）・README・`/hirai-lite:init` の説明。**導入先に PR の雛形や本文を見る検査があれば、その型に従う**（`/hirai-lite:commit`・`rules/code.md`・§9 の決まり。4 種別の型を使うのは、雛形も検査も無いときだけ）。導入先の `.github/pull_request_template.md` は、あれば触らない（3.0.x の 9 節〔雛形 v1〕のまま使ってもよい。`/hirai-lite:update` が `outdated .github/pull_request_template.md` と 1 行知らせる。替えるならプラグインの `templates/pull_request_template.md` を写す）。3.0.0 の 9 節と、そのとき「heyapro-app の PR #1894 と同じ決まり」と書いた図の決まりは、この 4 種別の型に替えた。`gh pr create --template` は `--body-file` と一緒に使えないので、雛形を写して埋める手順にした。「GitHub には画像を CLI から添付する口が無い」は誤りだった（gh 2.101.0 に `--attach` がある）ので直した。`tests/smoke.sh` case 10 が、雛形の種別 4 つ・頭の 4 行・必須の節・小見出し 4 つの列が期待と同じことと、注が閉じていることを見る。足すプラグイン `hirai-project-method` の merged-designs は、本文の「種別: 設計・決定の文書」の行でも設計の PR を見分ける。
 - `commands/new-task.md` の「bug の親」の節の頭に「bug の定義」を 1 行足した（すでに入っている物の振る舞いが、正本・意図と食い違う、または壊れている。見た目は崩れ・余白ずれ・色違いだけ。まだ無い物には、ラベル bug を付けない）。足すプラグイン `hirai-project-method` は 1.1.0（見回りの直し 3 つ）。
