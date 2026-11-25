@@ -65,7 +65,7 @@ task と feature は親が必須。親は feature（task の場合）か wave（
 
 ### 設計と issue の突き合わせ
 
-設計（新しい形の draft）から起票した task は、本文の先頭の `rmp-task` の目印で設計と結ばれている。起票のあとと設計 PR の merge のあとに `hirai-task coverage` を回すと、承認済みの提案の表にあって issue が無い行（起票漏れ）、提案の承認が進んだのに古い版を指している open の issue、失効した提案を指す open の issue が出る。設計の「位置と前後」（11-1）の `#番号` の状態は `hirai-task impact <draft>` で引く。設計が実装されたあと、差分を現在形（`docs/4-domains/<領域>/README.md`）に当てるのは `hirai-task design-merge <draft>`（承認は要らない。結果は PR で見える）。
+設計（新しい形の draft）から起票した task は、本文の先頭の `rmp-task` の目印で設計と結ばれている。`--from-table` は status が 承認 の提案からしか起票しないので、設計 PR の merge の前に起こす（`rules/core.md` の「設計の起点」）ときは `hirai-task new` に本文を渡し、本文の末尾に `<!-- rmp-task: id=<表の id> src=<slug>@PR<n> -->` を 1 行置く（id を先頭に。無いと merge のあと `--from-table` が同じ task を起こし直し、`coverage` が起票漏れと出す）。merge のあとは、前に起こした行が `coverage` の起票漏れに出ないことを見てから `--from-table` を打つ（`--dry-run` は起票済みを見ない。`[要判断]` で残した行は裁定のあと起票漏れに出るのが正しい）。起票のあとと設計 PR の merge のあとに `hirai-task coverage` を回すと、承認済みの提案の表にあって issue が無い行（起票漏れ）、提案の承認が進んだのに古い版を指している open の issue、失効した提案を指す open の issue が出る。設計の「位置と前後」（11-1）の `#番号` の状態は `hirai-task impact <draft>` で引く。設計が実装されたあと、差分を現在形（`docs/4-domains/<領域>/README.md`）に当てるのは `hirai-task design-merge <draft>`（承認は要らない。結果は PR で見える）。
 
 判定できる終了条件: `hirai-task new` が exit 0 で、作った issue 番号を報告できたこと。成立しなければ原因を 1 行で報告して停止する。
 
