@@ -8,7 +8,7 @@ description: GitHub Project でやること（wave・feature・task の issue �
 `rules/tasks.md`（T1）の `paths:` は `docs/` の書類にしか当たらず、`hirai-task` と `gh` だけで進む作業では読まれない。そのため GitHub Project の形の規範はこの skill に置く（v2.7.0 で `tasks.md` から移した）。
 
 - **正本は Project**: メインエージェントは、やることの正本を GitHub の issue と Project に置き、着手前に `gh issue view <n>` で本文と依存を読む ／ 例: `hirai-task ready` で着手できる issue を出す ／ 失効: 外部トラッカー（Asana / Jira）に正本を移したとき
-- **3 段**: メインエージェントは、仕事を wave → feature → task の 3 段（項目「種別」と sub-issue）で組み、task は PR 1 本で閉じる粒度にする ／ 例: PR の本文に `Closes #12` を書く ／ 失効: なし
+- **3 段**: メインエージェントは、仕事を wave → feature → task の 3 段（項目「種別」と sub-issue）で組み、PR は feature ごとに 1 本にしてその feature の task を全部閉じる ／ 例: feature #10 の PR の本文に `Closes #11`・`Closes #12` を書く ／ 失効: なし
 - **Status は 8 値**: メインエージェントは、Status を次の 8 値で扱う。承認待ち / 着手可 / 判断待ち / 依存待ち / 進行中 / レビュー中 / 完了 / 保留。レビュー中と完了は原則として組込の自動化が動かす（進行中・レビュー中・空 のまま閉じた task は `today` が 完了 にする）。自動化が動かない PR（既定の branch 以外向け）のときだけ `hirai-task review <n>` で レビュー中 にする ／ 例: 既定の branch 向けの PR は出せばレビュー中になる ／ 失効: なし
 - **feature の着手可は人だけ**: メインエージェントは、feature の着手を人がボードで「着手可」にするまで待ち、自分では動かさない ／ 例: feature が着手可で、未完了の blocked by が無ければ（先の wave が出ていなくても。着手可が wave の門を越えてよいの意思表示）、子の task はあとから足したものも `hirai-task start` で着手してよい（feature が承認待ちの間は呼ばない） ／ 失効: なし
 - **完了条件は検証可能に**: メインエージェントは、issue の完了条件を再現コマンドか観察可能な事実で書く ／ 例: 「ログイン E2E が green」「`GET /health` が 200 を返す」 ／ 失効: なし

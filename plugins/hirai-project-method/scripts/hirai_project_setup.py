@@ -59,7 +59,7 @@ STATUS_OPTIONS = (
     ('保留', 'GRAY', '止めると決めたとき'),
 )
 KIND_OPTIONS = (('wave', 'BLUE', '並びの段'), ('feature', 'GREEN', 'wave × 機能。着手の承認の単位'),
-                ('task', 'GRAY', 'PR 1 本で閉じる作業'), ('設計メモ', 'YELLOW', '止めた設計'))
+                ('task', 'GRAY', 'feature の PR で閉じる作業'), ('設計メモ', 'YELLOW', '止めた設計'))
 # 承認カード（approval-template.md）を承認ビューで読むための項目。`hirai-task card <n> --sync` が書く。
 HEADLINE_FIELD = 'ひとこと'
 RECOMMEND_FIELD = '推奨'

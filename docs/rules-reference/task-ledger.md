@@ -7,7 +7,7 @@
 | | 台帳の形 | GitHub の形 |
 |---|---|---|
 | 仕事の組み | 1 task = ゴール 1 文 + N step の 2 段。task の上に段を足さない | wave → feature → task の 3 段（項目「種別」と sub-issue） |
-| 完了の判定 | task 1 行 | task は PR 1 本で閉じる。feature と wave は sub-issue の帯（子の完了数）で見る |
+| 完了の判定 | task 1 行 | PR は feature ごとに 1 本で、その feature の task を全部閉じる。feature と wave は sub-issue の帯（子の完了数）で見る |
 | 状態 | 未着手 / 進行中 / 完了 の 3 種 | Status 8 値 |
 
 項目 1 が禁じたのは、**1 つの task の中に**フェーズ・ステップを重ねて完了判定ができなくなったこと。GitHub の形の wave と feature は task の**上**に置く別の issue で、完了は task 単位で閉じる。3 段に分けること自体は事故の再発ではない。

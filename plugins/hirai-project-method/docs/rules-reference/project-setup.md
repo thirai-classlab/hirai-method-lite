@@ -14,7 +14,7 @@
 ## 2. 仕事の組み立て
 
 - **3 段**: wave → feature → task。段は項目「種別」と sub-issue で表す。着手の承認は feature の単位で、人がボードで「着手可」に動かす。着手可の feature の子の task（目印なし）は、あとから足したものも着手してよい
-- **task**: PR 1 本で閉じる作業。PR の本文に `Closes #<番号>` を書く
+- **task**: feature の中の作業の 1 項目。PR は feature ごとに 1 本で、本文に含む task の `Closes #<番号>` を全部書く
 - **止める依存**: blocked by で表す。wave の行の並び順が wave の並び
 - **止めた設計**: 種別「設計メモ」・Status「保留」の issue にする。理由と再開条件は本文に書く
 
