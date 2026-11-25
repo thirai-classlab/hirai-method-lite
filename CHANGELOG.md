@@ -4,6 +4,19 @@
 
 更新のしかたは [README の「更新する」](README.md#更新する既定では自動で新しくなりません)。**既定では自動更新しない**（v1.13.0 から opt-in で自動にできる）。
 
+## v3.3.0
+PR の単位を feature にそろえた（heyapro-app の issue #2021・ADR-0815。テックリードが 2026-11-25 に「feutureの単位にして下さい。」と決めた）。版は v3.2.0（#2020 の決まり 2 つ・PR #19）の次として付けた。
+
+- **`rules/code.md` の「1 PR = 1 task」を「1 PR = 1 feature」に**: 実装者は、1 つの feature（台帳の形は 1 つの task ファイル）の完了条件を 1 PR にする。差分が 500 行を超えるなら feature を割って下の PR から積み、FE と BE を同時に進めるときだけ層で PR を分ける。`commands/commit.md` の「PR を作る」の 1 行と、`docs/rules-reference/task-ledger.md` の「2 つの形の区別」の表の「完了の判定」の行も同じ意味に直した。台帳の形は今までどおり task ファイル 1 つが PR 1 本
+- **本文の `Closes` は feature の task を全部**: `rules/code.md` の「本文に閉じる参照を入れる」・`commands/commit.md`・`docs/rules-reference/git-and-pr.md` の「`Closes #<n>` を 1 行」を、「その feature の task の `Closes #<n>` を 1 行ずつ全部」に（1 行だけだと task 1 本しか閉じず、feature が開いたまま残る）
+- **`rules/` は導入先へ自動では写らない**: 導入先の `.claude/rules/code.md` に「1 PR = 1 task」が残っていれば手で直す。T1 の `rules/code.md` は 5,781 → 5,907 B（約 1,969 tokens・T1 の枠 2,000 の内）
+- 足すプラグイン `hirai-project-method` は 1.2.1（文の直しだけ。下の変更履歴）。task を feature の本文のチェックリストにする道具の直し（`start`・`ready` が feature を受ける・`new --from-table` がコードの行をチェックリストにする）は、別の版で出す
+- **導入先で要る操作**: `/plugin marketplace update hirai-lite` → 端末で `claude plugin update hirai-lite@hirai-lite --scope <入れた範囲>`（足すプラグインも入れたリポは続けて `claude plugin update hirai-project-method@hirai-lite --scope <入れた範囲>`）→ 会話の開き直し。届いたかは `claude plugin list` の版（`3.3.0` か `3.3.0-<12 桁>`・足すプラグインは `1.2.1`）で見る
+- **取り込んだあとにすること（配る側）**: `main` の merge commit に tag を 2 つ打って push する:
+  - `git tag -a hirai-lite--v3.3.0 <merge commit> -m "hirai-lite 3.3.0" && git push origin hirai-lite--v3.3.0`
+  - `git tag -a hirai-project-method--v1.2.1 <merge commit> -m "hirai-project-method 1.2.1" && git push origin hirai-project-method--v1.2.1`
+  - 打てたかは `git ls-remote --tags origin` に、2 つの tag と `^{}` の行が出ることで見る
+
 ## v3.1.0
 - **PR の本文を 4 種別の型にした**（2026-11-23 のユーザーの指示）: 種別は 見える変更 / 見えない変更 / 設計・決定の文書 / release の 4 つ。頭の 4 行の直後に「何のため・どう解決するか」（困っていること・目的・どう解決するか・採らなかった案。前 → 後の mermaid の図 1 枚）、そのあとに「何が変わるか」「基本設計の全体像のどこが変わるか」（図とリンクだけ）を置く。画面が変わる設計は、これからの見た目の絵を載せる。`rules/code.md` の PR の条（画面の絵は別の条）・`rules/ops.md` の plan の置き場・`/hirai-lite:commit` の「PR を作る」・`docs/rules-reference/git-and-pr.md` §9・雛形 `templates/pull_request_template.md`（v2）・README・`/hirai-lite:init` の説明。**導入先に PR の雛形や本文を見る検査があれば、その型に従う**（`/hirai-lite:commit`・`rules/code.md`・§9 の決まり。4 種別の型を使うのは、雛形も検査も無いときだけ）。導入先の `.github/pull_request_template.md` は、あれば触らない（3.0.x の 9 節〔雛形 v1〕のまま使ってもよい。`/hirai-lite:update` が `outdated .github/pull_request_template.md` と 1 行知らせる。替えるならプラグインの `templates/pull_request_template.md` を写す）。3.0.0 の 9 節と、そのとき「heyapro-app の PR #1894 と同じ決まり」と書いた図の決まりは、この 4 種別の型に替えた。`gh pr create --template` は `--body-file` と一緒に使えないので、雛形を写して埋める手順にした。「GitHub には画像を CLI から添付する口が無い」は誤りだった（gh 2.101.0 に `--attach` がある）ので直した。`tests/smoke.sh` case 10 が、雛形の種別 4 つ・頭の 4 行・必須の節・小見出し 4 つの列が期待と同じことと、注が閉じていることを見る。足すプラグイン `hirai-project-method` の merged-designs は、本文の「種別: 設計・決定の文書」の行でも設計の PR を見分ける。
 - `commands/new-task.md` の「bug の親」の節の頭に「bug の定義」を 1 行足した（すでに入っている物の振る舞いが、正本・意図と食い違う、または壊れている。見た目は崩れ・余白ずれ・色違いだけ。まだ無い物には、ラベル bug を付けない）。足すプラグイン `hirai-project-method` は 1.1.0（見回りの直し 3 つ）。

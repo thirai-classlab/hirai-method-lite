@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "hirai-method-lite を配るマーケットプレイス。土台 hirai-lite（3.x・main）と、GitHub Project のタスク管理を足す hirai-project-method（1.x・main の plugins/ の下）を収録する。hirai-lite-v2（2.x）は退役して v2 ブランチに凍結。",
-    "version": "3.1.0"
+    "version": "3.3.0"
   },
   "plugins": [
     {
       "name": "hirai-lite",
       "source": "./",
       "description": "常時ロードされるコンテキストに予算を置き、ルールの追加を 6 工程パイプラインで通す rules 3 層構造の軽量ハーネス。タスク管理は台帳が既定で、Orca の worktree の強制と知らせは mode.yml で選ぶ。",
-      "version": "3.1.0",
+      "version": "3.3.0",
       "author": {
         "name": "thirai-classlab"
       },
@@ -30,7 +30,7 @@
       "name": "hirai-project-method",
       "source": "./plugins/hirai-project-method",
       "description": "hirai-lite に足す、GitHub Project でタスクを回すための道具（hirai-task・/board・/project-setup・skill github-project・コーディネーターの会話だけの PostToolUse の hook 1 本）。mode.yml の tasks: github-project のリポだけが入れる。",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "author": {
         "name": "thirai-classlab"
       },

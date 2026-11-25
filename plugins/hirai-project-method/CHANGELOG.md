@@ -2,6 +2,15 @@
 
 版の付け方は [semver](https://semver.org/lang/ja/)。`VERSION` と `.claude-plugin/plugin.json` の `version` は常に同じ値を持ち、`tests/smoke.sh` が一致を検証する。tag は `hirai-project-method--v<版>`。
 
+## v1.2.1
+PR の単位を feature にそろえた文の直し（heyapro-app の #2021・ADR-0815）。道具の動きは変えていない。
+
+- **`skills/github-project/SKILL.md` の「3 段」**: 「task は PR 1 本で閉じる粒度にする」を「PR は feature ごとに 1 本にしてその feature の task を全部閉じる」に（例は feature #10 の PR が `Closes #11`・`Closes #12` を書く形）
+- **`docs/rules-reference/project-setup.md` の種別の task**: 「PR 1 本で閉じる作業」を「feature の中の作業の 1 項目。PR は feature ごとに 1 本で、本文に含む task の `Closes #<番号>` を全部書く」に
+- **`scripts/hirai_project_setup.py`**: 種別の項目に task の選択肢を足すときの説明を「feature の PR で閉じる作業」に（項目ごと新しく作るときは、今までどおり選択肢の名前だけで説明は付かない）。すでにある選択肢の説明は書き換えない
+- **`docs/rules-reference/glossary.md` の作業（task）**: 「1 本の変更（PR）で閉じる大きさの仕事」を「機能のまとまり（feature）の中の仕事の 1 項目。変更（PR）は機能のまとまりごとに 1 本」に
+- task を feature の本文のチェックリストにする道具の直し（`start`・`ready` が feature を受ける・`new --from-table` がコードの行をチェックリストにする・読む束と突き合わせが feature の本文を読む）は、設計メモのあと別の版で出す
+
 ## v1.2.0
 全体の進みと、振っているタスクの順番・進捗率の表（GitHub Project と PR・CI の実物から）を、道具の側で出す形にした（heyapro-app の #1978）。土台の動きは変えていない（土台は 3.1.0 のまま。直したのはリポ直下の README とカタログの説明文だけ）。
 
